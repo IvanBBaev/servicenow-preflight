@@ -1,0 +1,71 @@
+{
+  "name": "servicenow-preflight",
+  "version": "0.1.0",
+  "description": "Pre-deployment preflight checks for ServiceNow — validate a target instance and your changes before you ship.",
+  "license": "MIT",
+  "author": "Ivan Baev <ivanbbaev@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IvanBBaev/servicenow-preflight.git"
+  },
+  "homepage": "https://github.com/IvanBBaev/servicenow-preflight#readme",
+  "bugs": {
+    "url": "https://github.com/IvanBBaev/servicenow-preflight/issues"
+  },
+  "type": "module",
+  "main": "./build/index.js",
+  "types": "./build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "import": "./build/index.js"
+    }
+  },
+  "bin": {
+    "servicenow-preflight": "./bin/servicenow-preflight.cjs",
+    "snpf": "./bin/servicenow-preflight.cjs"
+  },
+  "files": [
+    "build",
+    "!build/**/*.map",
+    "bin"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('build',{recursive:true,force:true})\" && tsc",
+    "watch": "tsc --watch",
+    "start": "node bin/servicenow-preflight.cjs",
+    "dev": "npm run build && node bin/servicenow-preflight.cjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.js",
+    "test:coverage": "c8 --reporter=text-summary --reporter=lcov node --test test/*.test.js",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "verify": "npm run build && npm run lint && npm run format:check && node --test test/*.test.js",
+    "check": "npm run build && npm run lint && npm run format:check && npm run test:coverage",
+    "prepublishOnly": "npm run check"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^22.0.0",
+    "c8": "^11.0.0",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^9.1.2",
+    "globals": "^15.15.0",
+    "prettier": "^3.8.4",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.61.0"
+  },
+  "keywords": [
+    "servicenow",
+    "preflight",
+    "cli",
+    "deployment",
+    "validation",
+    "devops"
+  ]
+}

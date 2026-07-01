@@ -1,0 +1,8 @@
+build/
+coverage/
+node_modules/
+
+# Local-only AI-harness files (git-excluded; not part of the shared gate)
+CLAUDE.md
+CLAUDE.local.md
+WORKLOG.md
