@@ -1,0 +1,12 @@
+{
+  "all": true,
+  "src": ["build"],
+  "include": ["build/**/*.js"],
+  "exclude": ["build/**/*.d.ts", "build/**/*.map", "**/*.test.js"],
+  "reporter": ["text-summary", "lcov"],
+  "check-coverage": true,
+  "statements": 88,
+  "branches": 82,
+  "functions": 85,
+  "lines": 88
+}
