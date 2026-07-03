@@ -26,6 +26,7 @@
     "0123456789 ·:/#*-=+", // digits & symbols
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ ·", // letters only
     "#*·-/=<>|+ 0189ABXYZ", // sparse "static" / glitch
+    "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
   /* ---- Content model: the seven checks -------------------------------- */
