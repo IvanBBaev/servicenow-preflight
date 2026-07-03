@@ -8,7 +8,7 @@ const NAME = "connectivity-auth";
  * with a cheap authenticated Table API ping (`sys_user` limited to one row).
  *
  * Outcome mapping:
- * - no auth configured           -> warn (nothing to authenticate with)
+ * - no auth and no client cert   -> warn (nothing to authenticate with)
  * - success                      -> pass (reachable and authenticated)
  * - 403 (insufficient rights)    -> warn (reachable, but the account is degraded)
  * - 401 / missing credentials    -> fail (authentication failed)
@@ -23,12 +23,14 @@ export const connectivityAuth: Check = {
   description:
     "The target instance is reachable and the credentials authenticate.",
   async run(ctx): Promise<CheckResult> {
-    if (!ctx.auth) {
+    // A mutual-TLS client cert can identify the caller on its own, so only warn
+    // when neither a header credential nor a client cert is configured.
+    if (!ctx.auth && !ctx.tls) {
       return {
         name: NAME,
         status: "warn",
         message:
-          "No credentials configured; cannot verify authentication (set SNPF_TOKEN or SNPF_USER/SNPF_PASS).",
+          "No credentials configured; cannot verify authentication (set SNPF_USER/SNPF_PASS, SNPF_TOKEN, SNPF_API_KEY, an OAuth grant, or SNPF_MTLS_CERT/KEY).",
       };
     }
 

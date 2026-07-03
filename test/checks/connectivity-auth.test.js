@@ -17,6 +17,19 @@ test("connectivity-auth warns when no credentials are configured", async () => {
   assert.equal(result.status, "warn");
 });
 
+test("connectivity-auth pings (not warns) when only a client cert is configured", async () => {
+  // A mutual-TLS client cert identifies the caller on its own, so the check
+  // must attempt the ping rather than warn about missing credentials.
+  const http = createFakeSnClient({ tables: { sys_user: [{ sys_id: "u1" }] } });
+  const result = await connectivityAuth.run({
+    instanceUrl: INSTANCE,
+    tls: { cert: "CERT-PEM", key: "KEY-PEM" },
+    http,
+  });
+  assert.equal(result.name, "connectivity-auth");
+  assert.equal(result.status, "pass");
+});
+
 test("connectivity-auth passes when the authenticated ping succeeds", async () => {
   const http = createFakeSnClient({ tables: { sys_user: [{ sys_id: "u1" }] } });
   const result = await connectivityAuth.run({

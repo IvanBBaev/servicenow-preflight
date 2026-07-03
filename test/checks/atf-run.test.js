@@ -228,6 +228,102 @@ test("fails on an HTTP error from the CI/CD API", async () => {
   assert.match(result.message, /HTTP 500/);
 });
 
+test("derives the suite sys_ids from ctx.manifest when no suite is configured", async () => {
+  // No options.atfSuites/atfSuiteId — the suites come from the resolved
+  // instance manifest, using *that instance's* sys_ids.
+  const result = await atfRun.run({
+    instanceUrl: INSTANCE,
+    manifest: {
+      instance: "dev",
+      tests: [],
+      suites: [
+        { id: "x_acme_app/smoke", sysId: "su1", name: "Smoke", testIds: [] },
+        {
+          id: "x_acme_app/regression",
+          sysId: "su2",
+          name: "Regression",
+          testIds: [],
+        },
+      ],
+    },
+    http: createFakeSnClient({
+      cicd: { runTestSuite: { status: "success" } },
+      tables: { sys_atf_test_result: [] },
+    }),
+  });
+  assert.equal(result.status, "pass");
+  assert.match(result.message, /2 suite/);
+});
+
+test("narrows the manifest suites by options.atfSuiteNames (logical id or name)", async () => {
+  const result = await atfRun.run({
+    instanceUrl: INSTANCE,
+    options: { atfSuiteNames: ["x_acme_app/smoke"] },
+    manifest: {
+      instance: "dev",
+      tests: [],
+      suites: [
+        { id: "x_acme_app/smoke", sysId: "su1", name: "Smoke", testIds: [] },
+        {
+          id: "x_acme_app/regression",
+          sysId: "su2",
+          name: "Regression",
+          testIds: [],
+        },
+      ],
+    },
+    http: createFakeSnClient({
+      cicd: { runTestSuite: { status: "success" } },
+      tables: { sys_atf_test_result: [] },
+    }),
+  });
+  assert.equal(result.status, "pass");
+  // Only the one selected suite ran.
+  assert.match(result.message, /1 suite/);
+});
+
+test("skips manifest suites that have no sys_id", async () => {
+  const result = await atfRun.run({
+    instanceUrl: INSTANCE,
+    manifest: {
+      instance: "dev",
+      tests: [],
+      suites: [{ id: "x_acme_app/smoke", name: "Smoke", testIds: [] }],
+    },
+    http: createFakeSnClient(),
+  });
+  // No runnable suite id → the same "no suite configured" warning.
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /no atf suite configured/i);
+});
+
+test("explicit options.atfSuiteId wins over the manifest suites", async () => {
+  const result = await atfRun.run({
+    instanceUrl: INSTANCE,
+    options: { atfSuiteId: "explicit-suite" },
+    manifest: {
+      instance: "dev",
+      tests: [],
+      suites: [
+        { id: "x_acme_app/smoke", sysId: "su1", name: "Smoke", testIds: [] },
+      ],
+    },
+    http: createFakeSnClient({
+      cicd: {
+        runTestSuite: {
+          "explicit-suite": { status: "success", resultId: "run-x" },
+          // If the manifest suite were (wrongly) chosen, it would fail the run.
+          su1: { status: "failure" },
+        },
+      },
+      tables: { sys_atf_test_result: [] },
+    }),
+  });
+  // The explicit suite resolved (mapped success), not the manifest's failing su1.
+  assert.equal(result.status, "pass");
+  assert.match(result.message, /1 suite/);
+});
+
 test("never throws — always returns a well-formed CheckResult", async () => {
   const result = await atfRun.run(
     ctx({

@@ -1,6 +1,6 @@
 {
   "name": "servicenow-preflight",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "Pre-deployment preflight checks for ServiceNow — validate a target instance and your changes before you ship.",
   "license": "MIT",
   "author": "Ivan Baev <ivanbbaev@gmail.com>",

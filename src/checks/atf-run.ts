@@ -47,7 +47,14 @@ function makeResult(
   return { name: NAME, status, message };
 }
 
-/** Read `ctx.options.atfSuites` / `atfSuiteId` into a clean list of suite ids. */
+/**
+ * Resolve the suite `sys_id`s to run. Explicit config wins: `options.atfSuites`
+ * / `atfSuiteId` are used verbatim. When neither is set and a resolved instance
+ * manifest is present (`ctx.manifest`), the suites come from it — using *that
+ * instance's* `sys_id`s — optionally narrowed by `options.atfSuiteNames`
+ * (logical `id`s or names). This is what lets the same logical suite run against
+ * dev / staging / test / prod with each instance's own ids.
+ */
 function resolveSuiteIds(ctx: PreflightContext): string[] {
   const opts = ctx.options ?? {};
   const ids: string[] = [];
@@ -61,6 +68,18 @@ function resolveSuiteIds(ctx: PreflightContext): string[] {
 
   const one = opts.atfSuiteId;
   if (typeof one === "string" && one.trim()) ids.push(one.trim());
+
+  if (ids.length === 0 && ctx.manifest) {
+    const names = opts.atfSuiteNames;
+    const wanted = Array.isArray(names)
+      ? new Set(names.filter((n): n is string => typeof n === "string"))
+      : undefined;
+    for (const suite of ctx.manifest.suites) {
+      if (!suite.sysId) continue;
+      if (wanted && !wanted.has(suite.id) && !wanted.has(suite.name)) continue;
+      ids.push(suite.sysId);
+    }
+  }
 
   // De-duplicate while preserving order.
   return [...new Set(ids)];
