@@ -1,4 +1,17 @@
 import type { Check } from "../types.js";
+import { connectivityAuth } from "./connectivity-auth.js";
+import { updateSetState } from "./update-set-state.js";
+import { atfRun } from "./atf-run.js";
+import { scopedAppDeps } from "./scoped-app-deps.js";
+import { i18nCompleteness } from "./i18n-completeness.js";
+import { aclRoleSanity } from "./acl-role-sanity.js";
+
+export { connectivityAuth } from "./connectivity-auth.js";
+export { updateSetState } from "./update-set-state.js";
+export { atfRun } from "./atf-run.js";
+export { scopedAppDeps } from "./scoped-app-deps.js";
+export { i18nCompleteness } from "./i18n-completeness.js";
+export { aclRoleSanity } from "./acl-role-sanity.js";
 
 /**
  * Verifies that a target instance URL was provided and is well-formed.
@@ -50,4 +63,12 @@ export const instanceUrlConfigured: Check = {
 };
 
 /** The default set of checks run when no explicit list is supplied. */
-export const defaultChecks: Check[] = [instanceUrlConfigured];
+export const defaultChecks: Check[] = [
+  instanceUrlConfigured,
+  connectivityAuth,
+  updateSetState,
+  atfRun,
+  scopedAppDeps,
+  i18nCompleteness,
+  aclRoleSanity,
+];
