@@ -122,6 +122,33 @@ pre {
   cursor: pointer;
 }
 
+.btn-donate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--disp);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--amberdim);
+  background: transparent;
+  border: 1.5px solid var(--amber);
+  padding: 6.5px 12px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+.btn-donate svg {
+  color: var(--amber);
+}
+.btn-donate:hover {
+  color: var(--ink);
+  background: var(--amber);
+}
+.btn-donate:hover svg {
+  color: var(--ink);
+}
+
 /* ============================================================================
    Split-flap tile
    ========================================================================== */
@@ -207,11 +234,12 @@ pre {
 .topbar-inner {
   max-width: 1200px;
   margin: 0 auto;
-  height: 60px;
+  min-height: 60px;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 0 clamp(16px, 4vw, 34px);
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 8px clamp(16px, 4vw, 34px);
 }
 .brand {
   display: flex;

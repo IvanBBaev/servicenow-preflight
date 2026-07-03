@@ -2,9 +2,13 @@
    servicenow-preflight — split-flap departure board + interactions
    Vanilla JS, no dependencies. Ported from the design-handoff prototype.
 
-   Key rule (per handoff): every tile shows its FINAL character immediately, so
-   the board is always readable even if a flip is interrupted. The flip is pure
-   decoration and is skipped under prefers-reduced-motion.
+   Motion (per handoff): a realistic Solari roll — each tile cycles through a
+   run of random characters (drawn from a roll TEMPLATE) with a short rotateX
+   flip on every change, then lands on its final letter. The roll is guaranteed
+   to settle: an `animating` flag + `commitFinals()` snap every tile to its
+   `data-final` when timers are cleared, and a safety settle-timeout force-
+   commits the finals. Under prefers-reduced-motion the roll is skipped and the
+   final text is shown at once.
    ========================================================================== */
 (function () {
   "use strict";
@@ -12,6 +16,17 @@
   var reduceMotion =
     window.matchMedia &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* Roll templates — the character pools a tile cycles through while it rolls.
+     Several sets are kept and switched between: each tile draws from a
+     different template, and the assignment shifts on every re-run, so the
+     characters streaming past visibly change from one flip to the next. */
+  var ROLL_TEMPLATES = [
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ·-/#*", // full mixed (the classic set)
+    "0123456789 ·:/#*-=+", // digits & symbols
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ ·", // letters only
+    "#*·-/=<>|+ 0189ABXYZ", // sparse "static" / glitch
+  ];
 
   /* ---- Content model: the seven checks -------------------------------- */
   var CHECKS = [
@@ -130,6 +145,14 @@
     return wrap;
   }
 
+  // Snap a cell's tiles straight to their finals (used for the static gate
+  // numbers, which anchor each row and never roll).
+  function showFinals(container) {
+    container.querySelectorAll(".flap-tile").forEach(function (t) {
+      t.textContent = t.dataset.final || " ";
+    });
+  }
+
   function setFinals(container, str) {
     var tiles = container.querySelectorAll(".flap-tile");
     var s = (str || "").toUpperCase();
@@ -138,31 +161,132 @@
     });
   }
 
+  /* ---- Roll engine ---------------------------------------------------- */
+  var timers = [];
+  var animating = false;
+  var runCounter = 0; // advances each animated run so templates rotate
+
+  function pushTimer(t) {
+    timers.push(t);
+  }
+
+  // Clear every pending timer/interval. If a roll was mid-flight, snap tiles to
+  // their finals so the board can never be left frozen on scrambled characters.
+  function clearTimers() {
+    timers.forEach(function (t) {
+      clearTimeout(t);
+      clearInterval(t);
+    });
+    timers = [];
+    if (animating) {
+      commitFinals();
+      animating = false;
+    }
+  }
+
+  function commitFinals() {
+    var cells = [headlineEl, summaryEl];
+    rowEls.forEach(function (re) {
+      cells.push(re.name);
+      cells.push(re.status);
+    });
+    cells.forEach(function (c) {
+      if (c) showFinals(c);
+    });
+  }
+
+  // Roll one tile through a run of random chars, then land on its final.
   function flap(container, baseDelay, animate) {
     var tiles = Array.prototype.slice.call(
       container.querySelectorAll(".flap-tile"),
     );
     tiles.forEach(function (t, i) {
       var finalCh = t.dataset.final || " ";
-      // Set final char immediately — board stays correct if the flip is cut off.
-      t.textContent = finalCh;
-      if (!animate || reduceMotion || !t.animate) return;
+      if (!animate || reduceMotion) {
+        t.textContent = finalCh;
+        return;
+      }
+      var pool = ROLL_TEMPLATES[(runCounter + i) % ROLL_TEMPLATES.length];
+      var steps = 6 + ((Math.random() * 8) | 0) + Math.floor(i * 0.35);
+      var s = 0;
+      var start = setTimeout(function () {
+        var iv = setInterval(function () {
+          s++;
+          if (s >= steps) {
+            clearInterval(iv);
+            timers = timers.filter(function (x) {
+              return x !== iv;
+            });
+            t.textContent = finalCh;
+            flipTile(t, true);
+          } else {
+            t.textContent = pool[(Math.random() * pool.length) | 0];
+            flipTile(t, false);
+          }
+        }, 42);
+        pushTimer(iv);
+      }, baseDelay + i * 20);
+      pushTimer(start);
+    });
+  }
+
+  // One rotateX flip for a single character change; a longer eased settle when
+  // the tile lands on its final letter.
+  function flipTile(t, settle) {
+    if (reduceMotion || !t.animate) return;
+    try {
+      t.animate(
+        [
+          {
+            transform: "rotateX(-90deg)",
+            filter: "brightness(1.35)",
+            offset: 0,
+          },
+          { transform: "rotateX(0deg)", filter: "brightness(1)", offset: 1 },
+        ],
+        {
+          duration: settle ? 150 : 62,
+          easing: settle ? "cubic-bezier(.2,.9,.25,1)" : "linear",
+        },
+      );
+    } catch (e) {
+      /* animation unsupported — final char already shown */
+    }
+  }
+
+  // Lighter flap-fold reveal for larger blocks (timetable rows, detail lines).
+  function flipReveal(els, stagger, dur) {
+    els.forEach(function (el, i) {
+      if (!el || reduceMotion || !el.animate) return;
       try {
-        t.animate(
+        el.style.transformOrigin = "top center";
+        el.animate(
           [
-            { transform: "rotateX(-88deg)", opacity: 0.2, offset: 0 },
-            { transform: "rotateX(10deg)", opacity: 1, offset: 0.72 },
-            { transform: "rotateX(0deg)", opacity: 1, offset: 1 },
+            {
+              transform: "perspective(600px) rotateX(-58deg)",
+              opacity: 0,
+              offset: 0,
+            },
+            {
+              transform: "perspective(600px) rotateX(7deg)",
+              opacity: 1,
+              offset: 0.76,
+            },
+            {
+              transform: "perspective(600px) rotateX(0deg)",
+              opacity: 1,
+              offset: 1,
+            },
           ],
           {
-            duration: 240,
-            delay: baseDelay + i * 24,
+            duration: dur || 300,
+            delay: i * (stagger || 45),
             easing: "cubic-bezier(.2,.85,.3,1)",
             fill: "backwards",
           },
         );
       } catch (e) {
-        /* animation unsupported — final char already shown */
+        /* animation unsupported — element already visible */
       }
     });
   }
@@ -183,6 +307,7 @@
       var row = document.createElement("div");
       row.className = "row";
       var gate = cell(c.code, 2, "var(--amber)");
+      showFinals(gate); // gate numbers are static anchors — never roll
       var name = cell(c.name, 23);
       var spacer = document.createElement("span");
       spacer.className = "spacer";
@@ -199,6 +324,10 @@
   }
 
   function run(animate, intro) {
+    clearTimers();
+    if (animate && !reduceMotion) runCounter++;
+    animating = !!animate && !reduceMotion;
+
     var sts = SCENARIOS[scenario] || SCENARIOS.default;
     var pass = sts.filter(function (s) {
       return s === "pass";
@@ -238,6 +367,20 @@
     });
     if (summaryEl) flap(summaryEl, 360 + rowEls.length * 130, animate);
 
+    // Safety net: force every final after the roll should have completed, so a
+    // throttled interval (e.g. a backgrounded tab) can never strand the board.
+    if (animate && !reduceMotion) {
+      var total = 360 + rowEls.length * 130 + 1600;
+      pushTimer(
+        setTimeout(function () {
+          commitFinals();
+          animating = false;
+        }, total),
+      );
+    } else {
+      animating = false;
+    }
+
     applyScenarioButtons();
   }
 
@@ -259,10 +402,13 @@
   var ttRows = document.querySelector("[data-tt-rows]");
   var ttDetail = document.querySelector("[data-tt-detail]");
   var selected = 0;
+  var ttButtons = [];
+  var ioAttached = false;
 
-  function renderTimetable() {
+  function buildTimetable() {
     if (!ttRows || !ttDetail) return;
     ttRows.innerHTML = "";
+    ttButtons = [];
     CHECKS.forEach(function (c, i) {
       var always = c.tag === "ALWAYS";
       var btn = document.createElement("button");
@@ -282,12 +428,52 @@
         (always ? "BOARDS" : "ON HOLD") +
         "</span>";
       btn.addEventListener("click", function () {
-        selected = i;
-        renderTimetable();
+        selectGate(i);
       });
       ttRows.appendChild(btn);
+      ttButtons.push(btn);
     });
     renderDetail();
+    observeTimetable();
+  }
+
+  // Reveal the timetable rows with a flap-fold the first time they scroll in.
+  function observeTimetable() {
+    if (reduceMotion || ioAttached || !("IntersectionObserver" in window))
+      return;
+    ioAttached = true;
+    var io = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (en) {
+          if (en.isIntersecting) {
+            flipReveal(ttButtons, 70, 320);
+            io.disconnect();
+          }
+        });
+      },
+      { threshold: 0.18 },
+    );
+    io.observe(ttRows);
+  }
+
+  function selectGate(i) {
+    if (i === selected) return;
+    selected = i;
+    ttButtons.forEach(function (b, idx) {
+      b.setAttribute("aria-selected", idx === selected ? "true" : "false");
+    });
+    renderDetail();
+    // Re-fold the detail lines + the freshly-picked row.
+    var lines = [
+      ttDetail.querySelector(".detail-body .name"),
+      ttDetail.querySelector(".detail-body .desc"),
+    ].concat(
+      Array.prototype.slice.call(
+        ttDetail.querySelectorAll(".criteria > .crit"),
+      ),
+    );
+    flipReveal(lines, 55, 300);
+    if (ttButtons[selected]) flipReveal([ttButtons[selected]], 0, 260);
   }
 
   function renderDetail() {
@@ -480,7 +666,7 @@
 
   /* ---- Init ----------------------------------------------------------- */
   buildBoard();
-  renderTimetable();
+  buildTimetable();
   renderCli();
   renderKv("[data-envs]", ENVS, "");
   renderKv("[data-errs]", ERRS, "err");
