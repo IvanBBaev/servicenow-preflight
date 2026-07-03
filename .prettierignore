@@ -2,6 +2,9 @@ build/
 coverage/
 node_modules/
 
+# Standalone static docs site — kept out of the library's format gate
+site/
+
 # Local-only AI-harness files (git-excluded; not part of the shared gate)
 CLAUDE.md
 CLAUDE.local.md

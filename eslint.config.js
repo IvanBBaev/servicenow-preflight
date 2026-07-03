@@ -4,7 +4,9 @@ import prettier from "eslint-config-prettier";
 import globals from "globals";
 
 export default tseslint.config(
-  { ignores: ["build/", "node_modules/", "coverage/"] },
+  // site/ is a standalone static docs site (browser JS, its own concerns) —
+  // not part of the library/CLI source, so keep it off this Node/TS gate.
+  { ignores: ["build/", "node_modules/", "coverage/", "site/"] },
   js.configs.recommended,
   // Type-checked rules need a TS program; scope them to src/ so plain-JS
   // config and test files stay on the syntax-only ruleset.
