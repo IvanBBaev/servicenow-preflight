@@ -12,6 +12,7 @@ export { atfRun } from "./atf-run.js";
 export { scopedAppDeps } from "./scoped-app-deps.js";
 export { i18nCompleteness } from "./i18n-completeness.js";
 export { aclRoleSanity } from "./acl-role-sanity.js";
+export { testDrift } from "./test-drift.js";
 
 /**
  * Verifies that a target instance URL was provided and is well-formed.
@@ -62,7 +63,14 @@ export const instanceUrlConfigured: Check = {
   },
 };
 
-/** The default set of checks run when no explicit list is supplied. */
+/**
+ * The default set of checks run when no explicit list is supplied.
+ *
+ * `testDrift` is intentionally NOT here: it is a promote gate that needs a
+ * second instance's manifest to compare against, and would otherwise `warn` on
+ * every single-instance run. The CLI adds it only when a promote target is
+ * resolved (`snpf drift`, or a `run` with a downstream target).
+ */
 export const defaultChecks: Check[] = [
   instanceUrlConfigured,
   connectivityAuth,

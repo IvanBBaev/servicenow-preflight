@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -162,4 +162,197 @@ test("runPreflight + fake client feeds a reporter end-to-end", async () => {
     sarif.runs[0].results.length,
     report.summary.warn + report.summary.fail,
   );
+});
+
+// --- Multi-instance subcommands -------------------------------------------
+
+/** Seed a temp project with `.preflight/instances.json` and return its dir. */
+function projectWithRegistry(instances, scope) {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
+  mkdirSync(join(dir, ".preflight"), { recursive: true });
+  writeFileSync(
+    join(dir, ".preflight", "instances.json"),
+    JSON.stringify({ version: 1, ...(scope ? { scope } : {}), instances }),
+  );
+  return dir;
+}
+
+/** Write a committed state manifest for `instance` under `dir`. */
+function writeStateManifest(dir, instance, manifest) {
+  mkdirSync(join(dir, ".preflight", "state"), { recursive: true });
+  writeFileSync(
+    join(dir, ".preflight", "state", `${instance}.state.json`),
+    JSON.stringify(manifest),
+  );
+}
+
+test("CLI run <env> resolves the instance URL from the registry", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com", stage: "dev" },
+  });
+  try {
+    const res = runCli(
+      ["dev", "--only", "instance-url-configured", "--format", "json"],
+      { cwd: dir },
+    );
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.equal(report.results[0].name, "instance-url-configured");
+    assert.equal(report.results[0].status, "pass");
+    assert.match(report.results[0].message, /dev12345/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run --all aggregates a report per instance", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com", stage: "dev" },
+    prod: { url: "https://prod98765.service-now.com", stage: "prod" },
+  });
+  try {
+    const res = runCli(
+      ["run", "--all", "--only", "instance-url-configured", "--format", "json"],
+      { cwd: dir },
+    );
+    assert.equal(res.status, 0, res.stderr);
+    const out = JSON.parse(res.stdout);
+    assert.equal(out.ok, true);
+    assert.deepEqual(Object.keys(out.instances).sort(), ["dev", "prod"]);
+    assert.equal(out.instances.dev.results[0].status, "pass");
+    assert.equal(out.instances.prod.results[0].status, "pass");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run --all without a registry errors cleanly", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
+  try {
+    const res = runCli(["run", "--all"], { cwd: dir });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /--all needs a registry/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run <unknown-env> lists the known instances", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com" },
+  });
+  try {
+    const res = runCli(["staging"], { cwd: dir });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /Unknown instance "staging"/);
+    assert.match(res.stderr, /Known instances: dev/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI sync without a registry errors cleanly", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
+  try {
+    const res = runCli(["sync", "dev"], { cwd: dir });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /sync needs a registry/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI sync without an instance name errors cleanly", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com" },
+  });
+  try {
+    const res = runCli(["sync"], { cwd: dir });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /sync needs an instance name/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI drift passes (exit 0) when the target has every active source test", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
+  try {
+    const tests = [
+      { id: "x/a", name: "A", active: true },
+      { id: "x/b", name: "B", active: true },
+    ];
+    writeStateManifest(dir, "staging", {
+      instance: "staging",
+      tests,
+      suites: [],
+    });
+    writeStateManifest(dir, "prod", { instance: "prod", tests, suites: [] });
+    const res = runCli(["drift", "staging", "prod", "--format", "json"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.equal(report.ok, true);
+    assert.equal(report.results[0].name, "test-drift");
+    assert.equal(report.results[0].status, "pass");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI drift fails (exit 1) when the target is missing an active source test", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
+  try {
+    writeStateManifest(dir, "staging", {
+      instance: "staging",
+      tests: [
+        { id: "x/a", name: "A", active: true },
+        { id: "x/b", name: "B", active: true },
+      ],
+      suites: [],
+    });
+    writeStateManifest(dir, "prod", {
+      instance: "prod",
+      tests: [{ id: "x/a", name: "A", active: true }],
+      suites: [],
+    });
+    const res = runCli(["drift", "staging", "prod", "--format", "json"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 1);
+    const report = JSON.parse(res.stdout);
+    assert.equal(report.ok, false);
+    assert.equal(report.results[0].status, "fail");
+    assert.match(report.results[0].message, /missing on "prod"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI drift errors when a manifest is missing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
+  try {
+    writeStateManifest(dir, "staging", {
+      instance: "staging",
+      tests: [],
+      suites: [],
+    });
+    const res = runCli(["drift", "staging", "prod"], { cwd: dir });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /No manifest for "prod"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI drift without two instances prints usage guidance", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
+  try {
+    const res = runCli(["drift", "staging"], { cwd: dir });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /drift needs two instances/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

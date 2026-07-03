@@ -9,10 +9,76 @@
  * implement it fully.
  */
 
-/** How the client authenticates to the instance. */
+import { request as httpsRequest } from "node:https";
+import { createSign } from "node:crypto";
+
+/**
+ * How the client authenticates to the instance.
+ *
+ * `basic`, `oauth` (a pre-issued bearer token) and `apikey` attach a header
+ * directly and never touch the network to authenticate. The `oauth-*` grant
+ * flows acquire a bearer token from the OAuth token endpoint
+ * (`${instanceOrigin}/oauth_token.do` by default) on first use, then cache it
+ * until it expires and re-acquire it on a 401. Mutual TLS is orthogonal — it is
+ * configured via {@link SnClientConfig.tls} and composes with any of these.
+ */
 export type SnAuth =
   | { kind: "basic"; user: string; pass: string }
-  | { kind: "oauth"; token: string };
+  | { kind: "oauth"; token: string }
+  | { kind: "apikey"; apiKey: string }
+  | ({
+      kind: "oauth-password";
+      clientId: string;
+      clientSecret: string;
+      user: string;
+      pass: string;
+    } & OAuthGrantCommon)
+  | ({
+      kind: "oauth-client";
+      clientId: string;
+      clientSecret: string;
+    } & OAuthGrantCommon)
+  | ({
+      kind: "oauth-refresh";
+      clientId: string;
+      clientSecret: string;
+      refreshToken: string;
+    } & OAuthGrantCommon)
+  | ({
+      kind: "oauth-jwt";
+      clientId: string;
+      clientSecret?: string;
+      /** A pre-signed JWT assertion. When set, no signing is performed. */
+      assertion?: string;
+      /** PEM private key used to sign the assertion (RS256) when `assertion` is absent. */
+      privateKey?: string;
+      /** Optional `kid` header on the signed assertion. */
+      keyId?: string;
+      /** `sub` claim — the user the token acts as. */
+      subject?: string;
+      /** `aud` claim (default: the token endpoint URL). */
+      audience?: string;
+      /** `iss` claim (default: `clientId`). */
+      issuer?: string;
+    } & OAuthGrantCommon);
+
+/** Options shared by every OAuth grant flow. */
+export interface OAuthGrantCommon {
+  /** Override the token endpoint (default `${instanceOrigin}/oauth_token.do`). */
+  tokenUrl?: string;
+}
+
+/** Transport-level client certificate for mutual TLS. */
+export interface SnTls {
+  /** Client certificate (PEM). */
+  cert: string;
+  /** Client private key (PEM). */
+  key: string;
+  /** CA bundle to trust for the server certificate (PEM), optional. */
+  ca?: string;
+  /** Passphrase for an encrypted private key, optional. */
+  passphrase?: string;
+}
 
 /** Table API surface scoped to a single table (`ctx.http.table("incident")`). */
 export interface SnTable {
@@ -132,7 +198,14 @@ export class SnHttpError extends SnError {
 export interface SnClientConfig {
   /** Base URL of the instance, e.g. `https://dev12345.service-now.com`. */
   instanceUrl: string;
-  auth: SnAuth;
+  /**
+   * How to authenticate. Optional: when omitted the client sends no auth header
+   * (valid when {@link tls} alone identifies the caller, or for an unauthenticated
+   * probe that expects a 401).
+   */
+  auth?: SnAuth;
+  /** Client certificate for mutual TLS (optional; composes with `auth`). */
+  tls?: SnTls;
   /** Request timeout in milliseconds (default 30000). */
   timeoutMs?: number;
   /** Poll interval while waiting for an async CI/CD run (default 2000). */
@@ -141,13 +214,340 @@ export interface SnClientConfig {
   cicdMaxPolls?: number;
 }
 
-/** Build the `Authorization` header value for the configured auth mode. */
-function authHeader(auth: SnAuth): string {
-  if (auth.kind === "basic") {
-    const token = Buffer.from(`${auth.user}:${auth.pass}`).toString("base64");
-    return `Basic ${token}`;
+/** Minimal response shape the client consumes (a subset of `fetch`'s Response). */
+interface TransportResponse {
+  status: number;
+  statusText: string;
+  text(): Promise<string>;
+}
+
+/** Options for a transport call (a subset of `RequestInit`). */
+interface TransportInit {
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+  signal?: AbortSignal;
+}
+
+/**
+ * A single HTTP round-trip. The default transport is the global `fetch`; when a
+ * client cert is configured a `node:https` transport is used instead so the
+ * client presents the certificate on the TLS socket.
+ */
+type Transport = (
+  url: string,
+  init: TransportInit,
+) => Promise<TransportResponse>;
+
+/** The default transport — the global `fetch`, resolved at call time. */
+const fetchTransport: Transport = (url, init) => globalThis.fetch(url, init);
+
+/**
+ * Build a `node:https` transport that presents `tls`'s client certificate. It
+ * adapts an `https.request` round-trip to the same {@link TransportResponse}
+ * shape the fetch path yields, and mirrors the abort/timeout signalling so the
+ * caller's `SnNetworkError` mapping works identically.
+ */
+function createHttpsTransport(tls: SnTls): Transport {
+  return (url, init) =>
+    new Promise<TransportResponse>((resolve, reject) => {
+      const u = new URL(url);
+      const req = httpsRequest(
+        {
+          protocol: u.protocol,
+          hostname: u.hostname,
+          port: u.port || 443,
+          path: `${u.pathname}${u.search}`,
+          method: init.method,
+          headers: init.headers,
+          cert: tls.cert,
+          key: tls.key,
+          ca: tls.ca,
+          passphrase: tls.passphrase,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => {
+            const text = Buffer.concat(chunks).toString("utf8");
+            resolve({
+              status: res.statusCode ?? 0,
+              statusText: res.statusMessage ?? "",
+              text: () => Promise.resolve(text),
+            });
+          });
+        },
+      );
+      const signal = init.signal;
+      if (signal) {
+        const onAbort = (): void => {
+          const reason = signal.reason as { name?: string; message?: string };
+          const err = new Error(
+            reason?.message ?? "The operation was aborted.",
+          );
+          err.name = reason?.name ?? "AbortError";
+          req.destroy(err);
+        };
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+      req.on("error", (err) => reject(err));
+      if (init.body !== undefined) req.write(init.body);
+      req.end();
+    });
+}
+
+/** Base64url-encode a string or buffer (no padding). */
+function base64url(input: string | Buffer): string {
+  const buf = Buffer.isBuffer(input) ? input : Buffer.from(input, "utf8");
+  return buf
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/** Auth kinds that acquire a token from the OAuth token endpoint. */
+type OAuthGrantAuth = Extract<SnAuth, { kind: `oauth-${string}` }>;
+
+/** The token endpoint URL for a grant flow (config override or the default). */
+function tokenEndpoint(auth: OAuthGrantAuth, origin: string): string {
+  return auth.tokenUrl ?? `${origin}/oauth_token.do`;
+}
+
+/**
+ * Build (or pass through) the signed JWT assertion for the `oauth-jwt` grant.
+ * Signs with RS256 over `{iss,sub,aud,iat,nbf,exp}` using the configured PEM key.
+ */
+function jwtAssertion(
+  auth: Extract<SnAuth, { kind: "oauth-jwt" }>,
+  origin: string,
+): string {
+  if (auth.assertion) return auth.assertion;
+  if (!auth.privateKey) {
+    throw new SnAuthError(
+      "oauth-jwt requires either a pre-signed assertion or a private key to sign one.",
+    );
   }
-  return `Bearer ${auth.token}`;
+  const header: Record<string, string> = { alg: "RS256", typ: "JWT" };
+  if (auth.keyId) header.kid = auth.keyId;
+  const now = Math.floor(Date.now() / 1000);
+  const claims: Record<string, unknown> = {
+    iss: auth.issuer ?? auth.clientId,
+    aud: auth.audience ?? tokenEndpoint(auth, origin),
+    iat: now,
+    nbf: now,
+    exp: now + 300,
+  };
+  if (auth.subject) claims.sub = auth.subject;
+  const signingInput = `${base64url(JSON.stringify(header))}.${base64url(
+    JSON.stringify(claims),
+  )}`;
+  const signature = createSign("RSA-SHA256")
+    .update(signingInput)
+    .end()
+    .sign(auth.privateKey);
+  return `${signingInput}.${base64url(signature)}`;
+}
+
+/** Build the `application/x-www-form-urlencoded` body for a grant's token request. */
+function tokenRequestBody(auth: OAuthGrantAuth, origin: string): string {
+  const params = new URLSearchParams();
+  switch (auth.kind) {
+    case "oauth-password":
+      params.set("grant_type", "password");
+      params.set("client_id", auth.clientId);
+      params.set("client_secret", auth.clientSecret);
+      params.set("username", auth.user);
+      params.set("password", auth.pass);
+      break;
+    case "oauth-client":
+      params.set("grant_type", "client_credentials");
+      params.set("client_id", auth.clientId);
+      params.set("client_secret", auth.clientSecret);
+      break;
+    case "oauth-refresh":
+      params.set("grant_type", "refresh_token");
+      params.set("client_id", auth.clientId);
+      params.set("client_secret", auth.clientSecret);
+      params.set("refresh_token", auth.refreshToken);
+      break;
+    case "oauth-jwt":
+      params.set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer");
+      params.set("assertion", jwtAssertion(auth, origin));
+      params.set("client_id", auth.clientId);
+      if (auth.clientSecret) params.set("client_secret", auth.clientSecret);
+      break;
+  }
+  return params.toString();
+}
+
+/** A newly acquired access token and its lifetime (seconds), if reported. */
+interface AcquiredToken {
+  accessToken: string;
+  expiresIn?: number;
+}
+
+/**
+ * POST a grant's token request to the OAuth token endpoint and parse the access
+ * token out of the response. Authenticates via the request body (no bearer
+ * header). A 4xx (or a missing token) surfaces as {@link SnAuthError}; secrets
+ * are never placed into the error message.
+ */
+async function acquireToken(
+  auth: OAuthGrantAuth,
+  transport: Transport,
+  origin: string,
+  timeoutMs: number,
+): Promise<AcquiredToken> {
+  const url = tokenEndpoint(auth, origin);
+  // Build the body first: JWT signing/config errors are auth problems and must
+  // surface as SnAuthError, not be masked by the transport's network catch.
+  const requestBody = tokenRequestBody(auth, origin);
+  let res: TransportResponse;
+  try {
+    res = await transport(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: requestBody,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (cause) {
+    const err = cause instanceof Error ? cause : new Error(String(cause));
+    const timedOut = err.name === "TimeoutError" || err.name === "AbortError";
+    throw new SnNetworkError(
+      timedOut
+        ? `OAuth token request to ${new URL(url).origin} timed out after ${timeoutMs}ms.`
+        : `Could not reach the OAuth token endpoint at ${new URL(url).origin}: ${err.message}`,
+    );
+  }
+
+  const text = await res.text();
+  let body: unknown = undefined;
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = { raw: text };
+    }
+  }
+
+  if (res.status < 200 || res.status >= 300) {
+    const detail = extractErrorDetail(body) ?? res.statusText;
+    throw new SnAuthError(
+      `OAuth token request failed (${res.status})${detail ? `: ${detail}` : ""}.`,
+      res.status,
+    );
+  }
+
+  const token =
+    body && typeof body === "object"
+      ? (body as { access_token?: unknown }).access_token
+      : undefined;
+  if (typeof token !== "string" || !token) {
+    throw new SnAuthError(
+      "OAuth token endpoint did not return an access_token.",
+    );
+  }
+  const expiresRaw =
+    body && typeof body === "object"
+      ? (body as { expires_in?: unknown }).expires_in
+      : undefined;
+  const expiresIn =
+    typeof expiresRaw === "number"
+      ? expiresRaw
+      : typeof expiresRaw === "string" && expiresRaw.trim()
+        ? Number(expiresRaw)
+        : undefined;
+  return {
+    accessToken: token,
+    expiresIn: Number.isFinite(expiresIn) ? expiresIn : undefined,
+  };
+}
+
+/** A request-time credential: the header to attach, plus a re-auth escape hatch. */
+interface AuthProvider {
+  /**
+   * The header to attach to each request (name + value), or `undefined` when the
+   * client sends none (no auth configured, or TLS-only identity).
+   */
+  header(): Promise<{ name: string; value: string } | undefined>;
+  /**
+   * Discard any cached credential so the next {@link header} re-acquires it.
+   * Returns `true` when a retry is worthwhile (grant flows), `false` for static
+   * credentials where a 401 is terminal.
+   */
+  invalidate(): boolean;
+}
+
+/** A provider that always returns the same header and cannot be refreshed. */
+function staticHeader(name: string, value: string): AuthProvider {
+  return {
+    header: () => Promise.resolve({ name, value }),
+    invalidate: () => false,
+  };
+}
+
+/**
+ * Build the {@link AuthProvider} for the configured auth. Static credentials
+ * yield a fixed header; grant flows lazily acquire, cache (until ~30s before
+ * expiry) and — on {@link AuthProvider.invalidate} — re-acquire a bearer token.
+ */
+function buildAuthProvider(
+  auth: SnAuth | undefined,
+  transport: Transport,
+  origin: string,
+  timeoutMs: number,
+): AuthProvider {
+  if (!auth) {
+    return {
+      header: () => Promise.resolve(undefined),
+      invalidate: () => false,
+    };
+  }
+  switch (auth.kind) {
+    case "basic": {
+      const token = Buffer.from(`${auth.user}:${auth.pass}`).toString("base64");
+      return staticHeader("Authorization", `Basic ${token}`);
+    }
+    case "oauth":
+      return staticHeader("Authorization", `Bearer ${auth.token}`);
+    case "apikey":
+      return staticHeader("x-sn-apikey", auth.apiKey);
+    default: {
+      const grant = auth;
+      let cached: { value: string; expiresAt: number } | undefined;
+      return {
+        async header() {
+          const now = Date.now();
+          if (cached && now < cached.expiresAt) {
+            return { name: "Authorization", value: cached.value };
+          }
+          const { accessToken, expiresIn } = await acquireToken(
+            grant,
+            transport,
+            origin,
+            timeoutMs,
+          );
+          const ttlMs = (expiresIn && expiresIn > 0 ? expiresIn : 1800) * 1000;
+          cached = {
+            value: `Bearer ${accessToken}`,
+            // Refresh ~30s early, but always cache for at least a second so a
+            // short-lived token can't trigger a re-acquire on every request.
+            expiresAt: Math.max(now + ttlMs - 30_000, now + 1_000),
+          };
+          return { name: "Authorization", value: cached.value };
+        },
+        invalidate() {
+          cached = undefined;
+          return true;
+        },
+      };
+    }
+  }
 }
 
 /** Extract a human-readable message from a ServiceNow error body. */
@@ -267,18 +667,39 @@ function buildUrl(
 export function createSnClient(cfg: SnClientConfig): SnClient {
   const origin = new URL(cfg.instanceUrl).origin;
   const timeoutMs = cfg.timeoutMs ?? 30_000;
+  // Mutual TLS routes over a `node:https` transport (to present the client
+  // cert); every other case uses the global `fetch`.
+  const transport: Transport = cfg.tls
+    ? createHttpsTransport(cfg.tls)
+    : fetchTransport;
+  const authProvider = buildAuthProvider(
+    cfg.auth,
+    transport,
+    origin,
+    timeoutMs,
+  );
 
   async function request(
     method: string,
     path: string,
     opts: SnRequestOptions = {},
   ): Promise<SnRawResponse> {
+    // `allowRefresh` lets a grant flow re-acquire its token once on a 401
+    // (expired token) and retry; static credentials cannot be refreshed.
+    return sendRequest(method, path, opts, true);
+  }
+
+  async function sendRequest(
+    method: string,
+    path: string,
+    opts: SnRequestOptions,
+    allowRefresh: boolean,
+  ): Promise<SnRawResponse> {
     const url = buildUrl(origin, path, opts.query);
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-      Authorization: authHeader(cfg.auth),
-    };
-    const init: RequestInit = {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    const cred = await authProvider.header();
+    if (cred) headers[cred.name] = cred.value;
+    const init: TransportInit = {
       method,
       headers,
       signal: AbortSignal.timeout(timeoutMs),
@@ -288,9 +709,9 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       init.body = JSON.stringify(opts.body);
     }
 
-    let res: Response;
+    let res: TransportResponse;
     try {
-      res = await fetch(url, init);
+      res = await transport(url, init);
     } catch (cause) {
       const err = cause instanceof Error ? cause : new Error(String(cause));
       const timedOut = err.name === "TimeoutError" || err.name === "AbortError";
@@ -313,6 +734,12 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     }
 
     if (res.status === 401 || res.status === 403) {
+      // On a 401, a grant flow may hold a stale (expired) token — drop it,
+      // re-acquire once and retry. Any other case (403, static creds, or a
+      // second 401) is terminal.
+      if (res.status === 401 && allowRefresh && authProvider.invalidate()) {
+        return sendRequest(method, path, opts, false);
+      }
       const detail = extractErrorDetail(body) ?? res.statusText;
       throw new SnAuthError(
         `ServiceNow authentication failed (${res.status})${detail ? `: ${detail}` : ""}.`,

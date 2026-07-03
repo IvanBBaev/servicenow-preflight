@@ -22,6 +22,7 @@ export type {
   SnTable,
   SnCicd,
   SnAuth,
+  SnTls,
   SnRawResponse,
   SnRequestOptions,
   SnClientConfig,
@@ -39,10 +40,44 @@ export type { FakeFixtures, ForcedFailure } from "./http/fake.js";
 export {
   loadConfig,
   resolveAuthFromEnv,
+  resolveTlsFromEnv,
+  namespacedEnv,
   type PreflightConfig,
   type LoadedConfig,
   type LoadConfigOptions,
 } from "./config.js";
+export {
+  loadRegistry,
+  resolveInstance,
+  instanceNames,
+  registryPath,
+  PREFLIGHT_DIR,
+  REGISTRY_BASENAME,
+  type InstanceDef,
+  type InstanceRegistry,
+  type ResolvedInstance,
+} from "./registry.js";
+export {
+  loadManifest,
+  writeManifest,
+  mergeManifest,
+  emptyManifest,
+  manifestPath,
+  logicalId,
+  slugify,
+  STATE_DIR,
+  type StateManifest,
+  type AtfTestState,
+  type AtfSuiteState,
+  type AtfCoverage,
+  type AtfRunRef,
+} from "./state/manifest.js";
+export { pullManifest, syncManifest, type SyncOptions } from "./state/sync.js";
+export {
+  computeDrift,
+  type DriftReport,
+  type DriftEntry,
+} from "./state/drift.js";
 export { formatJUnit } from "./report/junit.js";
 export { formatSarif } from "./report/sarif.js";
 export {
@@ -54,6 +89,7 @@ export {
   scopedAppDeps,
   i18nCompleteness,
   aclRoleSanity,
+  testDrift,
 } from "./checks/index.js";
 
 /**
