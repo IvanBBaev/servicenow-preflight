@@ -53,9 +53,9 @@
       code: "03",
       name: "update-set-state",
       tag: "updateSetId",
-      desc: "The target update set is complete, carries changes, and is free of merge collisions.",
-      fail: "Missing, still in progress, complete but with zero changes, or the read failed.",
-      warn: "No id set, an unrecognised state, unreachable, or merge / collision flags.",
+      desc: "The target update set, and any batched child sets, are complete and carry changes.",
+      fail: "Missing, still in progress, marked ignore, complete but with zero changes, or the read failed.",
+      warn: "No update set id configured, or the instance is unreachable.",
       pass: "Complete and carries at least one change.",
     },
     {
@@ -521,31 +521,59 @@
 
   /* ---- Static reference lists ----------------------------------------- */
   var CLI = [
-    { flag: "-i, --instance <url>", desc: "Target ServiceNow instance URL." },
+    { flag: "run [env]", desc: "Run the checks — the default subcommand." },
+    {
+      flag: "sync <env>",
+      desc: "Pull ATF metadata into a committed state manifest.",
+    },
+    {
+      flag: "drift <src> <dst>",
+      desc: "Compare two instances — the promote gate.",
+    },
+    {
+      flag: "-i, --instance <url>",
+      desc: "Target instance URL (single-instance).",
+    },
+    { flag: "-e, --env <name>", desc: "Select an instance from the registry." },
+    { flag: "--all", desc: "Sweep every instance in the registry." },
+    {
+      flag: "--registry <path>",
+      desc: "Registry file · default .preflight/instances.json.",
+    },
     {
       flag: "--config <path>",
-      desc: "Path to a config file (default: auto-discovered).",
+      desc: "Config file · default auto-discovered.",
     },
     {
-      flag: "--only <csv>",
-      desc: "Run only these checks (comma-separated names).",
-    },
-    {
-      flag: "--skip <csv>",
-      desc: "Skip these checks (comma-separated names).",
+      flag: "--only / --skip <csv>",
+      desc: "Run only / skip these checks.",
     },
     { flag: "--format <fmt>", desc: "pretty (default), json, junit, sarif." },
     { flag: "--json / -h", desc: "Shorthand for --format json / show help." },
   ];
   var ENVS = [
-    { k: "SNPF_TOKEN", v: "OAuth bearer token — wins over Basic if set." },
     {
       k: "SNPF_USER + SNPF_PASS",
-      v: "Basic-auth username and password (both required).",
+      v: "Basic auth (both required).",
+    },
+    { k: "SNPF_TOKEN", v: "Static OAuth bearer token." },
+    { k: "SNPF_API_KEY", v: "API-key header (x-sn-apikey, Tokyo+)." },
+    {
+      k: "SNPF_OAUTH_CLIENT_ID + _SECRET",
+      v: "OAuth grant — password / client / refresh / JWT.",
     },
     {
+      k: "SNPF_MTLS_CERT + _KEY",
+      v: "Mutual TLS — composes with any method above.",
+    },
+    { k: "SNPF_AUTH", v: "Force a method; otherwise auto-detected." },
+    {
       k: "SNPF_INSTANCE",
-      v: "Instance URL, used when --instance / config is unset.",
+      v: "Instance URL when --instance / config is unset.",
+    },
+    {
+      k: "SNPF_<ENV>_*",
+      v: "Per-instance override for a registry env.",
     },
   ];
   var ERRS = [

@@ -254,7 +254,13 @@
               <div class="head">
                 <span class="num">1</span><span class="code">BLOCKED</span>
               </div>
-              <p>A fail, a zero-match selection, or a fatal error.</p>
+              <p>A fail, a zero-match selection, or an unexpected runtime error.</p>
+            </div>
+            <div class="exit-card warn">
+              <div class="head">
+                <span class="num">2</span><span class="code">REJECTED</span>
+              </div>
+              <p>A usage error — bad flags or config, caught before any check runs.</p>
             </div>
           </div>
         </div>
@@ -337,7 +343,7 @@
         </div>
 
         <div class="cli-table">
-          <div class="cap">CLI · snpf [options]</div>
+          <div class="cap">CLI · snpf [cmd] [options]</div>
           <div class="cli-rows" data-cli></div>
         </div>
       </section>

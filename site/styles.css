@@ -819,7 +819,7 @@ pre {
 
 .exit-cards {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 14px;
 }
 .exit-card {
@@ -832,6 +832,9 @@ pre {
 }
 .exit-card.fail {
   box-shadow: 5px 5px 0 var(--red);
+}
+.exit-card.warn {
+  box-shadow: 5px 5px 0 var(--amber);
 }
 .exit-card .head {
   display: flex;
@@ -851,6 +854,9 @@ pre {
 .exit-card.fail .num {
   color: var(--red);
 }
+.exit-card.warn .num {
+  color: var(--amber);
+}
 .exit-card .code {
   font-family: var(--mono);
   font-size: 10px;
@@ -861,6 +867,9 @@ pre {
 }
 .exit-card.fail .code {
   color: var(--red);
+}
+.exit-card.warn .code {
+  color: var(--amber);
 }
 .exit-card p {
   font-size: 12.5px;
