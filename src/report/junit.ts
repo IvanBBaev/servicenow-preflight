@@ -48,6 +48,40 @@ function renderTestcase(result: CheckResult): string {
 }
 
 /**
+ * Number of failing testcases in a report. Derived from `results` (the source
+ * of truth the testcases themselves are rendered from), not `summary.fail`, so
+ * the `failures=` attribute can never disagree with the `<failure>` elements
+ * actually emitted even if a caller hands in a report whose summary is stale.
+ */
+function countFailures(report: PreflightReport): number {
+  return report.results.filter((r) => r.status === "fail").length;
+}
+
+/** Render one `<testsuite>` (name + testcases) for a report. */
+function renderSuite(name: string, report: PreflightReport): string {
+  const results = report.results;
+  const tests = results.length;
+  const failures = countFailures(report);
+  const testcases = results.map(renderTestcase).join("\n");
+  const body = testcases.length > 0 ? `\n${testcases}\n` : "";
+  return (
+    `  <testsuite name="${escapeXml(name)}" tests="${tests}" failures="${failures}">` +
+    `${body}` +
+    `  </testsuite>`
+  );
+}
+
+/** Wrap one or more rendered `<testsuite>` blocks in a `<testsuites>` document. */
+function wrapSuites(suites: string, tests: number, failures: number): string {
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<testsuites tests="${tests}" failures="${failures}">\n` +
+    `${suites}\n` +
+    `</testsuites>\n`
+  );
+}
+
+/**
  * Format a {@link PreflightReport} as a JUnit XML string (for CI test-report
  * ingestion).
  *
@@ -59,19 +93,31 @@ function renderTestcase(result: CheckResult): string {
  * The single `<testsuite>` reports `tests` (total) and `failures` counts.
  */
 export function formatJUnit(report: PreflightReport): string {
-  const results = report.results;
-  const tests = results.length;
-  const failures = report.summary.fail;
-
-  const testcases = results.map(renderTestcase).join("\n");
-  const body = testcases.length > 0 ? `\n${testcases}\n` : "";
-
-  return (
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<testsuites tests="${tests}" failures="${failures}">\n` +
-    `  <testsuite name="servicenow-preflight" tests="${tests}" failures="${failures}">` +
-    `${body}` +
-    `  </testsuite>\n` +
-    `</testsuites>\n`
+  const tests = report.results.length;
+  const failures = countFailures(report);
+  return wrapSuites(
+    renderSuite("servicenow-preflight", report),
+    tests,
+    failures,
   );
+}
+
+/** One instance's report, tagged with the instance name (for `--all`). */
+export interface NamedReport {
+  name: string;
+  report: PreflightReport;
+}
+
+/**
+ * Format several instance reports as ONE JUnit document: a single
+ * `<testsuites>` with one `<testsuite>` per instance (named after it). The
+ * document-level `tests` / `failures` are the sums across every suite. Used by
+ * the CLI's `--all --format junit`, so CI ingesters see a single well-formed
+ * report rather than concatenated documents.
+ */
+export function formatJUnitSuites(reports: NamedReport[]): string {
+  const suites = reports.map((r) => renderSuite(r.name, r.report)).join("\n");
+  const tests = reports.reduce((n, r) => n + r.report.results.length, 0);
+  const failures = reports.reduce((n, r) => n + countFailures(r.report), 0);
+  return wrapSuites(suites, tests, failures);
 }

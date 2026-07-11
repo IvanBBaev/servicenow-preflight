@@ -5,6 +5,8 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
+  statSync,
   rmSync,
   existsSync,
 } from "node:fs";
@@ -139,6 +141,23 @@ test("manifestPath resolves a relative cwd against process.cwd()", () => {
   );
 });
 
+test("manifestPath rejects an instance name with a path separator (CC-14)", () => {
+  // The name becomes the `<name>.state.json` path segment; a separator would
+  // escape the state directory. Old code interpolated it blindly.
+  assert.throws(
+    () => manifestPath("../etc/passwd", "/work/repo"),
+    /path separators or ".."/,
+  );
+  assert.throws(() => manifestPath("a/b", "/work/repo"), /path separators/);
+});
+
+test("manifestPath rejects an instance name with surrounding whitespace (CC-14)", () => {
+  assert.throws(
+    () => manifestPath(" dev ", "/work/repo"),
+    /leading or trailing whitespace/,
+  );
+});
+
 // --- loadManifest ----------------------------------------------------------
 
 test("loadManifest returns undefined when the manifest has never been synced", async () => {
@@ -215,6 +234,76 @@ test("loadManifest falls back to the requested instance name when the file omits
     );
     const loaded = await loadManifest("dev", dir);
     assert.equal(loaded.instance, "dev");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest rejects a manifest whose declared instance differs from the load name (CC-36)", async () => {
+  const dir = tempDir();
+  try {
+    // The file at prod.state.json declares instance "staging" — it was copied or
+    // renamed. Trusting it would let staging coverage masquerade as prod's.
+    writeFileSync(
+      manifestPathWithMkdir(dir, "prod"),
+      JSON.stringify({ instance: "staging", tests: [], suites: [] }),
+    );
+    await assert.rejects(
+      () => loadManifest("prod", dir),
+      (err) => {
+        assert.match(err.message, /declares instance "staging"/);
+        assert.match(err.message, /loaded as\s+"prod"/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest rejects a test element missing a non-empty string id (CC-18)", async () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(
+      manifestPathWithMkdir(dir, "dev"),
+      JSON.stringify({
+        instance: "dev",
+        tests: [{ id: "x/ok", name: "Ok" }, { name: "No id here" }],
+        suites: [],
+      }),
+    );
+    await assert.rejects(
+      () => loadManifest("dev", dir),
+      (err) => {
+        // The error must name both the file and the offending index.
+        assert.match(
+          err.message,
+          /tests\[1\] is missing a non-empty string "id"/,
+        );
+        assert.match(err.message, /dev\.state\.json/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest rejects a suite element with a blank id (CC-18)", async () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(
+      manifestPathWithMkdir(dir, "dev"),
+      JSON.stringify({
+        instance: "dev",
+        tests: [],
+        suites: [{ id: "", name: "Blank id suite", testIds: [] }],
+      }),
+    );
+    await assert.rejects(
+      () => loadManifest("dev", dir),
+      /suites\[0\] is missing a non-empty string "id"/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -309,6 +398,40 @@ test("writeManifest creates the parent .preflight/state directory and returns th
     assert.equal(p, manifestPath("dev", dir));
     assert.ok(existsSync(p));
     assert.ok(existsSync(join(dir, PREFLIGHT_DIR, STATE_DIR)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeManifest writes atomically via a temp-file rename, leaving no .tmp behind (CC-17)", async () => {
+  const dir = tempDir();
+  try {
+    const p = await writeManifest(emptyManifest("dev"), dir);
+    const inoFirst = statSync(p).ino;
+    // A second write must swap a freshly-renamed sibling into place, so the
+    // destination inode CHANGES. The old in-place writeFile truncated and
+    // rewrote the SAME inode, so this assertion is red against that behaviour.
+    await writeManifest(
+      { instance: "dev", tests: [{ id: "x/t", name: "T" }], suites: [] },
+      dir,
+    );
+    const inoSecond = statSync(p).ino;
+    assert.notEqual(
+      inoSecond,
+      inoFirst,
+      "atomic rename must replace the file (new inode), not overwrite in place",
+    );
+
+    // No orphaned temp file must remain in the state directory after a write.
+    const stateDir = join(dir, PREFLIGHT_DIR, STATE_DIR);
+    const leftovers = readdirSync(stateDir).filter((f) => f.endsWith(".tmp"));
+    assert.deepEqual(leftovers, [], `unexpected temp leftovers: ${leftovers}`);
+    // The final content reflects the second write.
+    const parsed = JSON.parse(readFileSync(p, "utf8"));
+    assert.deepEqual(
+      parsed.tests.map((t) => t.id),
+      ["x/t"],
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -793,11 +916,12 @@ test("mergeManifest leaves a suite testId untouched when it was not remapped", (
   ]);
 });
 
-test("mergeManifest prefers incoming url/scope but falls back to existing; syncedAt is taken verbatim", () => {
+test("mergeManifest prefers incoming url/scope/syncedAt but falls back to existing for each (CC-38)", () => {
   const existing = {
     instance: "dev",
     url: "https://old.service-now.com",
     scope: "x_old",
+    syncedAt: "2026-01-01T00:00:00.000Z",
     tests: [],
     suites: [],
   };
@@ -809,17 +933,21 @@ test("mergeManifest prefers incoming url/scope but falls back to existing; synce
     tests: [],
     suites: [],
   };
+  // A fresh sync that stamps syncedAt still wins over the committed one.
   const merged1 = mergeManifest(existing, incomingWithBoth);
   assert.equal(merged1.url, "https://new.service-now.com");
   assert.equal(merged1.scope, "x_new");
   assert.equal(merged1.syncedAt, "2026-07-04T00:00:00.000Z");
 
+  // CC-38: a library caller that pulls WITHOUT `opts.now` produces a snapshot
+  // with no `syncedAt`. Taking it verbatim (the old behaviour) would erase the
+  // last-known sync time and make the manifest read as never-synced, failing the
+  // freshness gate. The committed value must be preserved instead.
   const incomingWithout = { instance: "dev", tests: [], suites: [] };
   const merged2 = mergeManifest(existing, incomingWithout);
   assert.equal(merged2.url, "https://old.service-now.com");
   assert.equal(merged2.scope, "x_old");
-  // syncedAt has no fallback: it is taken verbatim from incoming (undefined here).
-  assert.equal(merged2.syncedAt, undefined);
+  assert.equal(merged2.syncedAt, "2026-01-01T00:00:00.000Z");
 });
 
 test("mergeManifest takes the instance from incoming", () => {

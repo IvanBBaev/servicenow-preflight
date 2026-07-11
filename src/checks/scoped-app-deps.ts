@@ -10,8 +10,8 @@ const NAME = "scoped-app-deps";
 interface RequiredApp {
   /**
    * Identifier of the required plugin / scoped app. Matched against the common
-   * identity fields of `sys_store_app` (`scope`, `source`, `name`, `sys_id`)
-   * and `sys_plugins` (`id`, `source`, `name`, `sys_id`).
+   * identity fields of `sys_store_app` / `sys_app` (`scope`, `source`, `name`,
+   * `sys_id`) and `sys_plugins` (`id`, `source`, `name`, `sys_id`).
    */
   id: string;
   /** Optional minimum acceptable version (dot-separated, e.g. `"2.1.0"`). */
@@ -20,7 +20,12 @@ interface RequiredApp {
 
 /** Outcome of resolving one {@link RequiredApp} against the instance. */
 type ResolutionStatus =
-  "satisfied" | "missing" | "inactive" | "outdated" | "unknown-version";
+  | "satisfied"
+  | "missing"
+  | "inactive"
+  | "outdated"
+  | "unknown-version"
+  | "unparseable-version";
 
 interface Resolution {
   id: string;
@@ -54,52 +59,85 @@ function rowMatchesId(
   return false;
 }
 
-/** ServiceNow `active` flag is stored as the string `"true"` / `"false"`. */
+/**
+ * ServiceNow's `active` flag is a boolean field surfaced as the string
+ * `"true"` / `"false"`. An UNSPECIFIED flag — an empty string, an explicit
+ * `null`, or a table with no `active` column at all (e.g. `sys_store_app`) — is
+ * treated as active, so all three "not disabled" shapes read consistently
+ * (CC-44). Only an explicit non-empty non-`"true"` value (`"false"`) is inactive.
+ */
 function isActive(row: Record<string, unknown>): boolean {
   const value = row.active;
   if (typeof value === "boolean") return value;
-  if (typeof value === "string") return value.trim().toLowerCase() === "true";
-  // No `active` column at all (e.g. sys_store_app) — treat as active.
-  return value === undefined;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    return v === "" || v === "true";
+  }
+  // Absent (undefined) or explicitly null: unspecified → active.
+  return true;
 }
 
-/** Pull a version string from the row, trying the common version columns. */
+/**
+ * The row's INSTALLED version. Only the `version` column counts — never
+ * `latest_version` (the store's newest available), which would let an
+ * uninstalled/empty version borrow the store's number and falsely satisfy a
+ * minimum (SN-5). An empty installed version therefore reads as unknown.
+ */
 function rowVersion(row: Record<string, unknown>): string | undefined {
-  return str(row, "version") ?? str(row, "latest_version");
+  return str(row, "version");
+}
+
+/**
+ * Parse a dot-separated version into numeric segments, or `null` when ANY
+ * segment is non-numeric (or the string is empty). Returning `null` — rather
+ * than silently coercing a non-numeric segment to 0 — lets the caller surface
+ * "cannot parse" instead of a misleading comparison (CC-43).
+ */
+function parseVersion(version: string): number[] | null {
+  const parts = version.split(".");
+  const out: number[] = [];
+  for (const part of parts) {
+    const segment = part.trim();
+    if (!/^\d+$/.test(segment)) return null;
+    out.push(Number.parseInt(segment, 10));
+  }
+  return out.length > 0 ? out : null;
 }
 
 /**
  * Compare two dot-separated versions numerically. Returns a negative number
- * when `a < b`, zero when equal, positive when `a > b`. Non-numeric segments
- * compare as 0, so this is a best-effort semantic-ish comparison.
+ * when `a < b`, zero when equal, positive when `a > b`, or `null` when either
+ * side has a non-numeric segment and cannot be compared (CC-43).
  */
-function compareVersions(a: string, b: string): number {
-  const pa = a.split(".");
-  const pb = b.split(".");
+function compareVersions(a: string, b: string): number | null {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  if (pa === null || pb === null) return null;
   const len = Math.max(pa.length, pb.length);
   for (let i = 0; i < len; i++) {
-    const na = Number.parseInt(pa[i] ?? "0", 10);
-    const nb = Number.parseInt(pb[i] ?? "0", 10);
-    const va = Number.isNaN(na) ? 0 : na;
-    const vb = Number.isNaN(nb) ? 0 : nb;
+    const va = pa[i] ?? 0;
+    const vb = pb[i] ?? 0;
     if (va !== vb) return va - vb;
   }
   return 0;
 }
 
-/** Resolve one required app against the fetched store-app / plugin rows. */
+/**
+ * Resolve one required app against the fetched scoped-app rows (`sys_store_app`
+ * + `sys_app`) and plugin rows (`sys_plugins`).
+ */
 function resolveApp(
   req: RequiredApp,
-  storeRows: Record<string, unknown>[],
+  scopedRows: Record<string, unknown>[],
   pluginRows: Record<string, unknown>[],
 ): Resolution {
-  const storeMatch = storeRows.find((r) =>
+  const scopedMatch = scopedRows.find((r) =>
     rowMatchesId(r, STORE_ID_FIELDS, req.id),
   );
   const pluginMatch = pluginRows.find((r) =>
     rowMatchesId(r, PLUGIN_ID_FIELDS, req.id),
   );
-  const match = storeMatch ?? pluginMatch;
+  const match = scopedMatch ?? pluginMatch;
 
   if (!match) {
     return { id: req.id, status: "missing", detail: "not installed" };
@@ -118,11 +156,20 @@ function resolveApp(
     return {
       id: req.id,
       status: "unknown-version",
-      detail: `present, but version is unknown (need >= ${req.minVersion})`,
+      detail: `present, but the installed version is unknown (need >= ${req.minVersion})`,
     };
   }
 
-  if (compareVersions(version, req.minVersion) < 0) {
+  const order = compareVersions(version, req.minVersion);
+  if (order === null) {
+    return {
+      id: req.id,
+      status: "unparseable-version",
+      detail: `version "${version}" cannot be compared to the required "${req.minVersion}" (non-numeric segment)`,
+    };
+  }
+
+  if (order < 0) {
     return {
       id: req.id,
       status: "outdated",
@@ -178,13 +225,13 @@ function result(status: CheckStatus, message: string): CheckResult {
  * the target instance.
  *
  * Dependencies are declared via `ctx.options.requiredApps`, a list of
- * `{ id, minVersion? }`. Each id is looked up in `sys_store_app` (scoped apps)
- * and `sys_plugins` (platform plugins).
+ * `{ id, minVersion? }`. Each id is looked up across `sys_store_app` (store
+ * apps), `sys_app` (custom/scoped apps) and `sys_plugins` (platform plugins).
  *
- * - **fail** — a required app is missing, installed-but-inactive, or below its
- *   `minVersion`.
+ * - **fail** — a required app is missing, installed-but-inactive, below its
+ *   `minVersion`, or carries a version that cannot be parsed/compared.
  * - **warn** — no requirements were declared, some entries were malformed, or a
- *   dependency is present but its version cannot be verified.
+ *   dependency is present but its installed version cannot be verified.
  * - **pass** — every declared dependency is present, active, and up to date.
  *
  * Never throws: `SnAuthError` / `SnNetworkError` map to `fail`, other transport
@@ -209,12 +256,18 @@ export const scopedAppDeps: Check = {
     }
 
     let storeRows: Record<string, unknown>[] = [];
+    let appRows: Record<string, unknown>[] = [];
     let pluginRows: Record<string, unknown>[] = [];
     try {
-      // Fetch active plugins and installed store apps in parallel.
-      [pluginRows, storeRows] = await Promise.all([
+      // Fetch active plugins plus installed store apps and scoped apps in
+      // parallel. `sys_app` (custom/scoped apps on this instance) is part of the
+      // lookup union so a dependency shipped as a scoped app — not a store app —
+      // still resolves (SN-5). Store/scoped apps are read unfiltered so an
+      // inactive one is reported as inactive rather than silently missing.
+      [pluginRows, storeRows, appRows] = await Promise.all([
         ctx.http.table("sys_plugins").query({ sysparm_query: "active=true" }),
         ctx.http.table("sys_store_app").query(),
+        ctx.http.table("sys_app").query(),
       ]);
     } catch (err) {
       if (err instanceof SnAuthError) {
@@ -243,15 +296,17 @@ export const scopedAppDeps: Check = {
       );
     }
 
+    const scopedRows = [...storeRows, ...appRows];
     const resolutions = apps.map((app) =>
-      resolveApp(app, storeRows, pluginRows),
+      resolveApp(app, scopedRows, pluginRows),
     );
 
     const hardFailures = resolutions.filter(
       (r) =>
         r.status === "missing" ||
         r.status === "inactive" ||
-        r.status === "outdated",
+        r.status === "outdated" ||
+        r.status === "unparseable-version",
     );
     const advisory = resolutions.filter((r) => r.status === "unknown-version");
 

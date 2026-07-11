@@ -80,6 +80,29 @@ export interface SnTls {
   passphrase?: string;
 }
 
+/**
+ * A Table API query result plus the platform metadata a security-conscious
+ * caller needs. `rows` is exactly what {@link SnTable.query} returns.
+ *
+ * `totalCount` is the value of the `X-Total-Count` response header when the
+ * instance sends it — the number of rows matching the query as computed by the
+ * platform BEFORE ACL security-trimming.
+ *
+ * `securityTrimmed` is `true` when `totalCount` exceeds the number of visible
+ * `rows`: the account was denied some rows by ACLs, so a short/empty result is
+ * a permissions signal, not "no data". A least-privilege CI account reading an
+ * admin-scoped table (e.g. `sys_security_acl`) is the canonical case a
+ * preflight gate must not misread as "clean".
+ */
+export interface TableQueryResult {
+  /** The visible rows — identical to what {@link SnTable.query} resolves to. */
+  rows: Record<string, unknown>[];
+  /** Pre-trim match count from `X-Total-Count`, when the instance sent it. */
+  totalCount?: number;
+  /** `true` when `totalCount > rows.length` (rows were ACL-trimmed away). */
+  securityTrimmed: boolean;
+}
+
 /** Table API surface scoped to a single table (`ctx.http.table("incident")`). */
 export interface SnTable {
   /**
@@ -96,6 +119,13 @@ export interface SnTable {
    * matching rows (possibly empty).
    */
   query(params?: Record<string, string>): Promise<Record<string, unknown>[]>;
+  /**
+   * Like {@link SnTable.query}, but also surfaces the `X-Total-Count` header and
+   * a `securityTrimmed` signal (see {@link TableQueryResult}). Same pagination
+   * and `sysparm_*` contract as `query`; use it when the caller must tell "no
+   * matching rows" apart from "rows hidden by ACLs".
+   */
+  queryWithMeta(params?: Record<string, string>): Promise<TableQueryResult>;
 }
 
 /** Result of kicking off / reading a CI/CD test suite run. */
@@ -123,10 +153,15 @@ export interface SnCicd {
   runTestSuite(suiteSysId: string): Promise<CicdTestSuiteResult>;
 }
 
-/** A raw REST response: the HTTP status and the parsed JSON body. */
+/** A raw REST response: the HTTP status, the parsed JSON body, and headers. */
 export interface SnRawResponse {
   status: number;
   body: unknown;
+  /**
+   * Response headers with lower-cased keys (e.g. `x-total-count`). Present on
+   * the real client; a fake may omit it.
+   */
+  headers?: Record<string, string>;
 }
 
 /** Options for a low-level {@link SnClient.request} call. */
@@ -194,6 +229,41 @@ export class SnHttpError extends SnError {
   }
 }
 
+/**
+ * A response arrived with a successful (2xx) status but a body that is not the
+ * expected JSON — the hallmark of a hibernating PDI's wake-up page or an
+ * SSO/proxy interstitial answering `200` with HTML. It is raised instead of
+ * letting the body degrade into `{ raw: text }` and then an empty result set: a
+ * preflight gate that read "zero rows" from an instance it never actually
+ * reached would pass against nothing. Fail closed and say so.
+ */
+export class SnResponseError extends SnError {
+  /** The (successful-looking) HTTP status the non-JSON body arrived with. */
+  readonly status: number;
+  /** A short, secret-free snippet of the unexpected body, for diagnostics. */
+  readonly bodySnippet: string;
+  constructor(message: string, status: number, body: string) {
+    super(message);
+    this.status = status;
+    this.bodySnippet = body.slice(0, 200);
+  }
+}
+
+/**
+ * Auto-pagination reached its safety cap before exhausting the result set. It is
+ * raised instead of silently returning a truncated page: a caller acting on a
+ * partial result (e.g. a preflight gate comparing state) would draw a wrong
+ * conclusion, so the client fails closed and lets the caller narrow the query.
+ */
+export class SnTruncationError extends SnError {
+  /** The row cap that was hit before the result set was exhausted. */
+  readonly cap: number;
+  constructor(message: string, cap: number) {
+    super(message);
+    this.cap = cap;
+  }
+}
+
 /** Configuration for {@link createSnClient}. */
 export interface SnClientConfig {
   /** Base URL of the instance, e.g. `https://dev12345.service-now.com`. */
@@ -210,14 +280,30 @@ export interface SnClientConfig {
   timeoutMs?: number;
   /** Poll interval while waiting for an async CI/CD run (default 2000). */
   cicdPollIntervalMs?: number;
-  /** Maximum CI/CD progress polls before giving up as pending (default 60). */
+  /**
+   * Maximum CI/CD progress polls before giving up and reporting the run as
+   * still pending (default 450). At the default 2000ms interval that is a
+   * ~15-minute budget — chosen to cover a realistic ATF suite rather than the
+   * old 2-minute ceiling, which abandoned any suite longer than a smoke test.
+   * A longer suite should raise this (e.g. 900 ≈ 30 min); a fast CI lane can
+   * lower it. Independent of the per-poll transient-error tolerance.
+   */
   cicdMaxPolls?: number;
+  /**
+   * Maximum rows an auto-paginated `table().query()` will accumulate before it
+   * fails closed with an {@link SnTruncationError} rather than silently
+   * truncating (default 100000). A caller that genuinely wants more should page
+   * explicitly with `sysparm_limit`/`sysparm_offset`.
+   */
+  maxRows?: number;
 }
 
 /** Minimal response shape the client consumes (a subset of `fetch`'s Response). */
 interface TransportResponse {
   status: number;
   statusText: string;
+  /** Response headers with lower-cased keys (both transports normalise to this). */
+  headers: Record<string, string>;
   text(): Promise<string>;
 }
 
@@ -227,6 +313,21 @@ interface TransportInit {
   headers: Record<string, string>;
   body?: string;
   signal?: AbortSignal;
+  /** Redirect policy handed to `fetch` (the client always sets `"error"`). */
+  redirect?: RequestRedirect;
+}
+
+/**
+ * The richer response the internal request pipeline threads through
+ * ({@link createSnClient}). Adds the response headers and how many 429
+ * Retry-After retries preceded this response (0 when none), on top of the
+ * public {@link SnRawResponse} fields.
+ */
+interface RawResult {
+  status: number;
+  body: unknown;
+  headers: Record<string, string>;
+  rateLimitAttempts: number;
 }
 
 /**
@@ -239,8 +340,51 @@ type Transport = (
   init: TransportInit,
 ) => Promise<TransportResponse>;
 
+/**
+ * Normalise a set of response headers — a `fetch` `Headers`, a Node headers
+ * object, or a plain record from a test fake — into a `Record` with lower-cased
+ * keys. Tolerates `undefined` so a transport that reports no headers is fine.
+ */
+function headersToRecord(source: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!source || typeof source !== "object") return out;
+  // A `fetch`/undici `Headers` exposes `forEach((value, key) => …)`.
+  const iterable = source as {
+    forEach?: (cb: (value: string, key: string) => void) => void;
+  };
+  if (typeof iterable.forEach === "function") {
+    iterable.forEach((value, key) => {
+      out[key.toLowerCase()] = value;
+    });
+    return out;
+  }
+  // A Node `IncomingHttpHeaders` / plain object: values are strings or string
+  // arrays (a set-cookie style multi-value). Anything else is not a header value
+  // and is skipped rather than coerced to `[object Object]`.
+  for (const [key, value] of Object.entries(
+    source as Record<string, unknown>,
+  )) {
+    if (typeof value === "string") {
+      out[key.toLowerCase()] = value;
+    } else if (Array.isArray(value)) {
+      out[key.toLowerCase()] = value.join(", ");
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      out[key.toLowerCase()] = String(value);
+    }
+  }
+  return out;
+}
+
 /** The default transport — the global `fetch`, resolved at call time. */
-const fetchTransport: Transport = (url, init) => globalThis.fetch(url, init);
+const fetchTransport: Transport = async (url, init) => {
+  const res = await globalThis.fetch(url, init);
+  return {
+    status: res.status,
+    statusText: res.statusText,
+    headers: headersToRecord(res.headers),
+    text: () => res.text(),
+  };
+};
 
 /**
  * Build a `node:https` transport that presents `tls`'s client certificate. It
@@ -266,16 +410,38 @@ function createHttpsTransport(tls: SnTls): Transport {
           passphrase: tls.passphrase,
         },
         (res) => {
+          const status = res.statusCode ?? 0;
+          // CC-31: never follow a redirect on an API call — align with the
+          // fetch path's `redirect: "error"`. `node:https` does not auto-follow,
+          // so a 3xx would otherwise surface as a puzzling non-JSON body; fail
+          // closed the same way instead, so credentials are never re-sent to a
+          // redirect target.
+          if (status >= 300 && status < 400) {
+            res.resume(); // drain the body so the socket can be released
+            reject(
+              new Error(
+                `Refusing to follow a ${status} redirect from ${u.origin} ` +
+                  `(API requests must not redirect).`,
+              ),
+            );
+            return;
+          }
           const chunks: Buffer[] = [];
           res.on("data", (c: Buffer) => chunks.push(c));
           res.on("end", () => {
             const text = Buffer.concat(chunks).toString("utf8");
             resolve({
-              status: res.statusCode ?? 0,
+              status,
               statusText: res.statusMessage ?? "",
+              headers: headersToRecord(res.headers),
               text: () => Promise.resolve(text),
             });
           });
+          // CC-8: a mid-body socket failure emits an 'error' on the response
+          // stream. Without this listener Node throws it as an unhandled
+          // 'error' event and crashes the process; route it to the same reject
+          // path the request-level error uses (→ SnNetworkError).
+          res.on("error", (err) => reject(err));
         },
       );
       const signal = init.signal;
@@ -404,17 +570,26 @@ async function acquireToken(
   // Build the body first: JWT signing/config errors are auth problems and must
   // surface as SnAuthError, not be masked by the transport's network catch.
   const requestBody = tokenRequestBody(auth, origin);
-  let res: TransportResponse;
+  let status: number;
+  let statusText: string;
+  let text: string;
   try {
-    res = await transport(url, {
+    const res = await transport(url, {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: requestBody,
+      // A token endpoint that redirects is not something to chase — fail closed.
+      redirect: "error",
       signal: AbortSignal.timeout(timeoutMs),
     });
+    status = res.status;
+    statusText = res.statusText;
+    // CC-7: read the body inside the try — a mid-body ECONNRESET/timeout rejects
+    // here and must surface as SnNetworkError, not escape as an unmapped error.
+    text = await res.text();
   } catch (cause) {
     const err = cause instanceof Error ? cause : new Error(String(cause));
     const timedOut = err.name === "TimeoutError" || err.name === "AbortError";
@@ -425,7 +600,6 @@ async function acquireToken(
     );
   }
 
-  const text = await res.text();
   let body: unknown = undefined;
   if (text) {
     try {
@@ -435,11 +609,11 @@ async function acquireToken(
     }
   }
 
-  if (res.status < 200 || res.status >= 300) {
-    const detail = extractErrorDetail(body) ?? res.statusText;
+  if (status < 200 || status >= 300) {
+    const detail = extractErrorDetail(body) ?? statusText;
     throw new SnAuthError(
-      `OAuth token request failed (${res.status})${detail ? `: ${detail}` : ""}.`,
-      res.status,
+      `OAuth token request failed (${status})${detail ? `: ${detail}` : ""}.`,
+      status,
     );
   }
 
@@ -476,11 +650,15 @@ interface AuthProvider {
    */
   header(): Promise<{ name: string; value: string } | undefined>;
   /**
-   * Discard any cached credential so the next {@link header} re-acquires it.
-   * Returns `true` when a retry is worthwhile (grant flows), `false` for static
-   * credentials where a 401 is terminal.
+   * Discard the cached credential so the next {@link header} re-acquires it, but
+   * only when it still matches `usedValue` — the header value the failing
+   * request actually sent. This makes invalidation token-aware: a 401 from a
+   * request that carried an already-superseded token must not evict the newer
+   * token a concurrent acquisition just cached. Returns `true` when a retry is
+   * worthwhile (grant flows), `false` for static credentials where a 401 is
+   * terminal.
    */
-  invalidate(): boolean;
+  invalidate(usedValue?: string): boolean;
 }
 
 /** A provider that always returns the same header and cannot be refreshed. */
@@ -520,29 +698,54 @@ function buildAuthProvider(
     default: {
       const grant = auth;
       let cached: { value: string; expiresAt: number } | undefined;
+      // CC-34: a single in-flight acquisition shared by every concurrent
+      // caller. Without it, N requests that all miss the cache each POST the
+      // token endpoint N times — wasteful, and unsafe when the grant is
+      // single-use (a refresh-token rotation would fail on the second POST).
+      let inFlight: Promise<string> | undefined;
+
+      async function acquire(): Promise<string> {
+        const started = Date.now();
+        const { accessToken, expiresIn } = await acquireToken(
+          grant,
+          transport,
+          origin,
+          timeoutMs,
+        );
+        const ttlMs = (expiresIn && expiresIn > 0 ? expiresIn : 1800) * 1000;
+        cached = {
+          value: `Bearer ${accessToken}`,
+          // Refresh ~30s early, but always cache for at least a second so a
+          // short-lived token can't trigger a re-acquire on every request.
+          expiresAt: Math.max(started + ttlMs - 30_000, started + 1_000),
+        };
+        return cached.value;
+      }
+
       return {
         async header() {
           const now = Date.now();
           if (cached && now < cached.expiresAt) {
             return { name: "Authorization", value: cached.value };
           }
-          const { accessToken, expiresIn } = await acquireToken(
-            grant,
-            transport,
-            origin,
-            timeoutMs,
-          );
-          const ttlMs = (expiresIn && expiresIn > 0 ? expiresIn : 1800) * 1000;
-          cached = {
-            value: `Bearer ${accessToken}`,
-            // Refresh ~30s early, but always cache for at least a second so a
-            // short-lived token can't trigger a re-acquire on every request.
-            expiresAt: Math.max(now + ttlMs - 30_000, now + 1_000),
-          };
-          return { name: "Authorization", value: cached.value };
+          // Coalesce concurrent cache misses onto one acquisition. Assign
+          // `inFlight` synchronously (before any await) so a second caller in
+          // the same tick sees it and awaits the same promise.
+          if (!inFlight) {
+            inFlight = acquire().finally(() => {
+              inFlight = undefined;
+            });
+          }
+          const value = await inFlight;
+          return { name: "Authorization", value };
         },
-        invalidate() {
-          cached = undefined;
+        invalidate(usedValue) {
+          // Only evict when the failing request used the token we still hold.
+          // If a concurrent acquisition already replaced it, keep the newer one
+          // and let the retry pick it up — never discard a fresher token.
+          if (usedValue === undefined || cached?.value === usedValue) {
+            cached = undefined;
+          }
           return true;
         },
       };
@@ -550,10 +753,21 @@ function buildAuthProvider(
   }
 }
 
-/** Extract a human-readable message from a ServiceNow error body. */
+/**
+ * Extract a human-readable message from an error body. Handles both the
+ * ServiceNow REST envelope (`{ error: { message, detail } }`) and the RFC 6749
+ * OAuth shape (`{ error: "invalid_grant", error_description: "…" }`), so a
+ * failed grant reports the actual reason instead of a bare status.
+ */
 function extractErrorDetail(body: unknown): string | undefined {
   if (body && typeof body === "object" && "error" in body) {
     const err = (body as { error?: unknown }).error;
+    // RFC 6749: `error` is a short string code, optionally paired with a longer
+    // human-readable `error_description`.
+    if (typeof err === "string" && err) {
+      const desc = (body as { error_description?: unknown }).error_description;
+      return typeof desc === "string" && desc ? `${err}: ${desc}` : err;
+    }
     if (err && typeof err === "object") {
       const o = err as { message?: unknown; detail?: unknown };
       if (typeof o.message === "string" && o.message) return o.message;
@@ -563,14 +777,109 @@ function extractErrorDetail(body: unknown): string | undefined {
   return undefined;
 }
 
+/** A short, whitespace-collapsed preview of an unexpected response body. */
+function bodyPreview(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed.length > 80 ? `${collapsed.slice(0, 80)}…` : collapsed;
+}
+
+/** Parse an `X-Total-Count` header (pre-trim match count) if present and valid. */
+function parseTotalCount(
+  headers: Record<string, string> | undefined,
+): number | undefined {
+  const raw = headers?.["x-total-count"];
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+
+/** Assemble a {@link TableQueryResult}, deriving the security-trimmed signal. */
+function toQueryResult(
+  rows: Record<string, unknown>[],
+  totalCount: number | undefined,
+): TableQueryResult {
+  return {
+    rows,
+    totalCount,
+    // A pre-trim count above the visible rows means ACLs hid some rows.
+    securityTrimmed: totalCount !== undefined && totalCount > rows.length,
+  };
+}
+
 /** Coerce a ServiceNow Table API `result` payload into an array of rows. */
 function asRows(result: unknown): Record<string, unknown>[] {
   return Array.isArray(result) ? (result as Record<string, unknown>[]) : [];
 }
 
+/**
+ * A `sysparm_*` value counts as supplied only when it is a non-empty string.
+ * An empty string is treated as absent so `sysparm_limit: ""` behaves exactly
+ * like omitting it (auto-paginate), rather than accidentally pinning a page.
+ */
+function paramPresent(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+/**
+ * Auto-pagination walks `sysparm_offset` in fixed windows, so it needs a stable
+ * total order or rows can be skipped or repeated across pages. When the caller's
+ * `sysparm_query` carries no `ORDERBY` clause of its own, pin one on `sys_id`
+ * (unique and always present). A caller-supplied ordering is left untouched.
+ */
+function withStableOrder(rawQuery: string | undefined): string {
+  const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
+  // A ServiceNow order clause is `ORDERBY<field>` / `ORDERBYDESC<field>` at the
+  // start of the query or after a `^` operator boundary.
+  const hasOrderBy = /(?:^|\^)ORDERBY/.test(query);
+  if (hasOrderBy) return query;
+  return query ? `${query}^ORDERBYsys_id` : "ORDERBYsys_id";
+}
+
 /** Sleep for `ms` milliseconds (used to pace CI/CD progress polling). */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * How many times a 429 (rate-limited) response is retried, honouring its
+ * `Retry-After`, before the request gives up and the 429 surfaces as an
+ * {@link SnHttpError}. Bounded so a persistently throttling instance cannot
+ * hang the run.
+ */
+const RATE_LIMIT_MAX_RETRIES = 3;
+
+/**
+ * Ceiling (ms) on any single `Retry-After` wait, so a hostile or mistaken
+ * header (e.g. `Retry-After: 86400`) cannot stall the process for hours.
+ */
+const RETRY_AFTER_CEILING_MS = 30_000;
+
+/**
+ * How many consecutive transient poll failures (a 5xx, or an early 404 while
+ * the progress record lags creation, or a network blip) a CI/CD run tolerates
+ * before giving up. A suite that keeps running server-side must not be
+ * abandoned on one hiccup.
+ */
+const CICD_POLL_ERROR_TOLERANCE = 5;
+
+/**
+ * Parse a `Retry-After` header into a wait in milliseconds, clamped to
+ * {@link RETRY_AFTER_CEILING_MS}. Supports both RFC 7231 forms: a delta-seconds
+ * integer and an HTTP-date. Falls back to 1s when the header is absent or
+ * unparseable.
+ */
+function retryAfterMs(raw: string | undefined): number {
+  const fallback = 1_000;
+  if (!raw) return fallback;
+  const trimmed = raw.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return Math.min(Number(trimmed) * 1_000, RETRY_AFTER_CEILING_MS);
+  }
+  const when = Date.parse(trimmed);
+  if (!Number.isNaN(when)) {
+    return Math.min(Math.max(when - Date.now(), 0), RETRY_AFTER_CEILING_MS);
+  }
+  return fallback;
 }
 
 /**
@@ -665,7 +974,26 @@ function buildUrl(
  * ```
  */
 export function createSnClient(cfg: SnClientConfig): SnClient {
-  const origin = new URL(cfg.instanceUrl).origin;
+  const parsedUrl = new URL(cfg.instanceUrl);
+  // CC-11: `URL.origin` silently drops any path/query/fragment. If the
+  // configured instance URL carries one (a reverse-proxy prefix like
+  // `/servicenow`, say), every request would quietly hit the origin root
+  // instead. Fail closed at construction with an actionable message rather than
+  // send traffic to the wrong place.
+  if (
+    (parsedUrl.pathname && parsedUrl.pathname !== "/") ||
+    parsedUrl.search ||
+    parsedUrl.hash
+  ) {
+    throw new SnError(
+      `instanceUrl "${cfg.instanceUrl}" carries a path/query/fragment ` +
+        `("${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}") that ` +
+        `URL.origin would silently drop, sending every request to ` +
+        `"${parsedUrl.origin}" instead. Configure the bare instance origin ` +
+        `(scheme + host [+ port]) only.`,
+    );
+  }
+  const origin = parsedUrl.origin;
   const timeoutMs = cfg.timeoutMs ?? 30_000;
   // Mutual TLS routes over a `node:https` transport (to present the client
   // cert); every other case uses the global `fetch`.
@@ -686,7 +1014,8 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
   ): Promise<SnRawResponse> {
     // `allowRefresh` lets a grant flow re-acquire its token once on a 401
     // (expired token) and retry; static credentials cannot be refreshed.
-    return sendRequest(method, path, opts, true);
+    const res = await sendRequest(method, path, opts, true);
+    return { status: res.status, body: res.body, headers: res.headers };
   }
 
   async function sendRequest(
@@ -694,7 +1023,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     path: string,
     opts: SnRequestOptions,
     allowRefresh: boolean,
-  ): Promise<SnRawResponse> {
+  ): Promise<RawResult> {
     const url = buildUrl(origin, path, opts.query);
     const headers: Record<string, string> = { Accept: "application/json" };
     const cred = await authProvider.header();
@@ -702,6 +1031,9 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     const init: TransportInit = {
       method,
       headers,
+      // CC-31: never follow redirects on an API call — a 3xx to an SSO/login
+      // host would otherwise re-send the Authorization header off-instance.
+      redirect: "error",
       signal: AbortSignal.timeout(timeoutMs),
     };
     if (opts.body !== undefined) {
@@ -709,45 +1041,102 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       init.body = JSON.stringify(opts.body);
     }
 
-    let res: TransportResponse;
-    try {
-      res = await transport(url, init);
-    } catch (cause) {
-      const err = cause instanceof Error ? cause : new Error(String(cause));
-      const timedOut = err.name === "TimeoutError" || err.name === "AbortError";
-      // The URL includes the instance origin only (no query/secret leakage).
-      throw new SnNetworkError(
-        timedOut
-          ? `Request to ${origin} timed out after ${timeoutMs}ms.`
-          : `Could not reach ServiceNow at ${origin}: ${err.message}`,
-      );
-    }
-
-    const text = await res.text();
-    let body: unknown = undefined;
-    if (text) {
+    let rateLimitAttempts = 0;
+    for (;;) {
+      let status: number;
+      let statusText: string;
+      let resHeaders: Record<string, string>;
+      let text: string;
       try {
-        body = JSON.parse(text);
-      } catch {
-        body = { raw: text };
+        const res = await transport(url, init);
+        status = res.status;
+        statusText = res.statusText;
+        resHeaders = res.headers;
+        // CC-7: read the body inside the try — a mid-body ECONNRESET or timeout
+        // rejects here, and must surface as SnNetworkError rather than escape.
+        text = await res.text();
+      } catch (cause) {
+        const err = cause instanceof Error ? cause : new Error(String(cause));
+        const timedOut =
+          err.name === "TimeoutError" || err.name === "AbortError";
+        // The URL includes the instance origin only (no query/secret leakage).
+        throw new SnNetworkError(
+          timedOut
+            ? `Request to ${origin} timed out after ${timeoutMs}ms.`
+            : `Could not reach ServiceNow at ${origin}: ${err.message}`,
+        );
       }
-    }
 
-    if (res.status === 401 || res.status === 403) {
-      // On a 401, a grant flow may hold a stale (expired) token — drop it,
-      // re-acquire once and retry. Any other case (403, static creds, or a
-      // second 401) is terminal.
-      if (res.status === 401 && allowRefresh && authProvider.invalidate()) {
-        return sendRequest(method, path, opts, false);
+      // SN-6: honour Retry-After on a 429, up to a bounded number of attempts.
+      // An exhausted budget falls through and becomes an SnHttpError below.
+      if (status === 429 && rateLimitAttempts < RATE_LIMIT_MAX_RETRIES) {
+        rateLimitAttempts += 1;
+        await sleep(retryAfterMs(resHeaders["retry-after"]));
+        continue;
       }
-      const detail = extractErrorDetail(body) ?? res.statusText;
-      throw new SnAuthError(
-        `ServiceNow authentication failed (${res.status})${detail ? `: ${detail}` : ""}.`,
-        res.status,
-      );
-    }
 
-    return { status: res.status, body };
+      let body: unknown = undefined;
+      if (text) {
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // CC-1: a successful (2xx) response whose body is not JSON is the most
+          // dangerous corner case — a hibernating PDI's wake page, or an
+          // SSO/proxy interstitial answering 200 with HTML. Never let it degrade
+          // into `{ raw: text }` → an empty result set (a gate would "pass"
+          // against an instance it never reached). Fail closed. A non-2xx body
+          // is left raw so the status-based error path can still report it.
+          if (status >= 200 && status < 300) {
+            throw new SnResponseError(
+              `ServiceNow returned a non-JSON ${status} response from ` +
+                `${origin}${path} — the instance may be hibernating or an ` +
+                `SSO/proxy returned an interstitial page instead of API data. ` +
+                `Body began: ${bodyPreview(text)}`,
+              status,
+              text,
+            );
+          }
+          body = { raw: text };
+        }
+      }
+
+      if (status === 401 || status === 403) {
+        // On a 401, a grant flow may hold a stale (expired) token — drop it,
+        // re-acquire once and retry. Any other case (403, static creds, or a
+        // second 401) is terminal. `invalidate` is token-aware: it will not
+        // evict a token a concurrent acquisition already refreshed.
+        if (
+          status === 401 &&
+          allowRefresh &&
+          authProvider.invalidate(cred?.value)
+        ) {
+          return sendRequest(method, path, opts, false);
+        }
+        const detail = extractErrorDetail(body) ?? statusText;
+        throw new SnAuthError(
+          `ServiceNow authentication failed (${status})${detail ? `: ${detail}` : ""}.`,
+          status,
+        );
+      }
+
+      return { status, body, headers: resHeaders, rateLimitAttempts };
+    }
+  }
+
+  /** Build the {@link SnHttpError} for a non-2xx result, noting 429 retries. */
+  function httpErrorFor(res: RawResult): SnHttpError {
+    const detail = extractErrorDetail(res.body) ?? `HTTP ${res.status}`;
+    // SN-6: an exhausted-budget 429 keeps its retry context so the operator sees
+    // the client already backed off and the instance stayed throttled.
+    const rateNote =
+      res.status === 429 && res.rateLimitAttempts > 0
+        ? ` after ${res.rateLimitAttempts} Retry-After retries`
+        : "";
+    return new SnHttpError(
+      res.status,
+      `ServiceNow API error (${res.status})${rateNote}: ${detail}`,
+      res.body,
+    );
   }
 
   /** Like `request`, but throws {@link SnHttpError} on any non-2xx status. */
@@ -755,15 +1144,10 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     method: string,
     path: string,
     opts: SnRequestOptions = {},
-  ): Promise<SnRawResponse> {
-    const res = await request(method, path, opts);
+  ): Promise<RawResult> {
+    const res = await sendRequest(method, path, opts, true);
     if (res.status < 200 || res.status >= 300) {
-      const detail = extractErrorDetail(res.body) ?? `HTTP ${res.status}`;
-      throw new SnHttpError(
-        res.status,
-        `ServiceNow API error (${res.status}): ${detail}`,
-        res.body,
-      );
+      throw httpErrorFor(res);
     }
     return res;
   }
@@ -777,7 +1161,10 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
   }
 
   const pollIntervalMs = cfg.cicdPollIntervalMs ?? 2_000;
-  const maxPolls = cfg.cicdMaxPolls ?? 60;
+  // CC-32: ~15 min at the default 2s interval — a realistic ATF-suite budget,
+  // up from the old 60-poll (~2 min) ceiling that abandoned any real suite.
+  const maxPolls = cfg.cicdMaxPolls ?? 450;
+  const maxRows = cfg.maxRows ?? 100_000;
 
   /**
    * Follow a CI/CD run's `links.progress` link until the run settles (or we run
@@ -786,12 +1173,29 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
    */
   async function pollCicdRun(payload: unknown): Promise<unknown> {
     let current = payload;
+    let consecutiveErrors = 0;
     for (let attempt = 0; attempt < maxPolls; attempt++) {
       if (CICD_TERMINAL.has(cicdStatus(current))) return current;
       const url = cicdProgressUrl(current);
       if (!url) return current;
       await sleep(pollIntervalMs);
-      const res = await requestOk("GET", url);
+      // CC-13: a suite that is genuinely running can answer a progress poll with
+      // a transient 5xx, or an early 404 before its progress record is
+      // committed. Tolerate a bounded run of consecutive failures rather than
+      // abandon a suite that keeps executing server-side.
+      let res: RawResult;
+      try {
+        res = await requestOk("GET", url);
+        consecutiveErrors = 0;
+      } catch (err) {
+        if (
+          (err instanceof SnHttpError || err instanceof SnNetworkError) &&
+          (consecutiveErrors += 1) <= CICD_POLL_ERROR_TOLERANCE
+        ) {
+          continue;
+        }
+        throw err;
+      }
       current = unwrapResult(res.body) ?? current;
     }
     return current;
@@ -809,23 +1213,87 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
   return {
     table(name: string): SnTable {
       const base = `/api/now/table/${encodeURIComponent(name)}`;
+
+      // Shared by `query` and `queryWithMeta`: return the visible rows plus the
+      // pre-trim `X-Total-Count` (SN-1), applying the same `sysparm_*` contract.
+      async function runQuery(
+        params?: Record<string, string>,
+      ): Promise<TableQueryResult> {
+        // When the caller bounds the result set (`sysparm_limit`), honour it
+        // verbatim — a single page, their offset and ordering included. An
+        // empty-string limit is treated as absent (auto-paginate).
+        if (paramPresent(params?.sysparm_limit)) {
+          const res = await requestOk("GET", base, {
+            query: { ...params, sysparm_limit: params.sysparm_limit.trim() },
+          });
+          return toQueryResult(
+            asRows(unwrapResult(res.body)),
+            parseTotalCount(res.headers),
+          );
+        }
+        // A `sysparm_offset` without a `sysparm_limit` is ambiguous: the
+        // auto-paginator walks from offset 0 and would silently ignore the
+        // caller's offset. Fail closed rather than return the wrong window.
+        if (paramPresent(params?.sysparm_offset)) {
+          throw new SnError(
+            `Table API query on "${name}" supplied sysparm_offset=` +
+              `"${params.sysparm_offset.trim()}" without a sysparm_limit. ` +
+              `Pair an offset with an explicit sysparm_limit to page manually, ` +
+              `or drop the offset to let the client auto-paginate.`,
+          );
+        }
+        // Auto-paginate. Pin a stable order (CC-33) so no row is skipped or
+        // repeated across offset windows.
+        const query = withStableOrder(params?.sysparm_query);
+        const pageSize = 1000;
+        const all: Record<string, unknown>[] = [];
+        // X-Total-Count is the pre-trim match count; it rides every page, so
+        // capture it from the first response that carries it (SN-1).
+        let totalCount: number | undefined;
+        for (let offset = 0; ; offset += pageSize) {
+          const res = await requestOk("GET", base, {
+            query: {
+              ...params,
+              sysparm_query: query,
+              sysparm_limit: String(pageSize),
+              sysparm_offset: String(offset),
+            },
+          });
+          if (totalCount === undefined) {
+            totalCount = parseTotalCount(res.headers);
+          }
+          const rows = asRows(unwrapResult(res.body));
+          all.push(...rows);
+          // A short page means the result set is exhausted.
+          if (rows.length < pageSize) break;
+          // A full page at the cap means more rows remain: fail closed rather
+          // than silently drop them (the old behaviour), so the caller learns
+          // to narrow the query instead of trusting a truncated result.
+          if (all.length >= maxRows) {
+            throw new SnTruncationError(
+              `Table API query on "${name}" exceeded the ${maxRows}-row ` +
+                `pagination cap without reaching the end of the result set; ` +
+                `refusing to return a silently truncated result. Narrow ` +
+                `sysparm_query, or page explicitly with sysparm_limit/` +
+                `sysparm_offset.`,
+              maxRows,
+            );
+          }
+        }
+        return toQueryResult(all, totalCount);
+      }
+
       return {
         async get(sysId, params) {
-          const res = await request(
+          const res = await sendRequest(
             "GET",
             `${base}/${encodeURIComponent(sysId)}`,
-            {
-              query: params,
-            },
+            { query: params },
+            true,
           );
           if (res.status === 404) return null;
           if (res.status < 200 || res.status >= 300) {
-            const detail = extractErrorDetail(res.body) ?? `HTTP ${res.status}`;
-            throw new SnHttpError(
-              res.status,
-              `ServiceNow API error (${res.status}): ${detail}`,
-              res.body,
-            );
+            throw httpErrorFor(res);
           }
           const result = unwrapResult(res.body);
           if (result && typeof result === "object" && !Array.isArray(result)) {
@@ -834,30 +1302,10 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           return null;
         },
         async query(params) {
-          // When the caller bounds the result set (`sysparm_limit`), honour it
-          // verbatim — a single page. Otherwise auto-paginate so large tables
-          // are never silently truncated at ServiceNow's default window.
-          if (params?.sysparm_limit) {
-            const res = await requestOk("GET", base, { query: params });
-            return asRows(unwrapResult(res.body));
-          }
-          const pageSize = 1000;
-          const all: Record<string, unknown>[] = [];
-          for (let offset = 0; ; offset += pageSize) {
-            const res = await requestOk("GET", base, {
-              query: {
-                ...params,
-                sysparm_limit: String(pageSize),
-                sysparm_offset: String(offset),
-              },
-            });
-            const rows = asRows(unwrapResult(res.body));
-            all.push(...rows);
-            // A short page means we reached the end. The safety cap bounds a
-            // pathological table so a check can never loop unbounded.
-            if (rows.length < pageSize || all.length >= 100_000) break;
-          }
-          return all;
+          return (await runQuery(params)).rows;
+        },
+        async queryWithMeta(params) {
+          return runQuery(params);
         },
       };
     },

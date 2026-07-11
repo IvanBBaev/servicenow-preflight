@@ -1,7 +1,8 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { isAbsolute, resolve, dirname } from "node:path";
-import { PREFLIGHT_DIR } from "../registry.js";
+import { PREFLIGHT_DIR, validateInstanceName } from "../registry.js";
 
 /**
  * Per-instance **state manifest** — the committed snapshot of what ATF metadata
@@ -89,6 +90,10 @@ export function manifestPath(
   instance: string,
   cwd: string = process.cwd(),
 ): string {
+  // CC-14/CC-16: the instance name becomes a filesystem path segment here, so a
+  // separator, `..`, or surrounding whitespace could escape the state directory
+  // or silently mis-target another instance's manifest. Validate before use.
+  validateInstanceName(instance, "manifestPath");
   return resolve(cwd, PREFLIGHT_DIR, STATE_DIR, `${instance}.state.json`);
 }
 
@@ -142,14 +147,48 @@ export async function loadManifest(
   if (!m || typeof m !== "object" || Array.isArray(m)) {
     throw new Error(`Manifest ${path} is not a JSON object.`);
   }
+  // CC-36: a manifest that declares a *different* instance than the one it is
+  // being loaded as was almost certainly copied or renamed — trusting it would
+  // let one instance's coverage masquerade as another's. Reject the mismatch;
+  // an ABSENT instance field is fine and falls back to the requested name.
+  if (typeof m.instance === "string" && m.instance !== instance) {
+    throw new Error(
+      `Manifest ${path} declares instance "${m.instance}" but was loaded as ` +
+        `"${instance}". The file was likely copied or renamed; re-sync ` +
+        `"${instance}" or load the correct file.`,
+    );
+  }
+  const tests = Array.isArray(m.tests) ? m.tests : [];
+  const suites = Array.isArray(m.suites) ? m.suites : [];
+  // CC-18: every test/suite must carry a non-empty string `id` — it is the
+  // logical key drift compares on and merge reconciles by. A missing/blank id
+  // would silently corrupt both, so fail with the file and element index named.
+  validateElements(tests, "tests", path);
+  validateElements(suites, "suites", path);
   return {
     instance: m.instance ?? instance,
     url: m.url,
     scope: m.scope,
     syncedAt: m.syncedAt,
-    tests: Array.isArray(m.tests) ? m.tests : [],
-    suites: Array.isArray(m.suites) ? m.suites : [],
+    tests,
+    suites,
   };
+}
+
+/** Assert every manifest element carries a non-empty string `id` (CC-18). */
+function validateElements(
+  items: unknown[],
+  kind: "tests" | "suites",
+  path: string,
+): void {
+  items.forEach((item, index) => {
+    const id = (item as { id?: unknown } | null)?.id;
+    if (typeof id !== "string" || id.length === 0) {
+      throw new Error(
+        `Manifest ${path}: ${kind}[${index}] is missing a non-empty string "id".`,
+      );
+    }
+  });
 }
 
 /** Serialize a manifest with a stable field order for clean diffs. */
@@ -209,8 +248,20 @@ export async function writeManifest(
       ? explicitPath
       : resolve(cwd, explicitPath)
     : manifestPath(manifest.instance, cwd);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, serialize(manifest), "utf8");
+  const dir = dirname(path);
+  await mkdir(dir, { recursive: true });
+  // CC-17: write atomically. A committed manifest is a gate input, so a crash or
+  // concurrent read mid-write must never observe a truncated/partial file. Write
+  // to a unique temp sibling in the SAME directory (so `rename` stays on one
+  // filesystem and is atomic), then swap it into place.
+  const tmp = resolve(dir, `.${randomUUID()}.tmp`);
+  try {
+    await writeFile(tmp, serialize(manifest), "utf8");
+    await rename(tmp, path);
+  } catch (err) {
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
   return path;
 }
 
@@ -301,7 +352,12 @@ export function mergeManifest(
     instance: incoming.instance,
     url: incoming.url ?? existing?.url,
     scope: incoming.scope ?? existing?.scope,
-    syncedAt: incoming.syncedAt,
+    // CC-38: preserve the committed `syncedAt` when the incoming snapshot omits
+    // one. A library caller that pulls without `opts.now` produces a snapshot
+    // with no `syncedAt`; taking it verbatim would erase the last-known sync
+    // time and make the manifest read as never-synced (failing the freshness
+    // gate). A fresh sync that DOES set `syncedAt` still wins.
+    syncedAt: incoming.syncedAt ?? existing?.syncedAt,
     tests,
     suites,
   };

@@ -1,70 +1,135 @@
 import type { Check, CheckResult } from "../types.js";
-import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
+import {
+  SnAuthError,
+  SnHttpError,
+  SnNetworkError,
+  type SnClient,
+} from "../http/client.js";
+import { eq } from "../http/query.js";
 
 const NAME = "update-set-state";
 
 /**
- * Update-set states that are safe to ship. ServiceNow marks a finished set as
- * `complete`; everything else (`in progress`, `building`, `loaded`, `previewed`,
- * `ignore`, `saved`, …) is still in flight and should not be deployed.
+ * The only `sys_update_set.state` value that is safe to ship. This is the LOCAL
+ * update-set vocabulary — a local set is `in progress`, `complete`, or `ignore`.
+ * (`loaded`/`previewed`/`committed` belong to `sys_remote_update_set` on the
+ * *retrieved* side; `building`/`saved`/`merged`/`collision` are not real
+ * `sys_update_set` states at all.)
  */
-const SHIPPABLE_STATES = new Set(["complete"]);
+const SHIPPABLE_STATE = "complete";
+
+/** Local states meaning the set is still being worked on. */
+const IN_PROGRESS_STATES = new Set(["in progress", "in_progress"]);
 
 /**
- * States that indicate a set is still being worked on — deploying one of these
- * ships an unfinished, possibly inconsistent set of changes.
+ * `ignore` is a deliberate "do not migrate this set" marker. It is neither
+ * shippable nor merely unfinished — it must be surfaced as its own failure so a
+ * pipeline never silently deploys (or nags someone to "finish") a set the author
+ * explicitly excluded.
  */
-const IN_PROGRESS_STATES = new Set([
-  "in progress",
-  "in_progress",
-  "building",
-  "loaded",
-  "previewed",
-  "saved",
-  "ignore",
-]);
+const IGNORE_STATE = "ignore";
 
-/** Read a string field from a record, trimming and lower-casing for comparison. */
+/**
+ * Read a string-ish value, unwrapping a `{ value }` reference object. Table API
+ * reference columns arrive as `{ link, value }` (or `""` when empty), never a
+ * bare string — so `sys_id`, `state`, `name`, `base_update_set` all funnel
+ * through here.
+ */
+function str(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value && typeof value === "object" && "value" in value) {
+    const inner = (value as { value?: unknown }).value;
+    if (typeof inner === "string") return inner.trim();
+    if (typeof inner === "number") return String(inner);
+  }
+  return "";
+}
+
+/** The set's state, lower-cased for comparison. */
 function readState(row: Record<string, unknown>): string {
-  const raw = row.state;
-  return typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return str(row.state).toLowerCase();
 }
 
-/** Read a human-friendly label for the set (name, else its sys_id). */
+/** A human-friendly label for the set (its name, else its sys_id). */
 function readLabel(row: Record<string, unknown>, fallbackId: string): string {
-  const name = row.name;
-  if (typeof name === "string" && name.trim()) return name.trim();
-  return fallbackId;
+  const name = str(row.name);
+  return name || fallbackId;
 }
 
 /**
- * Detect merge/collision indicators on the set or its change rows. Merged update
- * sets and collision-flagged changes still deploy, but warrant a human look —
- * hence a `warn` rather than a hard `fail`.
+ * A merged child set carries a non-empty `base_update_set` reference (the batch
+ * base it was merged into). Because the Table API returns that column as a
+ * `{ link, value }` object — never a bare string — the merge signal only shows
+ * up once the reference is unwrapped.
  */
-function hasCollisionIndicator(
-  set: Record<string, unknown>,
-  changes: Record<string, unknown>[],
-): boolean {
-  const state = readState(set);
-  if (state === "merged" || state === "collision") return true;
+function isMergedChild(row: Record<string, unknown>): boolean {
+  return str(row.base_update_set) !== "";
+}
 
-  // Some instances expose a base/merge marker on the set itself.
-  const merged = set.merged;
-  if (merged === true || merged === "true") return true;
-  const base = set.base_update_set;
-  if (typeof base === "string" && base.trim()) return true;
+/** One update set in the batch, distilled to what the verdict needs. */
+interface BatchSet {
+  id: string;
+  label: string;
+  state: string;
+  merged: boolean;
+  changeCount: number;
+}
 
-  // A change row flagged as a collision / replace-on-upgrade conflict.
-  return changes.some((row) => {
-    const disposition = row.disposition;
-    if (typeof disposition === "string") {
-      const d = disposition.trim().toLowerCase();
-      if (d === "collision" || d === "skipped") return true;
+/**
+ * Load the update-set batch rooted at `rootId`: the root plus every descendant
+ * linked through `sys_update_set.parent` (London+ batches child sets under a
+ * parent container). Returns the raw rows (root first, breadth-first) or `null`
+ * when the root does not exist. Following the parent links is what stops a
+ * "complete" parent container from masking an `in progress` child.
+ */
+async function loadBatch(
+  http: SnClient,
+  rootId: string,
+): Promise<Record<string, unknown>[] | null> {
+  const root = await http.table("sys_update_set").get(rootId);
+  if (!root) return null;
+
+  const byId = new Map<string, Record<string, unknown>>();
+  const rootKey = str(root.sys_id) || rootId;
+  byId.set(rootKey, root);
+
+  let frontier = [rootKey];
+  while (frontier.length > 0) {
+    const next: string[] = [];
+    for (const parentId of frontier) {
+      const children = await http.table("sys_update_set").query({
+        // `parentId` is user input (the root) or an instance sys_id — validated
+        // through the query builder so neither can inject an encoded-query
+        // operator (SR-1).
+        sysparm_query: eq("parent", parentId),
+        sysparm_fields: "sys_id,name,state,parent,base_update_set",
+      });
+      for (const child of children) {
+        const cid = str(child.sys_id);
+        if (cid && !byId.has(cid)) {
+          byId.set(cid, child);
+          next.push(cid);
+        }
+      }
     }
-    const collision = row.collision;
-    return collision === true || collision === "true";
+    frontier = next;
+  }
+
+  return [...byId.values()];
+}
+
+/** Count the change rows (`sys_update_xml`) belonging to a single set. */
+async function countChanges(http: SnClient, setId: string): Promise<number> {
+  const rows = await http.table("sys_update_xml").query({
+    // `setId` is the user-supplied root or an instance sys_id — validated
+    // through the query builder to keep operators out of the query (SR-1).
+    sysparm_query: eq("update_set", setId),
+    sysparm_fields: "sys_id",
   });
+  return rows.length;
 }
 
 /** Build a `CheckResult` for this check with the frozen name. */
@@ -72,18 +137,31 @@ function result(status: CheckResult["status"], message: string): CheckResult {
   return { name: NAME, status, message };
 }
 
+/** Render a "label (state)" list for the failing/odd sets in a message. */
+function describeStates(sets: BatchSet[]): string {
+  return sets
+    .map((s) => `"${s.label}" (state "${s.state || "unknown"}")`)
+    .join(", ");
+}
+
 /**
- * Verifies the target update set is in a deployable state before shipping.
+ * Verifies the target update set — and the batch it heads — is in a deployable
+ * state before shipping.
  *
- * Given `ctx.updateSetId`, reads the `sys_update_set` record and its
- * `sys_update_xml` change rows, then classifies:
+ * Given `ctx.updateSetId`, reads the `sys_update_set` record, follows
+ * `parent` links to include every child set in the batch, and counts each set's
+ * `sys_update_xml` change rows. Classification uses the LOCAL update-set
+ * vocabulary only (`in progress` / `complete` / `ignore`):
  *
- * - **pass** — the set is `complete` and carries at least one change.
- * - **warn** — no update set was specified, the set is in an unrecognised state,
- *   the instance was transiently unreachable, or the set shows merge/collision
- *   indicators (deployable, but review it).
- * - **fail** — the set does not exist, is still in progress, is `complete` but
- *   empty (nothing to ship), or the read failed for auth/HTTP reasons.
+ * - **pass** — every set in the batch is `complete` and the batch carries at
+ *   least one change (a pure container parent with changed children is not
+ *   "empty").
+ * - **warn** — no update set was specified, some set is in an unrecognised
+ *   state, the instance was transiently unreachable, or a set is a merged/base
+ *   set (deployable, but merges can carry collisions — review it).
+ * - **fail** — the set does not exist; any set is still `in progress`; any set
+ *   is `ignore` (explicitly do-not-migrate); the batch is `complete` but empty;
+ *   or the read failed for auth/HTTP reasons.
  *
  * A check must never throw: transport/API errors are caught and mapped to a
  * result (auth/HTTP → `fail`, network → `warn`).
@@ -96,24 +174,30 @@ export const updateSetState: Check = {
     if (!updateSetId) {
       return result(
         "warn",
-        "No update set specified (pass --update-set or set PreflightContext.updateSetId); skipping update-set state check.",
+        'No update set specified (set SNPF_UPDATE_SET, add "updateSetId" to the config file, or set PreflightContext.updateSetId); skipping the update-set state check.',
       );
     }
 
-    let set: Record<string, unknown> | null;
-    let changes: Record<string, unknown>[];
+    let sets: BatchSet[];
     try {
-      set = await ctx.http.table("sys_update_set").get(updateSetId);
-      if (!set) {
+      const rawSets = await loadBatch(ctx.http, updateSetId);
+      if (!rawSets) {
         return result(
           "fail",
           `Update set "${updateSetId}" was not found on the instance.`,
         );
       }
-      changes = await ctx.http.table("sys_update_xml").query({
-        sysparm_query: `update_set=${updateSetId}`,
-        sysparm_fields: "sys_id,disposition,collision",
-      });
+      sets = [];
+      for (const raw of rawSets) {
+        const id = str(raw.sys_id) || updateSetId;
+        sets.push({
+          id,
+          label: readLabel(raw, id),
+          state: readState(raw),
+          merged: isMergedChild(raw),
+          changeCount: await countChanges(ctx.http, id),
+        });
+      }
     } catch (err) {
       if (err instanceof SnAuthError) {
         return result(
@@ -142,40 +226,96 @@ export const updateSetState: Check = {
       );
     }
 
-    const label = readLabel(set, updateSetId);
-    const state = readState(set);
-    const changeCount = changes.length;
-
-    if (hasCollisionIndicator(set, changes)) {
-      return result(
-        "warn",
-        `Update set "${label}" shows merge/collision indicators (state "${state || "unknown"}", ${changeCount} change(s)); review before deploying.`,
-      );
-    }
-
-    if (IN_PROGRESS_STATES.has(state)) {
+    const root = sets[0];
+    if (!root) {
       return result(
         "fail",
-        `Update set "${label}" is still in progress (state "${state}") — complete it before deploying.`,
+        `Update set "${updateSetId}" could not be read from the instance.`,
       );
     }
+    const isBatch = sets.length > 1;
+    const rootLabel = root.label;
 
-    if (SHIPPABLE_STATES.has(state)) {
-      if (changeCount === 0) {
+    // `ignore` — explicitly do-not-migrate. Its own verdict, never "finish it".
+    const ignored = sets.filter((s) => s.state === IGNORE_STATE);
+    if (ignored.length > 0) {
+      if (!isBatch) {
         return result(
           "fail",
-          `Update set "${label}" is complete but contains 0 changes — nothing to deploy.`,
+          `Update set "${root.label}" is marked "ignore" — explicitly flagged do-not-migrate; it must not be deployed. Remove it from this deployment or change its state.`,
         );
       }
       return result(
-        "pass",
-        `Update set "${label}" is complete and consistent (${changeCount} change(s)).`,
+        "fail",
+        `Update set batch "${rootLabel}" includes ${ignored.length} set(s) marked "ignore" (explicitly do-not-migrate): ${ignored
+          .map((s) => `"${s.label}"`)
+          .join(", ")} — remove them or change their state before deploying.`,
+      );
+    }
+
+    // Any set still in progress fails the batch — naming the offending child so
+    // a "complete" parent container cannot mask an unfinished child set.
+    const inProgress = sets.filter((s) => IN_PROGRESS_STATES.has(s.state));
+    if (inProgress.length > 0) {
+      if (!isBatch) {
+        return result(
+          "fail",
+          `Update set "${root.label}" is still in progress (state "${root.state}") — complete it before deploying.`,
+        );
+      }
+      return result(
+        "fail",
+        `Update set batch "${rootLabel}" has ${inProgress.length} set(s) still in progress: ${describeStates(
+          inProgress,
+        )} — complete them before deploying.`,
+      );
+    }
+
+    // Anything that is not `complete` at this point is an unrecognised state.
+    const unrecognised = sets.filter((s) => s.state !== SHIPPABLE_STATE);
+    if (unrecognised.length > 0) {
+      if (!isBatch) {
+        return result(
+          "warn",
+          `Update set "${root.label}" is in an unrecognised state "${root.state || "unknown"}" (${root.changeCount} change(s)); expected "complete".`,
+        );
+      }
+      return result(
+        "warn",
+        `Update set batch "${rootLabel}" has ${unrecognised.length} set(s) in an unrecognised state: ${describeStates(
+          unrecognised,
+        )}; expected "complete".`,
+      );
+    }
+
+    // Every set is `complete`. Judge the batch as a whole.
+    const totalChanges = sets.reduce((n, s) => n + s.changeCount, 0);
+    if (totalChanges === 0) {
+      return result(
+        "fail",
+        `Update set ${isBatch ? `batch "${rootLabel}"` : `"${rootLabel}"`} is complete but contains 0 changes${
+          isBatch ? " across the batch" : ""
+        } — nothing to deploy.`,
+      );
+    }
+
+    const merged = sets.filter((s) => s.merged);
+    if (merged.length > 0) {
+      return result(
+        "warn",
+        `Update set ${isBatch ? "batch " : ""}"${rootLabel}" includes a merged/base update set (${merged
+          .map((s) => `"${s.label}"`)
+          .join(
+            ", ",
+          )}); merges can carry collisions — review before deploying.`,
       );
     }
 
     return result(
-      "warn",
-      `Update set "${label}" is in an unrecognised state "${state || "unknown"}" (${changeCount} change(s)); expected "complete".`,
+      "pass",
+      `Update set ${isBatch ? `batch "${rootLabel}"` : `"${rootLabel}"`} is complete and consistent (${totalChanges} change(s)${
+        isBatch ? ` across ${sets.length} sets` : ""
+      }).`,
     );
   },
 };

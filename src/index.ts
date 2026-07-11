@@ -27,6 +27,7 @@ export type {
   SnRequestOptions,
   SnClientConfig,
   CicdTestSuiteResult,
+  TableQueryResult,
 } from "./http/client.js";
 export {
   createSnClient,
@@ -34,9 +35,27 @@ export {
   SnAuthError,
   SnNetworkError,
   SnHttpError,
+  SnTruncationError,
+  SnResponseError,
 } from "./http/client.js";
 export { createFakeSnClient } from "./http/fake.js";
 export type { FakeFixtures, ForcedFailure } from "./http/fake.js";
+export {
+  EncodedQueryError,
+  IN_CHUNK_SIZE,
+  isSafeIdentifier,
+  isSysId,
+  assertIdentifier,
+  assertSysId,
+  eq,
+  inClause,
+  and,
+  or,
+  chunk,
+  scopeFilterClause,
+  resolveScope,
+} from "./http/query.js";
+export type { ResolvedScope } from "./http/query.js";
 export {
   loadConfig,
   resolveAuthFromEnv,
@@ -72,7 +91,12 @@ export {
   type AtfCoverage,
   type AtfRunRef,
 } from "./state/manifest.js";
-export { pullManifest, syncManifest, type SyncOptions } from "./state/sync.js";
+export {
+  pullManifest,
+  syncManifest,
+  EmptySnapshotError,
+  type SyncOptions,
+} from "./state/sync.js";
 export {
   computeDrift,
   type DriftReport,
@@ -126,14 +150,18 @@ export async function runPreflight(
   ctx: PreflightContext,
   checks: Check[] = defaultChecks,
 ): Promise<PreflightReport> {
-  const selected = selectChecks(checks, ctx.select);
-
-  // A non-empty check set that narrows to zero (e.g. an `only`/`skip` naming
-  // checks that do not exist) must never report a vacuous pass — that would
-  // exit 0 having verified nothing. Surface it as a failure instead.
-  if (selected.length === 0 && checks.length > 0) {
-    const message =
-      "No checks matched the selection (ctx.select.only/skip); nothing was verified.";
+  // Reject an ambiguous check set: two checks sharing a `name` make selection
+  // (only/skip), result mapping, and reporting ambiguous. Fail closed rather
+  // than run a set we cannot reason about.
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const check of checks) {
+    if (seen.has(check.name)) duplicates.add(check.name);
+    seen.add(check.name);
+  }
+  if (duplicates.size > 0) {
+    const names = [...duplicates].sort().join(", ");
+    const message = `Duplicate check name(s): ${names}. Check names must be unique.`;
     return {
       ok: false,
       results: [{ name: "preflight", status: "fail", message }],
@@ -141,17 +169,62 @@ export async function runPreflight(
     };
   }
 
+  const selected = selectChecks(checks, ctx.select);
+
+  // Nothing to run means nothing was verified. A pre-deployment gate must never
+  // report a vacuous pass (exit 0 having checked nothing), so surface it as a
+  // failure — whether the supplied set was empty or a selection narrowed it to
+  // zero.
+  if (selected.length === 0) {
+    const message =
+      checks.length === 0
+        ? "No checks were supplied to runPreflight; nothing was verified."
+        : "No checks matched the selection (ctx.select.only/skip); nothing was verified.";
+    return {
+      ok: false,
+      results: [{ name: "preflight", status: "fail", message }],
+      summary: { pass: 0, warn: 0, fail: 1 },
+    };
+  }
+
+  // Run each check in isolation: a check that throws or rejects must not abort
+  // the whole run. Convert the throw into a `fail` result and keep going so the
+  // report still renders and every other check still reports.
   const results: CheckResult[] = [];
   for (const check of selected) {
-    results.push(await check.run(ctx));
+    try {
+      results.push(await check.run(ctx));
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      results.push({
+        name: check.name,
+        status: "fail",
+        message: `Check threw an error: ${detail}`,
+      });
+    }
   }
 
+  // Summarise fail-closed: an unrecognised status is untrustworthy for a gate,
+  // so it is counted (and surfaced) as a failure rather than silently producing
+  // a NaN bucket and a vacuous `ok: true`.
+  const validStatuses: readonly CheckStatus[] = ["pass", "warn", "fail"];
   const summary: Record<CheckStatus, number> = { pass: 0, warn: 0, fail: 0 };
-  for (const result of results) {
-    summary[result.status] += 1;
-  }
+  const normalized: CheckResult[] = results.map((result) => {
+    if ((validStatuses as readonly string[]).includes(result.status)) {
+      summary[result.status] += 1;
+      return result;
+    }
+    summary.fail += 1;
+    return {
+      name: result.name,
+      status: "fail",
+      message: `Check "${result.name}" returned an unrecognised status "${String(
+        result.status,
+      )}"; treated as fail. Original message: ${result.message}`,
+    };
+  });
 
-  return { ok: summary.fail === 0, results, summary };
+  return { ok: summary.fail === 0, results: normalized, summary };
 }
 
 // Re-exported for consumers that only need the auth type name.

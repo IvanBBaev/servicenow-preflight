@@ -4,10 +4,14 @@ import { generateKeyPairSync, createVerify } from "node:crypto";
 
 import {
   createSnClient,
+  SnError,
   SnAuthError,
   SnNetworkError,
   SnHttpError,
+  SnResponseError,
+  SnTruncationError,
 } from "../../build/http/client.js";
+import { createFakeSnClient } from "../../build/http/fake.js";
 
 const INSTANCE = "https://dev12345.service-now.com";
 const AUTH = { kind: "basic", user: "admin", pass: "secret" };
@@ -19,10 +23,21 @@ let handler;
 /** Every (url, init) pair the client passed to fetch, in order. */
 let calls;
 
-/** Build a minimal Response-like object the client consumes (status + text()). */
-function fakeResponse({ status = 200, body = undefined, statusText = "" }) {
-  const text = body === undefined ? "" : JSON.stringify(body);
-  return { status, statusText, text: () => Promise.resolve(text) };
+/**
+ * Build a minimal Response-like object the client consumes. `headers` is a plain
+ * record (returned as-is; the transport lower-cases keys). `text`, when given,
+ * overrides the body serialisation so a test can hand back a non-JSON payload.
+ */
+function fakeResponse({
+  status = 200,
+  body = undefined,
+  statusText = "",
+  headers = undefined,
+  text = undefined,
+}) {
+  const payload =
+    text !== undefined ? text : body === undefined ? "" : JSON.stringify(body);
+  return { status, statusText, headers, text: () => Promise.resolve(payload) };
 }
 
 beforeEach(() => {
@@ -111,6 +126,99 @@ test("table().query auto-paginates until a short page ends the run", async () =>
   assert.equal(calls.length, 2);
   assert.match(calls[0].url, /sysparm_offset=0\b/);
   assert.match(calls[1].url, /sysparm_offset=1000\b/);
+});
+
+// --- CC-10: the sysparm_limit / sysparm_offset contract ---------------------
+
+test("table().query treats an empty-string sysparm_limit as absent and auto-paginates", async () => {
+  handler = (url) => {
+    const offset = Number(new URL(url).searchParams.get("sysparm_offset"));
+    const rows =
+      offset === 0
+        ? Array.from({ length: 1000 }, (_, i) => ({ sys_id: `r${i}` }))
+        : [{ sys_id: "last" }];
+    return fakeResponse({ body: { result: rows } });
+  };
+  const rows = await client()
+    .table("sys_user_role")
+    .query({ sysparm_limit: "" });
+  // "" did not pin a single page — the client paged to the natural end.
+  assert.equal(rows.length, 1001);
+  assert.equal(calls.length, 2);
+});
+
+test("table().query rejects a sysparm_offset supplied without a sysparm_limit", async () => {
+  handler = () => fakeResponse({ body: { result: [] } });
+  await assert.rejects(
+    () => client().table("incident").query({ sysparm_offset: "100" }),
+    (err) => {
+      assert.ok(err instanceof SnError);
+      assert.match(err.message, /sysparm_offset/);
+      assert.match(err.message, /sysparm_limit/);
+      return true;
+    },
+  );
+  // Rejected before any request went out — no ambiguous window was fetched.
+  assert.equal(calls.length, 0);
+});
+
+test("table().query honours an explicit sysparm_offset alongside a sysparm_limit", async () => {
+  handler = () => fakeResponse({ body: { result: [{ sys_id: "x" }] } });
+  await client()
+    .table("incident")
+    .query({ sysparm_limit: "10", sysparm_offset: "40" });
+  // A single bounded page that preserves the caller's offset.
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /sysparm_offset=40\b/);
+  assert.match(calls[0].url, /sysparm_limit=10\b/);
+});
+
+// --- CC-33: a stable ORDERBY keyed on sys_id while auto-paginating ----------
+
+test("auto-pagination pins ORDERBYsys_id when the query carries no ordering", async () => {
+  handler = () => fakeResponse({ body: { result: [] } });
+  await client().table("sys_user_role").query({ sysparm_query: "active=true" });
+  const q = new URL(calls[0].url).searchParams.get("sysparm_query");
+  assert.equal(q, "active=true^ORDERBYsys_id");
+});
+
+test("auto-pagination sets ORDERBYsys_id even with no query at all", async () => {
+  handler = () => fakeResponse({ body: { result: [] } });
+  await client().table("sys_user_role").query();
+  const q = new URL(calls[0].url).searchParams.get("sysparm_query");
+  assert.equal(q, "ORDERBYsys_id");
+});
+
+test("auto-pagination preserves a caller's own ORDERBY clause", async () => {
+  handler = () => fakeResponse({ body: { result: [] } });
+  await client()
+    .table("sys_user_role")
+    .query({ sysparm_query: "active=true^ORDERBYDESCsys_created_on" });
+  const q = new URL(calls[0].url).searchParams.get("sysparm_query");
+  assert.equal(q, "active=true^ORDERBYDESCsys_created_on");
+});
+
+// --- CC-9: fail closed at the row cap instead of silently truncating --------
+
+test("auto-pagination throws SnTruncationError at the row cap rather than truncating", async () => {
+  // Every page is full, so the run never reaches a natural (short-page) end.
+  handler = () =>
+    fakeResponse({
+      body: {
+        result: Array.from({ length: 1000 }, (_, i) => ({ sys_id: `r${i}` })),
+      },
+    });
+  await assert.rejects(
+    () => client({ maxRows: 1500 }).table("sys_user_role").query(),
+    (err) => {
+      assert.ok(err instanceof SnTruncationError);
+      assert.equal(err.cap, 1500);
+      assert.match(err.message, /cap/i);
+      return true;
+    },
+  );
+  // Two full pages (2000 rows) crossed the 1500 cap before the throw.
+  assert.equal(calls.length, 2);
 });
 
 test("request() resolves with status and body for any status (no throw)", async () => {
@@ -652,4 +760,479 @@ test("no auth configured sends neither Authorization nor x-sn-apikey", async () 
   await createSnClient({ instanceUrl: INSTANCE }).table("incident").get("z");
   assert.equal(calls[0].init.headers.Authorization, undefined);
   assert.equal(calls[0].init.headers["x-sn-apikey"], undefined);
+});
+
+// --- CC-1: a non-JSON 2xx body fails closed as SnResponseError --------------
+
+test("CC-1: a 200 with a non-JSON body on a query throws SnResponseError", async () => {
+  // A hibernating PDI answers 200 with an HTML wake-up page, not API JSON.
+  handler = () =>
+    fakeResponse({ status: 200, text: "<html>Instance is waking up…</html>" });
+  await assert.rejects(
+    () => client().table("incident").query({ sysparm_limit: "1" }),
+    (err) => {
+      assert.ok(err instanceof SnResponseError);
+      assert.equal(err.status, 200);
+      assert.match(err.message, /hibernat|interstitial/i);
+      return true;
+    },
+  );
+});
+
+test("CC-1: a 200 with a non-JSON body on get() carries a body snippet", async () => {
+  handler = () =>
+    fakeResponse({
+      status: 200,
+      text: "Please wait while the instance wakes.",
+    });
+  await assert.rejects(
+    () => client().table("incident").get("abc"),
+    (err) => {
+      assert.ok(err instanceof SnResponseError);
+      assert.equal(err.status, 200);
+      assert.match(err.bodySnippet, /Please wait/);
+      return true;
+    },
+  );
+});
+
+test("CC-1: a non-JSON body on a non-2xx status stays an SnHttpError", async () => {
+  // Only a *successful* status is the dangerous case; a 502 HTML page must
+  // still surface as the ordinary HTTP error, not SnResponseError.
+  handler = () =>
+    fakeResponse({ status: 502, text: "<html>Bad Gateway</html>" });
+  await assert.rejects(
+    () => client().table("incident").get("abc"),
+    (err) => {
+      assert.ok(err instanceof SnHttpError);
+      assert.ok(!(err instanceof SnResponseError));
+      assert.equal(err.status, 502);
+      return true;
+    },
+  );
+});
+
+// --- CC-7: a body read that rejects mid-stream is a network error -----------
+
+test("CC-7: a response body read that rejects surfaces as SnNetworkError", async () => {
+  handler = () => ({
+    status: 200,
+    statusText: "OK",
+    headers: undefined,
+    text: () => Promise.reject(new Error("ECONNRESET")),
+  });
+  await assert.rejects(
+    () => client().request("GET", "/api/now/table/incident"),
+    (err) => {
+      assert.ok(err instanceof SnNetworkError);
+      return true;
+    },
+  );
+});
+
+test("CC-7: a token-endpoint body read that rejects surfaces as SnNetworkError", async () => {
+  handler = (url) =>
+    isTokenPost(url)
+      ? {
+          status: 200,
+          statusText: "OK",
+          headers: undefined,
+          text: () => Promise.reject(new Error("ECONNRESET")),
+        }
+      : fakeResponse({ body: { result: {} } });
+  await assert.rejects(
+    () =>
+      createSnClient({
+        instanceUrl: INSTANCE,
+        auth: { kind: "oauth-client", clientId: "cid", clientSecret: "csec" },
+      })
+        .table("incident")
+        .get("z"),
+    (err) => {
+      assert.ok(err instanceof SnNetworkError);
+      assert.match(err.message, /token endpoint/i);
+      return true;
+    },
+  );
+});
+
+// --- CC-11: an instanceUrl with a path prefix is rejected -------------------
+
+test("CC-11: an instanceUrl carrying a path prefix is rejected at construction", () => {
+  assert.throws(
+    () =>
+      createSnClient({
+        instanceUrl: "https://proxy.example.com/servicenow",
+        auth: AUTH,
+      }),
+    (err) => {
+      assert.ok(err instanceof SnError);
+      assert.match(err.message, /path/i);
+      assert.match(err.message, /servicenow/);
+      return true;
+    },
+  );
+});
+
+// --- CC-12: RFC 6749 OAuth error bodies are surfaced ------------------------
+
+test("CC-12: an RFC 6749 error body (error + error_description) is surfaced", async () => {
+  handler = (url) =>
+    isTokenPost(url)
+      ? fakeResponse({
+          status: 400,
+          body: {
+            error: "invalid_grant",
+            error_description: "user credentials are invalid",
+          },
+        })
+      : fakeResponse({ body: { result: {} } });
+  await assert.rejects(
+    () =>
+      createSnClient({
+        instanceUrl: INSTANCE,
+        auth: {
+          kind: "oauth-password",
+          clientId: "cid",
+          clientSecret: "csec",
+          user: "u",
+          pass: "p",
+        },
+      })
+        .table("incident")
+        .get("z"),
+    (err) => {
+      assert.ok(err instanceof SnAuthError);
+      assert.match(err.message, /invalid_grant: user credentials are invalid/);
+      return true;
+    },
+  );
+});
+
+test("CC-12: an RFC 6749 error body with only the code surfaces that code", async () => {
+  handler = (url) =>
+    isTokenPost(url)
+      ? fakeResponse({ status: 401, body: { error: "invalid_client" } })
+      : fakeResponse({ body: { result: {} } });
+  await assert.rejects(
+    () =>
+      createSnClient({
+        instanceUrl: INSTANCE,
+        auth: { kind: "oauth-client", clientId: "cid", clientSecret: "bad" },
+      })
+        .table("incident")
+        .get("z"),
+    (err) => {
+      assert.ok(err instanceof SnAuthError);
+      assert.match(err.message, /invalid_client/);
+      return true;
+    },
+  );
+});
+
+// --- CC-13: transient poll failures are tolerated ---------------------------
+
+/** A kickoff handler that hands back a progress link, then defers to `onPoll`. */
+function runningKickoff(onPoll) {
+  return (url, init) => {
+    if (init.method === "POST") {
+      return fakeResponse({
+        body: {
+          result: {
+            status: 1,
+            links: { progress: { id: "p1", url: "/api/sn_cicd/progress/p1" } },
+          },
+        },
+      });
+    }
+    return onPoll(url, init);
+  };
+}
+
+/** A settled-success progress payload, with the results link resolved. */
+function settledOk() {
+  return fakeResponse({
+    body: { result: { status: 2, links: { results: { id: "r" } } } },
+  });
+}
+
+test("CC-13: a transient 5xx on a progress poll is tolerated", async () => {
+  let polls = 0;
+  handler = runningKickoff(() => {
+    polls += 1;
+    return polls === 1
+      ? fakeResponse({ status: 500, body: { error: { message: "blip" } } })
+      : settledOk();
+  });
+  const out = await client().cicd.runTestSuite("suite-1");
+  assert.equal(out.status, "success");
+  assert.equal(polls, 2);
+});
+
+test("CC-13: an early 404 on a progress poll (record lag) is tolerated", async () => {
+  let polls = 0;
+  handler = runningKickoff(() => {
+    polls += 1;
+    return polls === 1
+      ? fakeResponse({ status: 404, body: { error: { message: "not yet" } } })
+      : settledOk();
+  });
+  const out = await client().cicd.runTestSuite("suite-1");
+  assert.equal(out.status, "success");
+  assert.equal(polls, 2);
+});
+
+test("CC-13: persistent poll failures beyond the tolerance give up with the error", async () => {
+  handler = runningKickoff(() =>
+    fakeResponse({ status: 503, body: { error: { message: "down" } } }),
+  );
+  await assert.rejects(
+    () => client().cicd.runTestSuite("suite-1"),
+    (err) => {
+      assert.ok(err instanceof SnHttpError);
+      assert.equal(err.status, 503);
+      return true;
+    },
+  );
+});
+
+// --- CC-31: never follow redirects on an API call ---------------------------
+
+test("CC-31: the client sets redirect: 'error' on every request", async () => {
+  handler = () => fakeResponse({ body: { result: { sys_id: "z" } } });
+  await client().table("incident").get("z");
+  assert.equal(calls[0].init.redirect, "error");
+});
+
+// --- CC-32: the default CI/CD poll budget is 450 ----------------------------
+
+test("CC-32: the default CI/CD poll budget is 450 (≈15 min at 2s)", async () => {
+  // Always still running: the run never settles, so the whole budget is spent.
+  handler = runningKickoff(() =>
+    fakeResponse({
+      body: {
+        result: {
+          status: 1,
+          links: { progress: { id: "p1", url: "/api/sn_cicd/progress/p1" } },
+        },
+      },
+    }),
+  );
+  const out = await client().cicd.runTestSuite("suite-1");
+  assert.equal(out.status, "running");
+  // 1 POST kickoff + 450 progress polls at the default budget.
+  assert.equal(calls.length, 451);
+});
+
+// --- CC-34: coalesce concurrent token acquisition; token-aware invalidate ---
+
+test("CC-34: concurrent first requests share a single token acquisition", async () => {
+  handler = grantHandler("acc-concurrent", { expires_in: 1800 });
+  const c = createSnClient({
+    instanceUrl: INSTANCE,
+    auth: { kind: "oauth-client", clientId: "cid", clientSecret: "csec" },
+  });
+  // Fire three requests in the same tick, before any token is cached.
+  await Promise.all([
+    c.table("incident").get("a"),
+    c.table("incident").get("b"),
+    c.table("incident").get("c"),
+  ]);
+  // Exactly one token POST served all three (coalesced in-flight acquisition).
+  assert.equal(calls.filter((x) => isTokenPost(x.url)).length, 1);
+});
+
+test("CC-34: a concurrent stale-token 401 re-acquires once, not once per caller", async () => {
+  let tokenPosts = 0;
+  let apiHits = 0;
+  handler = (url) => {
+    if (isTokenPost(url)) {
+      tokenPosts += 1;
+      return fakeResponse({ body: { access_token: `tok-${tokenPosts}` } });
+    }
+    apiHits += 1;
+    // The two initial REST hits carry the shared (stale) token → 401; the
+    // retries, after a single coalesced re-acquire, succeed.
+    return apiHits <= 2
+      ? fakeResponse({ status: 401, body: { error: { message: "expired" } } })
+      : fakeResponse({ body: { result: { sys_id: "z" } } });
+  };
+  const c = createSnClient({
+    instanceUrl: INSTANCE,
+    auth: { kind: "oauth-client", clientId: "cid", clientSecret: "csec" },
+  });
+  const [a, b] = await Promise.all([
+    c.table("incident").get("a"),
+    c.table("incident").get("b"),
+  ]);
+  assert.deepEqual(a, { sys_id: "z" });
+  assert.deepEqual(b, { sys_id: "z" });
+  // One initial acquisition + one coalesced re-acquisition = 2 token POSTs
+  // (a token-aware invalidate keeps the second 401 from evicting the fresh
+  // token and stampeding a third acquire).
+  assert.equal(tokenPosts, 2);
+});
+
+// --- SN-1: surface X-Total-Count / security-trimming via queryWithMeta ------
+
+test("SN-1: queryWithMeta surfaces X-Total-Count and flags security-trimming", async () => {
+  handler = () =>
+    fakeResponse({
+      body: { result: [{ sys_id: "1" }, { sys_id: "2" }] },
+      headers: { "X-Total-Count": "50" },
+    });
+  const res = await client()
+    .table("sys_security_acl")
+    .queryWithMeta({ sysparm_limit: "10" });
+  assert.equal(res.rows.length, 2);
+  assert.equal(res.totalCount, 50);
+  assert.equal(res.securityTrimmed, true);
+});
+
+test("SN-1: queryWithMeta reports securityTrimmed false when the count matches", async () => {
+  handler = () =>
+    fakeResponse({
+      body: { result: [{ sys_id: "1" }, { sys_id: "2" }] },
+      headers: { "x-total-count": "2" },
+    });
+  const res = await client()
+    .table("incident")
+    .queryWithMeta({ sysparm_limit: "10" });
+  assert.equal(res.totalCount, 2);
+  assert.equal(res.securityTrimmed, false);
+});
+
+test("SN-1: queryWithMeta leaves totalCount undefined when the header is absent", async () => {
+  handler = () => fakeResponse({ body: { result: [{ sys_id: "1" }] } });
+  const res = await client()
+    .table("incident")
+    .queryWithMeta({ sysparm_limit: "10" });
+  assert.equal(res.totalCount, undefined);
+  assert.equal(res.securityTrimmed, false);
+});
+
+test("SN-1: a malformed X-Total-Count is ignored (totalCount undefined)", async () => {
+  handler = () =>
+    fakeResponse({
+      body: { result: [{ sys_id: "1" }] },
+      headers: { "x-total-count": "not-a-number" },
+    });
+  const res = await client()
+    .table("incident")
+    .queryWithMeta({ sysparm_limit: "10" });
+  assert.equal(res.totalCount, undefined);
+});
+
+test("SN-1: auto-pagination captures X-Total-Count from the first page", async () => {
+  handler = (url) => {
+    const offset = Number(new URL(url).searchParams.get("sysparm_offset"));
+    const rows =
+      offset === 0
+        ? Array.from({ length: 1000 }, (_, i) => ({ sys_id: `r${i}` }))
+        : [{ sys_id: "last" }];
+    // Only the first page carries the (pre-trim) count header.
+    const headers = offset === 0 ? { "x-total-count": "9999" } : undefined;
+    return fakeResponse({ body: { result: rows }, headers });
+  };
+  const res = await client().table("sys_user_role").queryWithMeta();
+  assert.equal(res.rows.length, 1001);
+  assert.equal(res.totalCount, 9999);
+  assert.equal(res.securityTrimmed, true);
+});
+
+test("SN-1: query() still resolves to a bare array (unchanged surface)", async () => {
+  handler = () =>
+    fakeResponse({
+      body: { result: [{ sys_id: "1" }] },
+      headers: { "x-total-count": "9" },
+    });
+  const rows = await client().table("incident").query({ sysparm_limit: "5" });
+  assert.ok(Array.isArray(rows));
+  assert.equal(rows.length, 1);
+});
+
+test("SN-1: the fake's totalCounts drives queryWithMeta's securityTrimmed", async () => {
+  const http = createFakeSnClient({
+    tables: { sys_security_acl: [{ sys_id: "a" }] },
+    totalCounts: { sys_security_acl: 7 },
+  });
+  const res = await http.table("sys_security_acl").queryWithMeta();
+  assert.equal(res.rows.length, 1);
+  assert.equal(res.totalCount, 7);
+  assert.equal(res.securityTrimmed, true);
+});
+
+test("SN-1/CC-1: the fake can force an SnResponseError (hibernating interstitial)", async () => {
+  const http = createFakeSnClient({
+    tables: { incident: [] },
+    fail: { response: true },
+  });
+  // The fake throws synchronously; wrap so assert.rejects validates it.
+  await assert.rejects(
+    async () => http.table("incident").query(),
+    (err) => {
+      assert.ok(err instanceof SnResponseError);
+      return true;
+    },
+  );
+});
+
+// --- SN-6: a capped Retry-After retry on 429 --------------------------------
+
+test("SN-6: a 429 with Retry-After is retried and then succeeds", async () => {
+  let hits = 0;
+  handler = () => {
+    hits += 1;
+    return hits === 1
+      ? fakeResponse({
+          status: 429,
+          headers: { "retry-after": "0" },
+          body: { error: { message: "slow down" } },
+        })
+      : fakeResponse({ body: { result: { sys_id: "z" } } });
+  };
+  const rec = await client().table("incident").get("z");
+  assert.deepEqual(rec, { sys_id: "z" });
+  assert.equal(hits, 2);
+});
+
+test("SN-6: a persistent 429 gives up as SnHttpError after the retry budget", async () => {
+  let hits = 0;
+  handler = () => {
+    hits += 1;
+    return fakeResponse({
+      status: 429,
+      headers: { "retry-after": "0" },
+      body: { error: { message: "throttled" } },
+    });
+  };
+  await assert.rejects(
+    () => client().table("incident").get("z"),
+    (err) => {
+      assert.ok(err instanceof SnHttpError);
+      assert.equal(err.status, 429);
+      assert.match(err.message, /Retry-After retries/);
+      return true;
+    },
+  );
+  // Initial attempt + 3 bounded retries = 4 transport hits.
+  assert.equal(hits, 4);
+});
+
+test("SN-6: a 429 Retry-After given as an HTTP-date is honoured", async () => {
+  let hits = 0;
+  handler = () => {
+    hits += 1;
+    return hits === 1
+      ? fakeResponse({
+          status: 429,
+          // A date in the past → an immediate (0ms-clamped) retry.
+          headers: { "retry-after": new Date(Date.now() - 1000).toUTCString() },
+          body: { error: {} },
+        })
+      : fakeResponse({ body: { result: { sys_id: "z" } } });
+  };
+  const rec = await client().table("incident").get("z");
+  assert.deepEqual(rec, { sys_id: "z" });
+  assert.equal(hits, 2);
 });

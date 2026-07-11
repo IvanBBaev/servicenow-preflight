@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve, isAbsolute } from "node:path";
 import type { CheckSelection, PreflightAuth, SnTls } from "./types.js";
+import { isSafeIdentifier } from "./http/query.js";
 
 /**
  * Configuration loading for the preflight run.
@@ -12,6 +13,20 @@ import type { CheckSelection, PreflightAuth, SnTls } from "./types.js";
  * in the config file — they come from the environment (or a `.env` file) and
  * are read here into a {@link PreflightAuth}. Secrets are never logged.
  */
+
+/**
+ * A user-fixable error: the CLI was invoked incorrectly, or its configuration /
+ * registry / manifest inputs are invalid. The CLI maps it to exit code `2`
+ * (distinct from exit `1`, which signals that a check `fail`ed). Thrown by the
+ * argument parser, the command pre-condition guards, config-file validation,
+ * and registry validation.
+ */
+export class UsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UsageError";
+  }
+}
 
 /** The parsed, file-based portion of the configuration. */
 export interface PreflightConfig {
@@ -54,6 +69,8 @@ const CONFIG_BASENAMES = [
 /** Environment variable names for credentials (never hardcoded). */
 const ENV = {
   instance: "SNPF_INSTANCE",
+  /** Target update set sys_id (mirrors the config file's `updateSetId`). */
+  updateSet: "SNPF_UPDATE_SET",
   /** Explicit auth selector (optional); overrides auto-detection. */
   auth: "SNPF_AUTH",
   user: "SNPF_USER",
@@ -121,7 +138,11 @@ export function namespacedEnv(
   const redirect = (key: string | symbol): string | undefined => {
     if (typeof key !== "string" || !key.startsWith("SNPF_")) return undefined;
     const prefixed = ns + key.slice("SNPF_".length);
-    return Reflect.has(env, prefixed) ? prefixed : undefined;
+    // Redirect only when the namespaced value is actually set to a non-empty
+    // string. An empty `SNPF_<ENV>_TOKEN=""` must fall back to the flat
+    // `SNPF_TOKEN` rather than shadow it with a blank that reads as "unset".
+    const value = env[prefixed];
+    return typeof value === "string" && value.length > 0 ? prefixed : undefined;
   };
   return new Proxy(env, {
     get(target, key) {
@@ -147,9 +168,26 @@ function oauthCommon(env: NodeJS.ProcessEnv): {
 }
 
 /**
+ * Parse the right-hand side of a `.env` assignment. A quoted value keeps its
+ * contents verbatim, including any `#` (so `SNPF_PASS="a#b"` is `a#b`); an
+ * unquoted value has an inline `#` comment (introduced by whitespace) stripped,
+ * so `SNPF_TOKEN=abc # note` yields `abc`. A `#` with no leading whitespace is
+ * part of the value (`SNPF_TOKEN=ab#cd` stays `ab#cd`).
+ */
+function parseDotEnvValue(raw: string): string {
+  const quote = raw[0];
+  if ((quote === '"' || quote === "'") && raw.indexOf(quote, 1) >= 0) {
+    return raw.slice(1, raw.indexOf(quote, 1));
+  }
+  const hash = raw.search(/\s#/);
+  return (hash >= 0 ? raw.slice(0, hash) : raw).trimEnd();
+}
+
+/**
  * Parse a minimal `.env` file into `process.env` (only keys not already set,
- * so real environment variables win). Supports `KEY=value`, `#` comments, and
- * optional surrounding quotes. No dependency — a tiny hand-rolled parser.
+ * so real environment variables win). Supports `KEY=value`, a leading `export `
+ * on the key, whole-line and inline `#` comments, and optional surrounding
+ * quotes. No dependency — a tiny hand-rolled parser.
  */
 async function loadDotEnv(cwd: string): Promise<void> {
   const envPath = resolve(cwd, ".env");
@@ -165,14 +203,14 @@ async function loadDotEnv(cwd: string): Promise<void> {
     if (!line || line.startsWith("#")) continue;
     const eq = line.indexOf("=");
     if (eq <= 0) continue;
-    const key = line.slice(0, eq).trim();
-    let value = line.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
+    // A leading `export ` (the shell convention for a sourceable `.env`) is not
+    // part of the variable name — strip it so `export SNPF_USER=…` sets
+    // `SNPF_USER`, not `export SNPF_USER`.
+    const key = line
+      .slice(0, eq)
+      .trim()
+      .replace(/^export\s+/, "");
+    const value = parseDotEnvValue(line.slice(eq + 1).trim());
     if (process.env[key] === undefined) {
       process.env[key] = value;
     }
@@ -348,17 +386,75 @@ function findConfigFile(
   return undefined;
 }
 
+/** A short human name for a JSON value's type, for error messages. */
+function describeJson(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return typeof value;
+}
+
 /** Read and parse a config file (JSON, or a JS/MJS module's default export). */
 async function readConfigFile(path: string): Promise<PreflightConfig> {
+  let value: unknown;
   if (path.endsWith(".json")) {
     const text = await readFile(path, "utf8");
-    return JSON.parse(text) as PreflightConfig;
+    try {
+      value = JSON.parse(text);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new UsageError(`Config file ${path} is not valid JSON: ${detail}`);
+    }
+  } else {
+    // `.js` / `.mjs` — dynamic import; accept a default or a named `config`.
+    const mod: unknown = await import(pathToFileURL(path).href);
+    const record = (mod ?? {}) as Record<string, unknown>;
+    value = record.default ?? record.config ?? record;
   }
-  // `.js` / `.mjs` — dynamic import; accept a default or a named `config`.
-  const mod: unknown = await import(pathToFileURL(path).href);
-  const record = (mod ?? {}) as Record<string, unknown>;
-  const value = (record.default ?? record.config ?? record) as PreflightConfig;
+  // A config that parses but is not an object (array, number, string, null)
+  // would silently read as "no settings" and later crash on a field access;
+  // reject it with a clear, path-naming error instead.
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new UsageError(
+      `Config file ${path} must contain a JSON object, got ${describeJson(value)}.`,
+    );
+  }
   return value;
+}
+
+/**
+ * Reject config values that would break out of a ServiceNow encoded query.
+ * `scope`, `updateSetId`, and each `options.languages` / `options.baseLanguage`
+ * code are interpolated into `sysparm_query` downstream, so a value carrying an
+ * operator character (`^`, `^OR`, `^NQ`, or the percent-encoded `%5E`) could
+ * inject extra query clauses (SR-1). Each must be a plain ServiceNow identifier
+ * (`[A-Za-z0-9_.-]`). This is the first, load-time line of defence — a
+ * {@link UsageError} (CLI exit 2) — ahead of the query builder's own runtime
+ * guard. Blank/absent values are skipped; a comma-separated languages string is
+ * split and each code validated (matching how the i18n check reads them).
+ */
+function assertSafeQueryInputs(config: PreflightConfig): void {
+  const check = (value: unknown, label: string): void => {
+    if (typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (trimmed === "") return;
+    if (!isSafeIdentifier(trimmed)) {
+      throw new UsageError(
+        `${label} "${value}" contains characters outside [A-Za-z0-9_.-]. It is ` +
+          `interpolated into a ServiceNow encoded query, so operator characters ` +
+          `(e.g. "^", "^OR", "%5E") are rejected to prevent query injection.`,
+      );
+    }
+  };
+  check(config.scope, "Config scope");
+  check(config.updateSetId, "Config updateSetId");
+  const langs = config.options?.languages;
+  const codes = Array.isArray(langs)
+    ? langs
+    : typeof langs === "string"
+      ? langs.split(",")
+      : [];
+  for (const code of codes) check(code, "Config language");
+  check(config.options?.baseLanguage, "Config baseLanguage");
 }
 
 /** Options for {@link loadConfig}. */
@@ -399,6 +495,17 @@ export async function loadConfig(
     const envInstance = env[ENV.instance]?.trim();
     if (envInstance) config.instanceUrl = envInstance;
   }
+
+  // The update set may likewise be supplied via the environment (the config
+  // file's `updateSetId` wins when both are present).
+  if (!config.updateSetId) {
+    const envUpdateSet = env[ENV.updateSet]?.trim();
+    if (envUpdateSet) config.updateSetId = envUpdateSet;
+  }
+
+  // Fail closed at load time on config values that would inject into an encoded
+  // query (SR-1), after env fallbacks so env-supplied values are covered too.
+  assertSafeQueryInputs(config);
 
   const auth = resolveAuthFromEnv(process.env, opts.envPrefix);
   const tls = resolveTlsFromEnv(process.env, opts.envPrefix);

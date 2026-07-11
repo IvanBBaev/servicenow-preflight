@@ -9,6 +9,7 @@ import {
   resolveAuthFromEnv,
   resolveTlsFromEnv,
   namespacedEnv,
+  UsageError,
 } from "../build/config.js";
 
 /** Make a fresh temp dir; caller removes it. */
@@ -505,4 +506,239 @@ test("loadConfig parses a .env file (real env wins over .env)", async () => {
     else process.env.SNPF_PASS = prevPass;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- SNPF_UPDATE_SET wiring (U-1) -----------------------------------------
+
+test("loadConfig reads updateSetId from SNPF_UPDATE_SET when the file omits it", async () => {
+  const dir = tempDir();
+  const prev = process.env.SNPF_UPDATE_SET;
+  process.env.SNPF_UPDATE_SET = "us_env_123";
+  try {
+    const loaded = await loadConfig(dir, { skipDotEnv: true });
+    assert.equal(loaded.config.updateSetId, "us_env_123");
+  } finally {
+    if (prev === undefined) delete process.env.SNPF_UPDATE_SET;
+    else process.env.SNPF_UPDATE_SET = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig lets the config file's updateSetId win over SNPF_UPDATE_SET", async () => {
+  const dir = tempDir();
+  writeFileSync(
+    join(dir, "preflight.config.json"),
+    JSON.stringify({ updateSetId: "us_file" }),
+  );
+  const prev = process.env.SNPF_UPDATE_SET;
+  process.env.SNPF_UPDATE_SET = "us_env";
+  try {
+    const loaded = await loadConfig(dir, { skipDotEnv: true });
+    assert.equal(loaded.config.updateSetId, "us_file");
+  } finally {
+    if (prev === undefined) delete process.env.SNPF_UPDATE_SET;
+    else process.env.SNPF_UPDATE_SET = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- .env parsing: export prefix + inline comments (CC-26 / CC-40) ---------
+
+test("loadConfig strips a leading `export ` from a .env key (CC-26)", async () => {
+  const dir = tempDir();
+  writeFileSync(join(dir, ".env"), "export SNPF_TOKEN=exported-tok\n");
+  const prev = process.env.SNPF_TOKEN;
+  delete process.env.SNPF_TOKEN;
+  try {
+    const loaded = await loadConfig(dir);
+    assert.deepEqual(loaded.auth, { kind: "oauth", token: "exported-tok" });
+  } finally {
+    if (prev === undefined) delete process.env.SNPF_TOKEN;
+    else process.env.SNPF_TOKEN = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig strips an inline `#` comment from an unquoted .env value (CC-40)", async () => {
+  const dir = tempDir();
+  writeFileSync(join(dir, ".env"), "SNPF_TOKEN=abc # trailing note\n");
+  const prev = process.env.SNPF_TOKEN;
+  delete process.env.SNPF_TOKEN;
+  try {
+    const loaded = await loadConfig(dir);
+    assert.deepEqual(loaded.auth, { kind: "oauth", token: "abc" });
+  } finally {
+    if (prev === undefined) delete process.env.SNPF_TOKEN;
+    else process.env.SNPF_TOKEN = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig keeps a `#` with no leading space as part of the value (CC-40)", async () => {
+  const dir = tempDir();
+  writeFileSync(join(dir, ".env"), "SNPF_TOKEN=ab#cd\n");
+  const prev = process.env.SNPF_TOKEN;
+  delete process.env.SNPF_TOKEN;
+  try {
+    const loaded = await loadConfig(dir);
+    assert.deepEqual(loaded.auth, { kind: "oauth", token: "ab#cd" });
+  } finally {
+    if (prev === undefined) delete process.env.SNPF_TOKEN;
+    else process.env.SNPF_TOKEN = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig preserves a `#` inside a quoted .env value (CC-40)", async () => {
+  const dir = tempDir();
+  writeFileSync(
+    join(dir, ".env"),
+    ["SNPF_USER=alice", 'SNPF_PASS="p#ss # word"', ""].join("\n"),
+  );
+  const prevU = process.env.SNPF_USER;
+  const prevP = process.env.SNPF_PASS;
+  delete process.env.SNPF_USER;
+  delete process.env.SNPF_PASS;
+  try {
+    const loaded = await loadConfig(dir);
+    assert.deepEqual(loaded.auth, {
+      kind: "basic",
+      user: "alice",
+      pass: "p#ss # word",
+    });
+  } finally {
+    if (prevU === undefined) delete process.env.SNPF_USER;
+    else process.env.SNPF_USER = prevU;
+    if (prevP === undefined) delete process.env.SNPF_PASS;
+    else process.env.SNPF_PASS = prevP;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- namespaced credential fallback on empty value (CC-25) ----------------
+
+test("namespacedEnv falls back to the flat value when the prefixed one is empty (CC-25)", () => {
+  const src = namespacedEnv(
+    { SNPF_TOKEN: "flat-tok", SNPF_DEV_TOKEN: "" },
+    "dev",
+  );
+  // An empty SNPF_DEV_TOKEN must not shadow the flat SNPF_TOKEN.
+  assert.equal(src.SNPF_TOKEN, "flat-tok");
+});
+
+test("resolveAuthFromEnv uses the flat credential when the prefixed one is empty (CC-25)", () => {
+  const auth = resolveAuthFromEnv(
+    { SNPF_TOKEN: "flat-tok", SNPF_DEV_TOKEN: "" },
+    "dev",
+  );
+  assert.deepEqual(auth, { kind: "oauth", token: "flat-tok" });
+});
+
+// --- config-file validity (CC-39) -----------------------------------------
+
+test("loadConfig rejects a config file that is a JSON array, not an object (CC-39)", async () => {
+  const dir = tempDir();
+  const cfg = join(dir, "preflight.config.json");
+  writeFileSync(cfg, "[1, 2, 3]");
+  try {
+    await assert.rejects(
+      loadConfig(dir, { skipDotEnv: true }),
+      (err) =>
+        err instanceof UsageError &&
+        /must contain a JSON object, got an array/.test(err.message) &&
+        err.message.includes(cfg),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig reports the file path on a JSON parse error (CC-39)", async () => {
+  const dir = tempDir();
+  const cfg = join(dir, "preflight.config.json");
+  writeFileSync(cfg, "{ not valid json ]");
+  try {
+    await assert.rejects(
+      loadConfig(dir, { skipDotEnv: true }),
+      (err) =>
+        err instanceof UsageError &&
+        /is not valid JSON/.test(err.message) &&
+        err.message.includes(cfg),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Encoded-query injection guard at config-load time (SR-1)
+// ---------------------------------------------------------------------------
+
+/** Write a JSON config and run loadConfig against it (dot-env skipped). */
+async function loadWithConfig(config) {
+  const dir = tempDir();
+  try {
+    writeFileSync(join(dir, "preflight.config.json"), JSON.stringify(config));
+    return await loadConfig(dir, { skipDotEnv: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("loadConfig rejects an operator-bearing scope (SR-1)", async () => {
+  // `^OR…` would break out of the encoded query and widen the scope filter.
+  await assert.rejects(
+    loadWithConfig({ scope: "x_acme_app^ORsys_id=abc" }),
+    (err) =>
+      err instanceof UsageError &&
+      /scope/i.test(err.message) &&
+      /injection/i.test(err.message),
+  );
+});
+
+test("loadConfig rejects a bare caret in the scope (SR-1)", async () => {
+  await assert.rejects(
+    loadWithConfig({ scope: "x_acme_app^active=true" }),
+    (err) => err instanceof UsageError,
+  );
+});
+
+test("loadConfig rejects an updateSetId carrying an operator (SR-1)", async () => {
+  await assert.rejects(
+    loadWithConfig({ updateSetId: "abc123^ORsys_id=def" }),
+    (err) => err instanceof UsageError && /updateSetId/i.test(err.message),
+  );
+});
+
+test("loadConfig rejects a percent-encoded caret in a language code (SR-1)", async () => {
+  // `%5E` is `^` percent-encoded — it survives URL transport and re-parses as an
+  // operator on the instance, so the charset guard must reject `%` too.
+  await assert.rejects(
+    loadWithConfig({ options: { languages: ["fr", "de%5Eactive=true"] } }),
+    (err) => err instanceof UsageError && /language/i.test(err.message),
+  );
+});
+
+test("loadConfig rejects an operator in a comma-separated languages string (SR-1)", async () => {
+  await assert.rejects(
+    loadWithConfig({ options: { languages: "fr, de^ORx=1" } }),
+    (err) => err instanceof UsageError && /language/i.test(err.message),
+  );
+});
+
+test("loadConfig rejects an operator-bearing baseLanguage (SR-1)", async () => {
+  await assert.rejects(
+    loadWithConfig({ options: { baseLanguage: "en^ORx=1" } }),
+    (err) => err instanceof UsageError && /baseLanguage/i.test(err.message),
+  );
+});
+
+test("loadConfig accepts a clean scope, updateSetId and languages (SR-1 no false positive)", async () => {
+  const loaded = await loadWithConfig({
+    scope: "x_acme_app",
+    updateSetId: "0123456789abcdef0123456789abcdef",
+    options: { languages: ["fr", "de"], baseLanguage: "en" },
+  });
+  assert.equal(loaded.config.scope, "x_acme_app");
+  assert.equal(loaded.config.updateSetId, "0123456789abcdef0123456789abcdef");
 });

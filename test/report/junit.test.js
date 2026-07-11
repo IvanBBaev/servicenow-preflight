@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { formatJUnit } from "../../build/report/junit.js";
+import { formatJUnit, formatJUnitSuites } from "../../build/report/junit.js";
 
 /** A report with a mix of pass / warn / fail results plus XML-hostile chars. */
 function mixedReport() {
@@ -120,4 +120,57 @@ test("formatJUnit handles an empty report", () => {
   assert.match(xml, /<testsuite[^>]*\bfailures="0"/);
   const opens = xml.match(/<testcase\b/g) ?? [];
   assert.equal(opens.length, 0);
+});
+
+test("formatJUnit derives failures from results, not summary.fail (CC-47)", () => {
+  // A caller hands in a report whose summary is stale (fail: 0) but whose
+  // results actually contain a failure. The failures= attribute and the
+  // <failure> elements must follow the results, never the summary.
+  const xml = formatJUnit({
+    ok: true,
+    results: [
+      { name: "a", status: "pass", message: "ok" },
+      { name: "b", status: "fail", message: "boom" },
+    ],
+    summary: { pass: 2, warn: 0, fail: 0 },
+  });
+  assert.match(xml, /<testsuites[^>]*\bfailures="1"/);
+  assert.match(xml, /<testsuite[^>]*\bfailures="1"/);
+  const failures = xml.match(/<failure\b/g) ?? [];
+  assert.equal(
+    failures.length,
+    1,
+    "exactly one <failure> for the failing result",
+  );
+});
+
+test("formatJUnitSuites emits one document with a testsuite per instance (CC-20)", () => {
+  const devReport = {
+    ok: true,
+    results: [{ name: "a", status: "pass", message: "ok" }],
+    summary: { pass: 1, warn: 0, fail: 0 },
+  };
+  const prodReport = {
+    ok: false,
+    results: [
+      { name: "a", status: "pass", message: "ok" },
+      { name: "b", status: "fail", message: "boom" },
+    ],
+    summary: { pass: 1, warn: 0, fail: 1 },
+  };
+  const xml = formatJUnitSuites([
+    { name: "dev", report: devReport },
+    { name: "prod", report: prodReport },
+  ]);
+  // Exactly one XML prolog and one <testsuites> root — a single valid document.
+  assert.equal((xml.match(/<\?xml/g) ?? []).length, 1);
+  assert.equal((xml.match(/<testsuites\b/g) ?? []).length, 1);
+  // One <testsuite> per instance, named after it, with its own counts.
+  assert.match(xml, /<testsuite name="dev"[^>]*\btests="1"[^>]*\bfailures="0"/);
+  assert.match(
+    xml,
+    /<testsuite name="prod"[^>]*\btests="2"[^>]*\bfailures="1"/,
+  );
+  // Document-level tests/failures are the sums across every suite.
+  assert.match(xml, /<testsuites[^>]*\btests="3"[^>]*\bfailures="1"/);
 });

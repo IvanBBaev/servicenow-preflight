@@ -43,9 +43,26 @@ export interface PreflightContext {
    * `runPreflight` supply a real client; tests supply a fake).
    */
   http: SnClient;
-  /** Target scope (scoped-app sys_id or scope name), when relevant. */
+  /**
+   * Target scope, when relevant. Accepts EITHER a scoped-app `sys_scope` sys_id
+   * (32 lowercase hex) OR a scope name (e.g. `x_acme_app`) — the two are
+   * resolved to one canonical `sys_scope` filter once per run (cached and shared
+   * across checks), so a name and its sys_id behave identically everywhere.
+   *
+   * Because the value is interpolated into a ServiceNow encoded query
+   * (`sysparm_query`), it must be a plain identifier drawn only from
+   * `[A-Za-z0-9_.-]`. Operator characters (`^`, `^OR`, `^NQ`, or the
+   * percent-encoded `%5E`) are rejected — fail-closed — to prevent
+   * encoded-query injection (SR-1). Values from config / the registry are
+   * validated at load time; the query builder re-validates at the edge.
+   */
   scope?: string;
-  /** Target update set sys_id, when relevant. */
+  /**
+   * Target update set sys_id, when relevant. Interpolated into an encoded query
+   * by the `update-set-state` check, so — like {@link scope} — it must be a
+   * plain identifier (`[A-Za-z0-9_.-]`); operator characters are rejected at
+   * config-load time and re-validated by the query builder (SR-1).
+   */
   updateSetId?: string;
   /** Resolved registry instance name (`dev`, `staging`, …), when multi-instance. */
   instance?: string;

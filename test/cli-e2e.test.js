@@ -230,7 +230,8 @@ test("CLI run --all without a registry errors cleanly", () => {
   const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
   try {
     const res = runCli(["run", "--all"], { cwd: dir });
-    assert.equal(res.status, 1);
+    // Missing-registry is a usage error → exit 2 (CC-41).
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /--all needs a registry/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -255,7 +256,7 @@ test("CLI sync without a registry errors cleanly", () => {
   const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
   try {
     const res = runCli(["sync", "dev"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /sync needs a registry/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -268,7 +269,7 @@ test("CLI sync without an instance name errors cleanly", () => {
   });
   try {
     const res = runCli(["sync"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /sync needs an instance name/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -350,9 +351,187 @@ test("CLI drift without two instances prints usage guidance", () => {
   const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
   try {
     const res = runCli(["drift", "staging"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /drift needs two instances/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- Fail-closed CLI behaviour --------------------------------------------
+
+test("CLI fails closed (exit 1) when --only matches no checks (Q-1 vacuous guard)", () => {
+  const res = runCli([
+    "--only",
+    "no-such-check",
+    "--instance",
+    "https://dev12345.service-now.com",
+    "--format",
+    "json",
+  ]);
+  assert.equal(res.status, 1);
+  const report = JSON.parse(res.stdout);
+  assert.equal(report.ok, false);
+  assert.equal(report.summary.fail, 1);
+  assert.equal(report.results[0].name, "preflight");
+  assert.match(report.results[0].message, /nothing was verified/i);
+});
+
+test("CLI rejects an unknown --format value (Q-4, exit 2)", () => {
+  const res = runCli([
+    "--only",
+    "instance-url-configured",
+    "--instance",
+    "https://dev12345.service-now.com",
+    "--format",
+    "xml",
+  ]);
+  // An unknown --format is a usage error → exit 2 (CC-41).
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /Unknown --format/);
+  assert.match(res.stderr, /xml/);
+});
+
+// --- Empty / malformed registry (CC-19) -----------------------------------
+
+test("CLI run --all against an empty registry fails, never 'All 0 passed' (CC-19)", () => {
+  // A registry whose "instances" map is empty must not report a vacuous pass:
+  // a pre-deployment gate that verified nothing has to fail closed (exit 2).
+  const dir = projectWithRegistry({});
+  try {
+    const res = runCli(["run", "--all", "--only", "instance-url-configured"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /matched no instances/);
+    assert.doesNotMatch(res.stdout, /All 0 instance\(s\) passed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI rejects a registry whose instances is a JSON array (CC-19, exit 2)", () => {
+  const dir = projectWithRegistry([
+    { url: "https://dev12345.service-now.com" },
+  ]);
+  try {
+    const res = runCli(["run", "--all"], { cwd: dir });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /has no "instances" map/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- --all aggregate reporters emit ONE valid document (CC-20) -------------
+
+test("CLI run --all --format junit emits a single JUnit document (CC-20)", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com" },
+    prod: { url: "https://prod98765.service-now.com" },
+  });
+  try {
+    const res = runCli(
+      [
+        "run",
+        "--all",
+        "--only",
+        "instance-url-configured",
+        "--format",
+        "junit",
+      ],
+      { cwd: dir },
+    );
+    assert.equal(res.status, 0, res.stderr);
+    // Exactly one prolog and one <testsuites> root — not concatenated documents.
+    assert.equal((res.stdout.match(/<\?xml/g) ?? []).length, 1);
+    assert.equal((res.stdout.match(/<testsuites\b/g) ?? []).length, 1);
+    // One <testsuite> per instance, named after it.
+    assert.match(res.stdout, /<testsuite name="dev"/);
+    assert.match(res.stdout, /<testsuite name="prod"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run --all --format sarif emits a single SARIF log with a run per instance (CC-20)", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com" },
+    prod: { url: "https://prod98765.service-now.com" },
+  });
+  try {
+    const res = runCli(
+      [
+        "run",
+        "--all",
+        "--only",
+        "instance-url-configured",
+        "--format",
+        "sarif",
+      ],
+      { cwd: dir },
+    );
+    assert.equal(res.status, 0, res.stderr);
+    // The whole output parses as one JSON SARIF log (not concatenated docs).
+    const log = JSON.parse(res.stdout);
+    assert.equal(log.version, "2.1.0");
+    assert.equal(log.runs.length, 2);
+    const ids = log.runs.map((r) => r.automationDetails.id).sort();
+    assert.deepEqual(ids, ["dev", "prod"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Argument-parser hardening (CC-22 / CC-23 / CC-24) ---------------------
+
+test("CLI rejects an unknown option (CC-23, exit 2)", () => {
+  const res = runCli(["--bogus"]);
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /Unknown option "--bogus"/);
+});
+
+test("CLI rejects a value-flag with no value at the end of argv (CC-24, exit 2)", () => {
+  const res = runCli(["--instance"]);
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /--instance requires a value/);
+});
+
+test("CLI rejects a value-flag that would swallow the next option (CC-24, exit 2)", () => {
+  // `--only` must not eat `--format` as its value and drop `json` on the floor.
+  const res = runCli(["--only", "--format", "json"]);
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /--only requires a value/);
+});
+
+test("CLI rejects an empty --only value (CC-22, exit 2)", () => {
+  const res = runCli(["--only", ""]);
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /at least one check name/);
+});
+
+test("CLI rejects an empty --skip= inline value (CC-22, exit 2)", () => {
+  const res = runCli(["--skip="]);
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /at least one check name/);
+});
+
+// --- Split exit codes: usage (2) vs check failure (1) (CC-41) --------------
+
+test("CLI splits exit codes: a check failure is 1, a usage error is 2 (CC-41)", () => {
+  // A check that runs and fails → exit 1.
+  const failed = runCli([
+    "--only",
+    "instance-url-configured",
+    "--format",
+    "json",
+  ]);
+  assert.equal(failed.status, 1);
+  const report = JSON.parse(failed.stdout);
+  assert.equal(report.ok, false);
+
+  // A malformed invocation never runs a check → exit 2.
+  const misused = runCli(["--nope"]);
+  assert.equal(misused.status, 2);
+  assert.match(misused.stderr, /Unknown option "--nope"/);
 });

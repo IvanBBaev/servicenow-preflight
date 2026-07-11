@@ -1,18 +1,25 @@
 import { runPreflight } from "./index.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, UsageError } from "./config.js";
 import { createSnClient } from "./http/client.js";
-import { formatJUnit } from "./report/junit.js";
+import { formatJUnit, formatJUnitSuites } from "./report/junit.js";
 import { formatSarif } from "./report/sarif.js";
 import {
   loadRegistry,
   resolveInstance,
   instanceNames,
+  validateInstanceName,
   type InstanceRegistry,
 } from "./registry.js";
 import { loadManifest, writeManifest } from "./state/manifest.js";
 import { syncManifest } from "./state/sync.js";
+import {
+  DEFAULT_STALE_WARN_MS,
+  stalenessResults,
+  type DriftManifestRef,
+} from "./state/drift.js";
 import { testDrift } from "./checks/index.js";
 import type {
+  CheckResult,
   CheckStatus,
   PreflightContext,
   PreflightReport,
@@ -41,9 +48,13 @@ interface ParsedArgs {
   all: boolean;
   /** `sync`: also pull each test's most recent result. */
   withLastRun: boolean;
+  /** `sync`: permit committing an all-empty snapshot over a non-empty manifest. */
+  allowEmpty: boolean;
   only?: string[];
   skip?: string[];
   format: OutputFormat;
+  /** `drift`: max manifest age before the compare hard-fails (milliseconds). */
+  maxAgeMs?: number;
   help: boolean;
 }
 
@@ -60,7 +71,39 @@ function parseFormat(value: string | undefined): OutputFormat {
   if (value && (FORMATS as readonly string[]).includes(value)) {
     return value as OutputFormat;
   }
-  return "pretty";
+  // Fail closed on an unknown/missing --format value rather than silently
+  // falling back to pretty: a caller that asked for `junit` in CI and got
+  // pretty (because of a typo) would ship on a report no gate could parse.
+  throw new UsageError(
+    `Unknown --format "${value ?? ""}". Valid formats: ${FORMATS.join(", ")}.`,
+  );
+}
+
+const DURATION_UNIT_MS: Record<string, number> = {
+  s: 1000,
+  m: 60_000,
+  h: 3_600_000,
+  d: 86_400_000,
+  w: 604_800_000,
+};
+
+/**
+ * Parse a `--max-age` duration: an integer or decimal followed by a single
+ * unit — `s` (seconds), `m` (minutes), `h` (hours), `d` (days) or `w` (weeks),
+ * e.g. `30d`, `24h`, `1.5h`. Returns milliseconds. Throws {@link UsageError} on
+ * a malformed value (so it maps to exit 2).
+ */
+function parseDuration(value: string): number {
+  const match = /^(\d+(?:\.\d+)?)(s|m|h|d|w)$/.exec(value.trim());
+  const amount = match?.[1];
+  const unit = match?.[2];
+  const unitMs = unit ? DURATION_UNIT_MS[unit] : undefined;
+  if (amount === undefined || unitMs === undefined) {
+    throw new UsageError(
+      `Invalid --max-age "${value}". Use <number><unit> with unit s, m, h, d or w (e.g. 7d, 24h).`,
+    );
+  }
+  return Number.parseFloat(amount) * unitMs;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -69,6 +112,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     positionals: [],
     all: false,
     withLastRun: false,
+    allowEmpty: false,
     format: "pretty",
     help: false,
   };
@@ -82,7 +126,34 @@ function parseArgs(argv: string[]): ParsedArgs {
     start = 1;
   }
 
-  for (let i = start; i < argv.length; i++) {
+  let i = start;
+  // Read the value for a space-separated value-flag. It must be followed by a
+  // real value — not the end of argv (CC-24: `--instance` with nothing after),
+  // and not another option (a leading `-`, or the `--` terminator). Without
+  // this, `--only --format json` would silently swallow `--format` as the
+  // only-list and drop `json` into positionals.
+  const takeValue = (flag: string): string => {
+    const next = argv[i + 1];
+    if (next === undefined || next === "--" || next.startsWith("-")) {
+      throw new UsageError(`Option ${flag} requires a value.`);
+    }
+    i += 1;
+    return next;
+  };
+  // A --only / --skip list must resolve to at least one check name. An empty or
+  // whitespace-only value must error (CC-22), never silently widen `--only` to
+  // the full suite or make `--skip` a no-op.
+  const selection = (flag: string, value: string): string[] => {
+    const items = splitCsv(value);
+    if (items.length === 0) {
+      throw new UsageError(
+        `Option ${flag} needs at least one check name (got an empty list).`,
+      );
+    }
+    return items;
+  };
+
+  for (; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
       case "-h":
@@ -98,28 +169,34 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--with-last-run":
         args.withLastRun = true;
         break;
+      case "--allow-empty":
+        args.allowEmpty = true;
+        break;
       case "-i":
       case "--instance":
-        args.instanceUrl = argv[++i];
+        args.instanceUrl = takeValue(arg);
         break;
       case "-e":
       case "--env":
-        args.env = argv[++i];
+        args.env = takeValue(arg);
         break;
       case "--config":
-        args.configPath = argv[++i];
+        args.configPath = takeValue(arg);
         break;
       case "--registry":
-        args.registryPath = argv[++i];
+        args.registryPath = takeValue(arg);
         break;
       case "--only":
-        args.only = splitCsv(argv[++i]);
+        args.only = selection("--only", takeValue(arg));
         break;
       case "--skip":
-        args.skip = splitCsv(argv[++i]);
+        args.skip = selection("--skip", takeValue(arg));
         break;
       case "--format":
-        args.format = parseFormat(argv[++i]);
+        args.format = parseFormat(takeValue(arg));
+        break;
+      case "--max-age":
+        args.maxAgeMs = parseDuration(takeValue(arg));
         break;
       default:
         if (arg?.startsWith("--instance=")) {
@@ -131,12 +208,18 @@ function parseArgs(argv: string[]): ParsedArgs {
         } else if (arg?.startsWith("--registry=")) {
           args.registryPath = arg.slice("--registry=".length);
         } else if (arg?.startsWith("--only=")) {
-          args.only = splitCsv(arg.slice("--only=".length));
+          args.only = selection("--only", arg.slice("--only=".length));
         } else if (arg?.startsWith("--skip=")) {
-          args.skip = splitCsv(arg.slice("--skip=".length));
+          args.skip = selection("--skip", arg.slice("--skip=".length));
         } else if (arg?.startsWith("--format=")) {
           args.format = parseFormat(arg.slice("--format=".length));
-        } else if (arg && !arg.startsWith("-")) {
+        } else if (arg?.startsWith("--max-age=")) {
+          args.maxAgeMs = parseDuration(arg.slice("--max-age=".length));
+        } else if (arg !== undefined && arg.startsWith("-")) {
+          // CC-23: an unrecognised option is a hard usage error, not a silently
+          // dropped token that could narrow or widen the run unexpectedly.
+          throw new UsageError(`Unknown option "${arg}".`);
+        } else if (arg !== undefined) {
           args.positionals.push(arg);
         }
         break;
@@ -158,6 +241,9 @@ Multi-instance (registry at .preflight/instances.json):
       --all              run: every instance in the registry
       --registry <path>  Registry file (default .preflight/instances.json)
       --with-last-run    sync: also pull each test's most recent result
+      --allow-empty      sync: commit an empty snapshot over a non-empty manifest
+                         (refused by default as likely ACL security-trimming;
+                         cannot override a proven security-trimmed pull)
 
 Options:
   -i, --instance <url>   Target instance URL (single-instance, no registry)
@@ -166,7 +252,18 @@ Options:
       --skip <csv>       Skip these checks (comma-separated names)
       --format <fmt>     Output: pretty (default), json, junit, sarif
       --json             Shorthand for --format json
+      --max-age <dur>    drift: fail if a compared manifest is older than <dur>.
+                         Duration is <number><unit>, unit s|m|h|d|w (e.g. 7d,
+                         24h). Without it, a manifest older than 30d only warns.
   -h, --help             Show this help
+
+Exit codes:
+  0  no check failed
+  1  a check failed (including a selection that matched zero checks, and a
+     drift/promote or manifest-age gate that blocked)
+  2  a usage or configuration error (unknown option, missing flag value,
+     bad --format / --max-age, a required registry absent, an invalid config
+     or registry file)
 
 Authentication (via environment / .env — never the config file, never logged):
   Per instance, prefix any SNPF_* var with the instance name, e.g.
@@ -223,6 +320,54 @@ interface NamedReport {
   report: PreflightReport;
 }
 
+/** Append extra results to a report, recomputing its summary and `ok`. */
+function mergeResults(
+  report: PreflightReport,
+  extra: CheckResult[],
+): PreflightReport {
+  const results = [...report.results, ...extra];
+  const summary = { pass: 0, warn: 0, fail: 0 };
+  for (const r of results) {
+    if (r.status === "warn") summary.warn += 1;
+    else if (r.status === "fail") summary.fail += 1;
+    else summary.pass += 1;
+  }
+  return { ok: summary.fail === 0, results, summary };
+}
+
+/** A parsed SARIF log — enough shape to merge runs across instances. */
+interface SarifLog {
+  version: string;
+  $schema?: string;
+  runs: Record<string, unknown>[];
+}
+
+/**
+ * Merge per-instance SARIF logs into ONE valid SARIF document: one `run` per
+ * instance (each tagged via `automationDetails.id` so a consumer can tell them
+ * apart), under a single top-level log. Replaces the previous behaviour of
+ * concatenating whole documents, which produced unparseable output.
+ */
+function renderSarifAll(reports: NamedReport[]): string {
+  const runs: Record<string, unknown>[] = [];
+  let version = "2.1.0";
+  let schema: string | undefined;
+  for (const r of reports) {
+    const log = JSON.parse(formatSarif(r.report)) as SarifLog;
+    version = log.version;
+    schema = log.$schema;
+    for (const run of log.runs) {
+      runs.push({ ...run, automationDetails: { id: r.name } });
+    }
+  }
+  const merged: SarifLog = {
+    version,
+    ...(schema ? { $schema: schema } : {}),
+    runs,
+  };
+  return `${JSON.stringify(merged, null, 2)}\n`;
+}
+
 /** Render an aggregate `--all` result across instances. */
 function renderAll(reports: NamedReport[], format: OutputFormat): string {
   const ok = reports.every((r) => r.report.ok);
@@ -241,8 +386,12 @@ function renderAll(reports: NamedReport[], format: OutputFormat): string {
       : `Failed on: ${failed.join(", ")}`;
     return `${blocks.join("\n\n")}\n\n${rollup}\n`;
   }
-  // junit / sarif — one document per instance, concatenated.
-  return reports.map((r) => render(r.report, format)).join("");
+  if (format === "junit") {
+    // One JUnit document: a <testsuite> per instance inside one <testsuites>.
+    return formatJUnitSuites(reports);
+  }
+  // sarif — one SARIF log, one run per instance (see renderSarifAll).
+  return renderSarifAll(reports);
 }
 
 /** A single instance to run checks against. */
@@ -261,11 +410,19 @@ function resolveRunTargets(
 ): RunTarget[] {
   if (args.all) {
     if (!registry) {
-      throw new Error(
+      throw new UsageError(
         "--all needs a registry; create .preflight/instances.json or drop --all.",
       );
     }
-    return instanceNames(registry).map((name) => {
+    const names = instanceNames(registry);
+    if (names.length === 0) {
+      // An empty registry means `--all` verified nothing; a pre-deployment gate
+      // must never report a vacuous "All 0 instance(s) passed."
+      throw new UsageError(
+        '--all matched no instances: the registry\'s "instances" map is empty. Add an instance or drop --all.',
+      );
+    }
+    return names.map((name) => {
       const inst = resolveInstance(registry, name);
       return {
         name,
@@ -279,7 +436,7 @@ function resolveRunTargets(
   const env = args.env ?? args.positionals[0];
   if (env) {
     if (!registry) {
-      throw new Error(
+      throw new UsageError(
         `No registry found; cannot resolve instance "${env}". Create .preflight/instances.json or use --instance <url>.`,
       );
     }
@@ -376,13 +533,13 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
 async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
   const env = args.env ?? args.positionals[0];
   if (!env) {
-    throw new Error(
+    throw new UsageError(
       "sync needs an instance name: servicenow-preflight sync <env>.",
     );
   }
   const registry = await loadRegistry(cwd, args.registryPath);
   if (!registry) {
-    throw new Error(
+    throw new UsageError(
       "sync needs a registry; create .preflight/instances.json first.",
     );
   }
@@ -403,6 +560,7 @@ async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
   const merged = await syncManifest(http, env, inst.url, existing, {
     scope: inst.scope,
     withLastRun: args.withLastRun,
+    allowEmpty: args.allowEmpty,
     now,
   });
   const path = await writeManifest(merged, cwd);
@@ -415,8 +573,19 @@ async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
 async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
   const [src, dst] = args.positionals;
   if (!src || !dst) {
-    throw new Error(
+    throw new UsageError(
       "drift needs two instances: servicenow-preflight drift <source> <target>.",
+    );
+  }
+  // CC-14: the positionals become manifest paths — validate them (reject
+  // separators/`..`/whitespace) rather than let a crafted name walk the tree.
+  validateInstanceName(src, "drift <source>");
+  validateInstanceName(dst, "drift <target>");
+  // CC-35: comparing an instance to itself is a no-op that always reports a
+  // clean promote — almost certainly a typo. Reject it up front.
+  if (src === dst) {
+    throw new UsageError(
+      `drift needs two different instances; got "${src}" for both source and target.`,
     );
   }
   const source = await loadManifest(src, cwd);
@@ -442,8 +611,22 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
     driftTarget: target,
   };
   const report = await runPreflight(ctx, [testDrift]);
-  process.stdout.write(render(report, args.format));
-  process.exitCode = report.ok ? 0 : 1;
+
+  // Fold in a manifest-freshness check: a manifest older than the warn
+  // threshold (30d) surfaces a warning; with --max-age, one older than that
+  // hard-fails the compare (a stale promote gate is worse than none).
+  const refs: DriftManifestRef[] = [
+    { role: "source", manifest: source },
+    { role: "target", manifest: target },
+  ];
+  const stale = stalenessResults(refs, {
+    warnAfterMs: DEFAULT_STALE_WARN_MS,
+    maxAgeMs: args.maxAgeMs,
+  });
+  const finalReport = stale.length > 0 ? mergeResults(report, stale) : report;
+
+  process.stdout.write(render(finalReport, args.format));
+  process.exitCode = finalReport.ok ? 0 : 1;
 }
 
 async function main(): Promise<void> {
@@ -471,5 +654,8 @@ void main().catch((err: unknown) => {
   // echo internal paths. A typed SnError's message is already user-facing and
   // secret-free (credentials never appear in it).
   console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  // Split exit codes (CC-41): a usage/config error (wrong invocation, invalid
+  // config or registry) is a distinct failure mode from a check that ran and
+  // failed. Exit 2 for the former, 1 for a check failure or a runtime error.
+  process.exit(err instanceof UsageError ? 2 : 1);
 });

@@ -41,15 +41,43 @@ test("connectivity-auth passes when the authenticated ping succeeds", async () =
   assert.equal(result.status, "pass");
 });
 
-test("connectivity-auth passes even when sys_user returns no rows", async () => {
-  // A successful (non-throwing) query still proves reachable + authenticated.
-  const http = createFakeSnClient({ tables: { sys_user: [] } });
+test("connectivity-auth passes against a realistically shaped sys_user row", async () => {
+  // A non-throwing query that returns a real, well-shaped API row (reference and
+  // empty columns in ServiceNow's { link, value } / "" forms) proves reachable +
+  // authenticated. This replaces the old "empty rows still pass" assertion: an
+  // empty result is exactly what a hibernating wake-up page would fake, so pass is
+  // now pinned to a genuine row and hibernation is modelled as an explicit throw
+  // (see the non-JSON 2xx case below).
+  const http = createFakeSnClient({
+    tables: {
+      sys_user: [{ sys_id: "u1", user_name: "admin", email: "" }],
+    },
+  });
   const result = await connectivityAuth.run({
     instanceUrl: INSTANCE,
     auth: AUTH,
     http,
   });
   assert.equal(result.status, "pass");
+});
+
+test("connectivity-auth fails on a non-JSON 2xx (hibernating) response (CC-1)", async () => {
+  // The client throws SnResponseError when a 2xx carries a non-JSON body — a
+  // hibernating PDI's wake-up page or an SSO/proxy interstitial answering 200
+  // with HTML. A green here would claim "authenticated" against an instance the
+  // client never actually reached, so it must fail closed.
+  const http = createFakeSnClient({
+    tables: { sys_user: [] },
+    fail: { response: true },
+  });
+  const result = await connectivityAuth.run({
+    instanceUrl: INSTANCE,
+    auth: AUTH,
+    http,
+  });
+  assert.equal(result.name, "connectivity-auth");
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /hibernat|non-JSON|interstitial/i);
 });
 
 test("connectivity-auth fails on a 401 authentication error", async () => {

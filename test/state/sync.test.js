@@ -3,11 +3,16 @@ import assert from "node:assert/strict";
 
 import { createFakeSnClient } from "../../build/http/fake.js";
 import {
+  createSnClient,
   SnAuthError,
   SnNetworkError,
   SnHttpError,
 } from "../../build/http/client.js";
-import { pullManifest, syncManifest } from "../../build/state/sync.js";
+import {
+  pullManifest,
+  syncManifest,
+  EmptySnapshotError,
+} from "../../build/state/sync.js";
 
 /**
  * A fake instance seeded with a small ATF footprint in scope `x_acme_app`:
@@ -46,10 +51,13 @@ function seedRows() {
       { sys_id: "s2", name: "Global Suite", "sys_scope.scope": "global" },
     ],
     sys_atf_test_suite_test: [
-      { test_suite: "s1", test: "t1" },
-      { test_suite: "s1", test: "t2" },
-      // References a test outside the pulled scope — must be skipped in membership.
-      { test_suite: "s1", test: "t3" },
+      { test_suite: "s1", test: "t1", "sys_scope.scope": "x_acme_app" },
+      { test_suite: "s1", test: "t2", "sys_scope.scope": "x_acme_app" },
+      // References a test outside the pulled scope — must be skipped in
+      // membership. The link itself is in-scope (the app owns the membership
+      // record), so it survives the scoped link query; t3 drops only because it
+      // is not in the pulled test index.
+      { test_suite: "s1", test: "t3", "sys_scope.scope": "x_acme_app" },
     ],
     sys_atf_test_result: [
       {
@@ -102,9 +110,12 @@ function seededClient() {
 }
 
 /**
- * Wrap an {@link SnClient} so every `table(name).query(params)` is recorded.
- * Lets a test assert *which* tables were read (e.g. that `sys_atf_test_result`
- * is only touched when `withLastRun` is on).
+ * Wrap an {@link SnClient} so every `table(name).query(params)` and
+ * `table(name).queryWithMeta(params)` is recorded. Lets a test assert *which*
+ * tables were read (e.g. that `sys_atf_test_result` is only touched when
+ * `withLastRun` is on) and *with what params* (e.g. the sysparm_fields pinned
+ * for CC-15). The test/suite reads now go through `queryWithMeta`, so it must be
+ * wrapped too or those reads would bypass tracking (and throw).
  */
 function tracked(client) {
   const calls = [];
@@ -117,6 +128,10 @@ function tracked(client) {
         query: (params) => {
           calls.push({ table: name, params });
           return t.query(params);
+        },
+        queryWithMeta: (params) => {
+          calls.push({ table: name, params });
+          return t.queryWithMeta(params);
         },
       };
     },
@@ -293,25 +308,72 @@ test("pullManifest stamps syncedAt from the injected `now`, and omits it otherwi
   assert.equal(withoutNow.syncedAt, undefined);
 });
 
-test("pullManifest passes a caller-supplied limit through as sysparm_limit", async () => {
+test("pullManifest sends no explicit sysparm_limit on the ATF table reads (DM-7)", async () => {
   const { client, calls } = tracked(seededClient());
   await pullManifest(client, "dev", undefined, {
     scope: "x_acme_app",
-    limit: 25,
+    withLastRun: true,
   });
   for (const c of calls) {
-    // The result table pins limit=1; every other read uses the caller's limit.
-    if (c.table !== "sys_atf_test_result") {
-      assert.equal(c.params.sysparm_limit, "25");
+    if (c.table === "sys_atf_test_result") {
+      // The newest-run lookup is a legitimate single-row bound — it stays.
+      assert.equal(c.params.sysparm_limit, "1");
+    } else {
+      // Every other read omits sysparm_limit so SnClient auto-paginates; an
+      // explicit cap silently truncated instances with > 1000 rows (DM-7).
+      assert.equal(c.params.sysparm_limit, undefined);
     }
   }
 });
 
-test("pullManifest defaults sysparm_limit to 1000 when no limit is given", async () => {
+test("pullManifest scopes the suite-membership link read like its siblings (DM-7)", async () => {
   const { client, calls } = tracked(seededClient());
   await pullManifest(client, "dev", undefined, { scope: "x_acme_app" });
-  const testRead = calls.find((c) => c.table === "sys_atf_test");
-  assert.equal(testRead.params.sysparm_limit, "1000");
+  const linkRead = calls.find((c) => c.table === "sys_atf_test_suite_test");
+  // Previously the link table was read unscoped (and capped); it is now scoped
+  // to the same app scope as the test/suite reads.
+  assert.equal(linkRead.params.sysparm_query, "sys_scope.scope=x_acme_app");
+  assert.equal(linkRead.params.sysparm_limit, undefined);
+});
+
+test("pullManifest pulls every test across pagination pages — no 1000-row cap (DM-7)", async () => {
+  const TOTAL = 2500;
+  const realFetch = globalThis.fetch;
+  // A real SnClient over a fetch stub that serves `sys_atf_test` in windows and
+  // returns an empty set for the suite/link tables. Proves sync no longer caps
+  // the pull at a single 1000-row page.
+  globalThis.fetch = (url) => {
+    const u = new URL(String(url));
+    const table = decodeURIComponent(u.pathname.split("/").pop());
+    const offset = Number(u.searchParams.get("sysparm_offset") ?? "0");
+    const limit = Number(u.searchParams.get("sysparm_limit") ?? "0");
+    const result = [];
+    if (table === "sys_atf_test") {
+      const end = Math.min(offset + limit, TOTAL);
+      for (let i = offset; i < end; i++) {
+        result.push({ sys_id: `t${i}`, name: `Test ${i}`, active: "true" });
+      }
+    }
+    return Promise.resolve({
+      status: 200,
+      statusText: "OK",
+      text: () => Promise.resolve(JSON.stringify({ result })),
+    });
+  };
+  try {
+    const client = createSnClient({
+      instanceUrl: "https://dev12345.service-now.com",
+      auth: { kind: "basic", user: "u", pass: "p" },
+    });
+    const m = await pullManifest(client, "dev", undefined, {
+      scope: "x_acme_app",
+    });
+    assert.equal(m.tests.length, TOTAL);
+    // A row well beyond the first page is present (the old cap dropped these).
+    assert.ok(m.tests.some((t) => t.sysId === "t2499"));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test("pullManifest with no scope filter pulls everything; ids derive from each row's own scope", async () => {
@@ -468,6 +530,112 @@ test("pullManifest normalises assorted raw run statuses", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// CC-15 — the scope prefix of a logical id must be the scope NAME, pinned by
+// requesting `sys_scope.scope` on the reads (a real instance returns a 32-hex
+// sys_id for `sys_scope` otherwise → per-instance prefix → 100% false drift).
+// ---------------------------------------------------------------------------
+
+test("pullManifest pins the scope name by requesting sys_scope.scope on the test AND suite reads (CC-15)", async () => {
+  const { client, calls } = tracked(seededClient());
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+
+  // The test read must ask for the dot-walked scope-name field. Without it the
+  // Table API returns `sys_scope` as a per-instance 32-hex sys_id.
+  const testRead = calls.find((c) => c.table === "sys_atf_test");
+  assert.ok(
+    testRead.params.sysparm_fields.split(",").includes("sys_scope.scope"),
+    "test read must request sys_scope.scope",
+  );
+  // The suite read must pin the same field so its id prefix matches the tests'.
+  const suiteRead = calls.find((c) => c.table === "sys_atf_test_suite");
+  assert.ok(
+    suiteRead.params.sysparm_fields.split(",").includes("sys_scope.scope"),
+    "suite read must request sys_scope.scope",
+  );
+
+  // The resulting logical id is prefixed by the scope NAME, not a sys_id: every
+  // id begins with "x_acme_app/" (a 32-hex prefix would be per-instance).
+  const login = m.tests.find((t) => t.name === "Login Works");
+  assert.ok(
+    login.id.startsWith("x_acme_app/"),
+    `expected scope-name prefix, got "${login.id}"`,
+  );
+  assert.equal(login.id, "x_acme_app/login-works");
+  assert.ok(m.suites[0].id.startsWith("x_acme_app/"));
+});
+
+// ---------------------------------------------------------------------------
+// CC-4 — two same-scope artifacts whose names slug to the same logical id must
+// be rejected at sync time (they would corrupt idRemap / suite membership).
+// ---------------------------------------------------------------------------
+
+test("pullManifest rejects two same-scope tests that slug to the same logical id (CC-4)", async () => {
+  // "Login!" and "Login?" both slugify to "login" → id "x_acme_app/login". The
+  // second would silently shadow the first in the manifest (one row where the
+  // instance has two). Sync must fail loudly, naming both tests and the id.
+  const client = createFakeSnClient({
+    tables: {
+      sys_atf_test: [
+        {
+          sys_id: "t1",
+          name: "Login!",
+          active: "true",
+          "sys_scope.scope": "x_acme_app",
+        },
+        {
+          sys_id: "t2",
+          name: "Login?",
+          active: "true",
+          "sys_scope.scope": "x_acme_app",
+        },
+      ],
+      sys_atf_test_suite: [],
+      sys_atf_test_suite_test: [],
+    },
+    queryFilter: scopeAwareFilter,
+  });
+  await assert.rejects(
+    () => pullManifest(client, "dev", undefined, { scope: "x_acme_app" }),
+    (err) => {
+      assert.match(err.message, /Logical id collision/);
+      assert.match(err.message, /Login!/);
+      assert.match(err.message, /Login\?/);
+      assert.match(err.message, /x_acme_app\/login/);
+      return true;
+    },
+  );
+});
+
+test("syncManifest rejects two same-scope suites that slug to the same logical id (CC-4)", async () => {
+  // The same collision on the suite side must also fail loudly.
+  const client = createFakeSnClient({
+    tables: {
+      sys_atf_test: [],
+      sys_atf_test_suite: [
+        { sys_id: "s1", name: "Smoke Suite", "sys_scope.scope": "x_acme_app" },
+        { sys_id: "s2", name: "smoke suite", "sys_scope.scope": "x_acme_app" },
+      ],
+      sys_atf_test_suite_test: [],
+    },
+    queryFilter: scopeAwareFilter,
+  });
+  await assert.rejects(
+    () =>
+      syncManifest(client, "dev", undefined, undefined, {
+        scope: "x_acme_app",
+      }),
+    (err) => {
+      assert.match(err.message, /Logical id collision/);
+      assert.match(err.message, /suites/);
+      assert.match(err.message, /x_acme_app\/smoke-suite/);
+      return true;
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // syncManifest — pull + merge against the committed manifest.
 // ---------------------------------------------------------------------------
 
@@ -553,7 +721,11 @@ test("syncManifest keeps the logical id stable when the instance reports a NEW s
     "sys_scope.scope": "x_acme_app",
   };
   // Suite membership link now points at the new test sys_id too.
-  reCreated.sys_atf_test_suite_test[0] = { test_suite: "s1", test: "t1-prod" };
+  reCreated.sys_atf_test_suite_test[0] = {
+    test_suite: "s1",
+    test: "t1-prod",
+    "sys_scope.scope": "x_acme_app",
+  };
   const prodClient = createFakeSnClient({
     tables: reCreated,
     queryFilter: scopeAwareFilter,
@@ -611,12 +783,114 @@ test("syncManifest on an empty instance drops committed tests (set follows the i
       sys_atf_test_suite_test: [],
     },
   });
+  // An all-empty snapshot over a non-empty committed manifest is refused by the
+  // SN-1 guard unless the caller opts in — here the emptiness is intentional, so
+  // pass allowEmpty (and there is no security-trimming to force a hard refusal).
   const merged = await syncManifest(emptyClient, "dev", undefined, committed, {
     scope: "x_acme_app",
+    allowEmpty: true,
   });
   // The merged set reflects the instance, which is now empty.
   assert.deepEqual(merged.tests, []);
   assert.deepEqual(merged.suites, []);
+});
+
+// ---------------------------------------------------------------------------
+// SN-1 — an all-empty snapshot must not silently overwrite a non-empty
+// committed manifest. Soft refusal (overridable) by default; a HARD refusal
+// (not overridable) once the instance PROVES it is security-trimming rows.
+// ---------------------------------------------------------------------------
+
+/** A committed manifest with real coverage, used as the SN-1 overwrite target. */
+function committedWithCoverage() {
+  return {
+    instance: "prod",
+    tests: [
+      { id: "x_acme_app/login-works", sysId: "t1", name: "Login Works" },
+      { id: "x_acme_app/logout-works", sysId: "t2", name: "Logout Works" },
+    ],
+    suites: [
+      { id: "x_acme_app/smoke", sysId: "s1", name: "Smoke", testIds: [] },
+    ],
+  };
+}
+
+test("syncManifest refuses an all-empty snapshot over a non-empty committed manifest without --allow-empty (SN-1)", async () => {
+  // The account sees zero rows and the instance does NOT report a higher total
+  // count (no proof of trimming). Committing would erase two committed tests, so
+  // the default is a soft refusal the caller can override once they have checked.
+  const emptyClient = createFakeSnClient({
+    tables: {
+      sys_atf_test: [],
+      sys_atf_test_suite: [],
+      sys_atf_test_suite_test: [],
+    },
+  });
+  await assert.rejects(
+    () =>
+      syncManifest(emptyClient, "prod", undefined, committedWithCoverage(), {
+        scope: "x_acme_app",
+      }),
+    (err) => {
+      assert.ok(err instanceof EmptySnapshotError);
+      // A soft refusal: the emptiness is unproven, so --allow-empty overrides it.
+      assert.equal(err.securityTrimmed, false);
+      assert.match(err.message, /ACL security-trimming/);
+      assert.match(err.message, /--allow-empty/);
+      return true;
+    },
+  );
+});
+
+test("syncManifest commits an intentional empty snapshot when --allow-empty is set (SN-1)", async () => {
+  // Same empty pull, but the caller has confirmed the emptiness is real and opts
+  // in. With no proof of trimming the soft refusal is overridable → the merged
+  // manifest reflects the (now empty) instance.
+  const emptyClient = createFakeSnClient({
+    tables: {
+      sys_atf_test: [],
+      sys_atf_test_suite: [],
+      sys_atf_test_suite_test: [],
+    },
+  });
+  const merged = await syncManifest(
+    emptyClient,
+    "prod",
+    undefined,
+    committedWithCoverage(),
+    { scope: "x_acme_app", allowEmpty: true },
+  );
+  assert.deepEqual(merged.tests, []);
+  assert.deepEqual(merged.suites, []);
+});
+
+test("syncManifest hard-refuses a security-trimmed empty snapshot even WITH --allow-empty (SN-1/P5)", async () => {
+  // The instance reports X-Total-Count = 5 on sys_atf_test but returns 0 visible
+  // rows — proof that ACL security-trimming is hiding tests from this account.
+  // They are not gone, so committing the empty snapshot would erase real
+  // coverage. This refusal is HARD: --allow-empty must not override it.
+  const trimmedClient = createFakeSnClient({
+    tables: {
+      sys_atf_test: [],
+      sys_atf_test_suite: [],
+      sys_atf_test_suite_test: [],
+    },
+    totalCounts: { sys_atf_test: 5 },
+  });
+  await assert.rejects(
+    () =>
+      syncManifest(trimmedClient, "prod", undefined, committedWithCoverage(), {
+        scope: "x_acme_app",
+        allowEmpty: true, // deliberately set — must NOT override a proven trim
+      }),
+    (err) => {
+      assert.ok(err instanceof EmptySnapshotError);
+      assert.equal(err.securityTrimmed, true);
+      assert.match(err.message, /X-Total-Count exceeds the visible rows/);
+      assert.match(err.message, /NOT overridable with --allow-empty/);
+      return true;
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

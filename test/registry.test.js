@@ -12,6 +12,7 @@ import {
   instanceNames,
   resolveInstance,
 } from "../build/registry.js";
+import { UsageError } from "../build/config.js";
 
 /** Make a fresh temp dir; caller removes it. */
 function tempDir() {
@@ -227,6 +228,28 @@ test('loadRegistry throws when the "instances" map is absent', async () => {
   }
 });
 
+test('loadRegistry throws when "instances" is a JSON array, not a map (CC-19)', async () => {
+  const dir = tempDir();
+  try {
+    // An array would surface numeric keys as "instance names" and make `--all`
+    // iterate a shape it cannot resolve — reject it up front.
+    writeRegistry(dir, { version: 1, instances: [{ url: "https://x" }] });
+    await assert.rejects(loadRegistry(dir), /has no "instances" map/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry validation errors are UsageError (routed to exit 2)", async () => {
+  const dir = tempDir();
+  try {
+    writeRegistry(dir, "[1, 2, 3]");
+    await assert.rejects(loadRegistry(dir), (err) => err instanceof UsageError);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("loadRegistry throws when an instance is missing its url", async () => {
   const dir = tempDir();
   try {
@@ -235,6 +258,93 @@ test("loadRegistry throws when an instance is missing its url", async () => {
       instances: { dev: { stage: "dev" } },
     });
     await assert.rejects(loadRegistry(dir), /instance "dev" is missing a url/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry rejects an unsupported version (CC-37)", async () => {
+  const dir = tempDir();
+  try {
+    // A newer schema this build cannot safely interpret must be refused, not
+    // mis-read. (An ABSENT version still defaults to 1 — see the test above.)
+    writeRegistry(dir, {
+      version: 2,
+      instances: { dev: { url: "https://dev.service-now.com" } },
+    });
+    await assert.rejects(loadRegistry(dir), (err) => {
+      assert.ok(err instanceof UsageError);
+      assert.match(err.message, /unsupported version 2/);
+      assert.match(err.message, /only version 1 is supported/);
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry rejects duplicate registry keys (CC-37)", async () => {
+  const dir = tempDir();
+  try {
+    // JSON.parse silently keeps the LAST of duplicate keys, so this raw text
+    // would load as one "dev" and silently drop the other instance. A structural
+    // re-scan of the raw text must catch and reject it.
+    writeRegistry(
+      dir,
+      `{
+        "version": 1,
+        "instances": {
+          "dev": { "url": "https://dev-a.service-now.com" },
+          "dev": { "url": "https://dev-b.service-now.com" }
+        }
+      }`,
+    );
+    await assert.rejects(loadRegistry(dir), (err) => {
+      assert.ok(err instanceof UsageError);
+      assert.match(err.message, /duplicate key "dev"/);
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry rejects an instance name containing a path separator (CC-14)", async () => {
+  const dir = tempDir();
+  try {
+    // The name becomes the `<name>.state.json` manifest path segment; a
+    // separator would escape the state directory.
+    writeRegistry(dir, {
+      version: 1,
+      instances: { "a/b": { url: "https://x.service-now.com" } },
+    });
+    await assert.rejects(loadRegistry(dir), (err) => {
+      assert.ok(err instanceof UsageError);
+      assert.match(err.message, /path separators or ".."/);
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry rejects two instance names that differ only in case (CC-16)", async () => {
+  const dir = tempDir();
+  try {
+    // On a case-insensitive filesystem (APFS/HFS+) "Dev" and "dev" would map to
+    // the same manifest file and clobber each other.
+    writeRegistry(dir, {
+      version: 1,
+      instances: {
+        Dev: { url: "https://dev-a.service-now.com" },
+        dev: { url: "https://dev-b.service-now.com" },
+      },
+    });
+    await assert.rejects(loadRegistry(dir), (err) => {
+      assert.ok(err instanceof UsageError);
+      assert.match(err.message, /differ only in\s+case/);
+      return true;
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -371,4 +481,67 @@ test("resolveInstance reports (none) as the known list for an empty registry", (
     () => resolveInstance(reg, "dev"),
     /Unknown instance "dev"\. Known instances: \(none\)\./,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Encoded-query injection guard on registry scopes (SR-1)
+// ---------------------------------------------------------------------------
+
+test("loadRegistry rejects an operator-bearing registry-level scope (SR-1)", async () => {
+  const dir = tempDir();
+  try {
+    writeRegistry(dir, {
+      version: 1,
+      scope: "x_acme_app^ORsys_id=abc",
+      instances: { dev: { url: "https://dev.service-now.com" } },
+    });
+    await assert.rejects(
+      loadRegistry(dir),
+      (err) =>
+        err instanceof UsageError &&
+        /scope/i.test(err.message) &&
+        /injection/i.test(err.message),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry rejects an operator-bearing per-instance scope (SR-1)", async () => {
+  const dir = tempDir();
+  try {
+    writeRegistry(dir, {
+      version: 1,
+      instances: {
+        dev: {
+          url: "https://dev.service-now.com",
+          scope: "x_dev_app^active=true",
+        },
+      },
+    });
+    await assert.rejects(
+      loadRegistry(dir),
+      (err) => err instanceof UsageError && /instance "dev"/.test(err.message),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry accepts clean registry and per-instance scopes (SR-1 no false positive)", async () => {
+  const dir = tempDir();
+  try {
+    writeRegistry(dir, {
+      version: 1,
+      scope: "x_acme_app",
+      instances: {
+        dev: { url: "https://dev.service-now.com", scope: "x_dev_app" },
+      },
+    });
+    const reg = await loadRegistry(dir);
+    assert.equal(reg.scope, "x_acme_app");
+    assert.equal(reg.instances.dev.scope, "x_dev_app");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -114,3 +114,88 @@ test("mTLS handshake failure surfaces as SnNetworkError", async () => {
     await once(server, "close");
   }
 });
+
+test("CC-8: a socket dropped mid-body surfaces as SnNetworkError (no crash)", async () => {
+  const server = await startMutualTlsServer((req, res) => {
+    // Announce a body, flush the headers plus a partial chunk, then kill the
+    // socket. Without a `res.on('error')` listener the client would throw the
+    // stream error as an unhandled 'error' event and crash the process.
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Length": "1000",
+    });
+    res.write('{"result":');
+    setTimeout(() => req.socket.destroy(), 10);
+  });
+  try {
+    const port = server.address().port;
+    const http = createSnClient({
+      instanceUrl: `https://localhost:${port}`,
+      tls: { cert: clientCrt, key: clientKey, ca: serverCrt },
+    });
+    await assert.rejects(
+      () => http.table("incident").get("x"),
+      (err) => {
+        assert.ok(err instanceof SnNetworkError);
+        return true;
+      },
+    );
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("SN-1: mTLS queryWithMeta surfaces the X-Total-Count header", async () => {
+  const server = await startMutualTlsServer((req, res) => {
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "X-Total-Count": "42",
+    });
+    res.end(JSON.stringify({ result: [{ sys_id: "a" }] }));
+  });
+  try {
+    const port = server.address().port;
+    const http = createSnClient({
+      instanceUrl: `https://localhost:${port}`,
+      tls: { cert: clientCrt, key: clientKey, ca: serverCrt },
+    });
+    const res = await http
+      .table("sys_security_acl")
+      .queryWithMeta({ sysparm_limit: "10" });
+    assert.equal(res.rows.length, 1);
+    assert.equal(res.totalCount, 42);
+    // 42 pre-trim matches but only 1 visible row → security-trimmed.
+    assert.equal(res.securityTrimmed, true);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("CC-31: mTLS refuses to follow a redirect (SnNetworkError)", async () => {
+  const server = await startMutualTlsServer((req, res) => {
+    // A 3xx that, if followed, would re-send the Bearer off-instance.
+    res.writeHead(302, { Location: "https://evil.example.com/" });
+    res.end();
+  });
+  try {
+    const port = server.address().port;
+    const http = createSnClient({
+      instanceUrl: `https://localhost:${port}`,
+      auth: { kind: "oauth", token: "tok-secret" },
+      tls: { cert: clientCrt, key: clientKey, ca: serverCrt },
+    });
+    await assert.rejects(
+      () => http.table("incident").get("x"),
+      (err) => {
+        assert.ok(err instanceof SnNetworkError);
+        assert.match(err.message, /redirect/i);
+        return true;
+      },
+    );
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});

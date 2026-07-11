@@ -4,7 +4,9 @@ import {
   SnHttpError,
   SnNetworkError,
   type SnClient,
+  type TableQueryResult,
 } from "../http/client.js";
+import { chunk, inClause, resolveScope } from "../http/query.js";
 
 const NAME = "acl-role-sanity";
 
@@ -40,32 +42,58 @@ function isTruthy(row: Record<string, unknown>, field: string): boolean {
 const MUTATING_OPERATIONS = new Set(["write", "create", "delete"]);
 
 /**
- * Query every `sys_security_acl` row for the given scope. The scope filter uses
- * `sys_scope` (the app sys_id / scope name); ServiceNow accepts either via an
- * OR-encoded query so both a sys_id and a scope name resolve.
+ * Query every `sys_security_acl` row for the given scope. `scopeClause` is the
+ * single-term filter the shared scope resolver produced (`sys_scope=<sysId>`
+ * when the scope resolved, else the fail-closed name/sys_id fallback) — never a
+ * value concatenated raw from config, so no encoded-query operator can be
+ * smuggled in (SR-1).
+ *
+ * Uses `queryWithMeta` so the caller can tell genuine "no ACLs shipped" apart
+ * from ACL security-trimming: `sys_security_acl` is admin-read out-of-box, so a
+ * CI account lacking that grant sees 0 rows while `X-Total-Count` still reports
+ * matches (`securityTrimmed`). A zero-row read must never be taken as proof the
+ * app is safe.
  */
 async function fetchAcls(
   http: SnClient,
-  scope: string,
-): Promise<Record<string, unknown>[]> {
-  return http.table("sys_security_acl").query({
-    sysparm_query: `sys_scope=${scope}^ORsys_scope.scope=${scope}`,
+  scopeClause: string,
+): Promise<TableQueryResult> {
+  // No `sysparm_limit`: the client auto-paginates so an app shipping more ACLs
+  // than a single page are all inspected (a cap would leave wide-open ACLs
+  // beyond the window unchecked). See src/http/client.ts query().
+  return http.table("sys_security_acl").queryWithMeta({
+    sysparm_query: scopeClause,
     sysparm_fields:
       "sys_id,name,operation,type,active,admin_overrides,script,condition",
-    sysparm_limit: "1000",
   });
 }
 
-/** Query the ACL→role links for a single ACL (`sys_security_acl_role` m2m). */
-async function fetchAclRoles(
+/**
+ * Batch-fetch the ACL→role links (`sys_security_acl_role` m2m) for every ACL in
+ * one go, grouped by ACL sys_id. Replaces the per-ACL N+1 read (SN-6): the ids
+ * are packed into `sys_security_aclIN…` clauses of at most `IN_CHUNK_SIZE`, so N
+ * ACLs cost `⌈N / IN_CHUNK_SIZE⌉` queries instead of N. Every id is charset-
+ * validated by {@link inClause}, so the batched query cannot be injected into.
+ */
+async function fetchAclRolesByAcl(
   http: SnClient,
-  aclSysId: string,
-): Promise<Record<string, unknown>[]> {
-  return http.table("sys_security_acl_role").query({
-    sysparm_query: `sys_security_acl=${aclSysId}`,
-    sysparm_fields: "sys_user_role,sys_user_role.name",
-    sysparm_limit: "1000",
-  });
+  aclSysIds: readonly string[],
+): Promise<Map<string, Record<string, unknown>[]>> {
+  const byAcl = new Map<string, Record<string, unknown>[]>();
+  for (const id of aclSysIds) byAcl.set(id, []);
+  for (const ids of chunk(aclSysIds)) {
+    // No `sysparm_limit`: the client auto-paginates so an ACL gated by more
+    // roles than a single page is never seen as ungated through truncation.
+    const rows = await http.table("sys_security_acl_role").query({
+      sysparm_query: inClause("sys_security_acl", ids),
+      sysparm_fields: "sys_security_acl,sys_user_role,sys_user_role.name",
+    });
+    for (const row of rows) {
+      const list = byAcl.get(str(row, "sys_security_acl"));
+      if (list) list.push(row);
+    }
+  }
+  return byAcl;
 }
 
 /** All roles that exist on the instance, indexed by both sys_id and name. */
@@ -119,15 +147,38 @@ export const aclRoleSanity: Check = {
     }
 
     try {
-      const acls = await fetchAcls(ctx.http, scope);
+      const resolvedScope = await resolveScope(ctx, scope);
+      const {
+        rows: acls,
+        securityTrimmed,
+        totalCount,
+      } = await fetchAcls(ctx.http, resolvedScope.clause);
       if (acls.length === 0) {
+        // A zero-row read is not proof of safety. If the pre-trim count shows
+        // ACLs exist but none are visible, the CI account is security-trimmed
+        // (sys_security_acl is admin-read out-of-box) — fail, because this gate
+        // cannot see what it must inspect. Otherwise it is a plain zero-row
+        // read (none shipped, or no read access at all) — warn, not pass.
+        if (securityTrimmed) {
+          return result(
+            "fail",
+            `Cannot inspect ACLs in scope "${scope}": ${
+              totalCount ?? "some"
+            } ACL(s) match but 0 are visible — the account is security-trimmed (sys_security_acl is admin-read out-of-box). Grant the CI account read access; a zero-row read here is not proof of safety.`,
+          );
+        }
         return result(
-          "pass",
-          `No ACLs shipped in scope "${scope}" — nothing to sanity-check.`,
+          "warn",
+          `No ACLs visible in scope "${scope}" — either the app ships none, or the account cannot read sys_security_acl (admin-read out-of-box). Cannot confirm ACL safety.`,
         );
       }
 
       const knownRoles = await fetchExistingRoles(ctx.http);
+
+      // One batched read of every ACL's role links (SN-6), instead of an N+1
+      // per-ACL query. Grouped by ACL sys_id so the loop is a map lookup.
+      const aclSysIds = acls.map((acl) => str(acl, "sys_id")).filter(Boolean);
+      const linksByAcl = await fetchAclRolesByAcl(ctx.http, aclSysIds);
 
       const openMutating: string[] = [];
       const openRead: string[] = [];
@@ -144,7 +195,7 @@ export const aclRoleSanity: Check = {
           inactive.push(`${aclName} (${operation || "?"})`);
         }
 
-        const roleLinks = await fetchAclRoles(ctx.http, str(acl, "sys_id"));
+        const roleLinks = linksByAcl.get(str(acl, "sys_id")) ?? [];
         const hasRole = roleLinks.length > 0;
 
         // A referenced role that does not exist is a broken/dangling grant.

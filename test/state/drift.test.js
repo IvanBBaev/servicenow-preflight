@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { computeDrift } from "../../build/state/drift.js";
+import {
+  computeDrift,
+  stalenessResults,
+  FRESHNESS_CHECK,
+  DEFAULT_STALE_WARN_MS,
+} from "../../build/state/drift.js";
 
 /**
  * Build a `StateManifest` fixture. `tests` is a list of `[id, name, active?]`
@@ -137,6 +142,30 @@ test("an inactive source test present on the target is neither missing nor extra
   assert.deepEqual(drift.extraOnTarget, []);
 });
 
+test("an active source test whose only target copy is inactive is MISSING (CC-3)", () => {
+  // The target still carries a row for x/b, but it is deactivated there. A
+  // deactivated test does not run, so for drift purposes it is *absent*: the
+  // active source coverage x/b has no live counterpart downstream and must
+  // block the promote. (Against the old code, which indexed target.tests
+  // unfiltered, x/b would match the dead row and drift would wrongly pass.)
+  const source = manifest("staging", [
+    ["x/a", "A"],
+    ["x/b", "B"],
+  ]);
+  const target = manifest("prod", [
+    ["x/a", "A"],
+    ["x/b", "B", false],
+  ]);
+  const drift = computeDrift(source, target);
+
+  assert.equal(drift.ok, false);
+  assert.deepEqual(drift.missingOnTarget, [{ id: "x/b", name: "B" }]);
+  assert.deepEqual(drift.extraOnTarget, []);
+  assert.equal(drift.sourceActiveCount, 2);
+  // targetCount reflects only the ACTIVE target tests now (x/a); x/b is dead.
+  assert.equal(drift.targetCount, 1);
+});
+
 test("drift buckets are sorted by logical id", () => {
   const source = manifest("staging", [
     ["x/z", "Z"],
@@ -189,4 +218,100 @@ test("simultaneous missing and extra drift are reported in their own buckets", (
   assert.deepEqual(drift.extraOnTarget, [
     { id: "x/only-target", name: "OnlyTarget" },
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// stalenessResults — manifest freshness (drift --max-age gate)
+// ---------------------------------------------------------------------------
+
+/** A fixed reference "now" so age assertions are deterministic. */
+const NOW = Date.parse("2026-07-10T00:00:00.000Z");
+const DAY_MS = 86_400_000;
+
+/** Build a manifest tagged with a `syncedAt` (`undefined` omits the field). */
+function synced(instance, syncedAt) {
+  return {
+    instance,
+    tests: [],
+    suites: [],
+    ...(syncedAt === undefined ? {} : { syncedAt }),
+  };
+}
+
+/** An ISO timestamp `days` before {@link NOW}. */
+function daysAgo(days) {
+  return new Date(NOW - days * DAY_MS).toISOString();
+}
+
+test("DEFAULT_STALE_WARN_MS is 30 days", () => {
+  assert.equal(DEFAULT_STALE_WARN_MS, 30 * DAY_MS);
+});
+
+test("stalenessResults returns nothing when every manifest is fresh", () => {
+  const refs = [
+    { role: "source", manifest: synced("staging", daysAgo(1)) },
+    { role: "target", manifest: synced("prod", daysAgo(2)) },
+  ];
+  assert.deepEqual(stalenessResults(refs, { now: NOW }), []);
+});
+
+test("stalenessResults warns when a manifest is older than the warn threshold", () => {
+  const refs = [{ role: "source", manifest: synced("staging", daysAgo(40)) }];
+  const results = stalenessResults(refs, { now: NOW });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].name, FRESHNESS_CHECK);
+  assert.equal(results[0].status, "warn");
+  assert.match(results[0].message, /source "staging"/);
+  assert.match(results[0].message, /older than/);
+});
+
+test("stalenessResults fails a manifest older than --max-age", () => {
+  const refs = [{ role: "source", manifest: synced("staging", daysAgo(10)) }];
+  const results = stalenessResults(refs, {
+    now: NOW,
+    warnAfterMs: DEFAULT_STALE_WARN_MS,
+    maxAgeMs: 7 * DAY_MS,
+  });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].name, FRESHNESS_CHECK);
+  assert.equal(results[0].status, "fail");
+  assert.match(results[0].message, /--max-age/);
+  assert.match(results[0].message, /exceeding/);
+});
+
+test("stalenessResults ignores a missing syncedAt when no --max-age is set", () => {
+  const refs = [{ role: "source", manifest: synced("staging", undefined) }];
+  // Without a hard age gate an unknown freshness is not surfaced at all.
+  assert.deepEqual(stalenessResults(refs, { now: NOW }), []);
+});
+
+test("stalenessResults fails closed on a missing syncedAt under --max-age", () => {
+  const refs = [{ role: "source", manifest: synced("staging", undefined) }];
+  const results = stalenessResults(refs, { now: NOW, maxAgeMs: 7 * DAY_MS });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, "fail");
+  assert.match(results[0].message, /no recorded syncedAt/);
+});
+
+test("stalenessResults fails closed on an unparseable syncedAt under --max-age", () => {
+  const refs = [{ role: "source", manifest: synced("staging", "not-a-date") }];
+  const results = stalenessResults(refs, { now: NOW, maxAgeMs: 7 * DAY_MS });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, "fail");
+  assert.match(results[0].message, /no recorded syncedAt/);
+});
+
+test("stalenessResults formats a sub-second age as 0s and defaults now to Date.now", () => {
+  const refs = [
+    {
+      role: "source",
+      manifest: synced("staging", new Date(Date.now() - 500).toISOString()),
+    },
+  ];
+  // warnAfterMs: 0 makes any positive age warn; omitting `now` exercises the
+  // Date.now() default, and a ~500 ms age renders as the "0s" sub-second floor.
+  const results = stalenessResults(refs, { warnAfterMs: 0 });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, "warn");
+  assert.match(results[0].message, /0s/);
 });

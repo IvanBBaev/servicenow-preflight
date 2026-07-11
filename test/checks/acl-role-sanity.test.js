@@ -10,12 +10,19 @@ const INSTANCE = "https://dev12345.service-now.com";
 /**
  * Route the fake's single global query filter by table name. `sys_security_acl`
  * and `sys_user_role` return all seeded rows; the m2m `sys_security_acl_role`
- * is filtered by the `sys_security_acl=<id>` param the check queries with, so a
- * per-ACL role fetch yields only that ACL's links.
+ * is now read in ONE batched query per chunk of ACL ids (SN-6), so it is
+ * filtered by the `sys_security_aclIN<id1>,<id2>,…` membership clause the check
+ * queries with — yielding every seeded link whose ACL is in the batch. (The
+ * legacy per-ACL `sys_security_acl=<id>` form is still honoured for safety.)
  */
 function queryFilter(table, rows, params) {
   if (table === "sys_security_acl_role") {
     const q = params?.sysparm_query ?? "";
+    const inMatch = /sys_security_aclIN([^^]+)/.exec(q);
+    if (inMatch) {
+      const ids = new Set(inMatch[1].split(","));
+      return rows.filter((r) => ids.has(r.sys_security_acl));
+    }
     const match = /sys_security_acl=([^^]+)/.exec(q);
     const aclId = match ? match[1] : "";
     return rows.filter((r) => r.sys_security_acl === aclId);
@@ -24,7 +31,13 @@ function queryFilter(table, rows, params) {
 }
 
 /** Assemble a fake client from ACL / link / role fixtures plus optional fail. */
-function makeHttp({ acls = [], links = [], roles = [], fail } = {}) {
+function makeHttp({
+  acls = [],
+  links = [],
+  roles = [],
+  fail,
+  totalCounts,
+} = {}) {
   return createFakeSnClient({
     tables: {
       sys_security_acl: acls,
@@ -32,6 +45,7 @@ function makeHttp({ acls = [], links = [], roles = [], fail } = {}) {
       sys_user_role: roles,
     },
     queryFilter,
+    totalCounts,
     fail,
   });
 }
@@ -43,6 +57,36 @@ function run(http, extra = {}) {
     scope: SCOPE,
     ...extra,
   });
+}
+
+/**
+ * Wrap a fake client so every `query`/`queryWithMeta` call is recorded. The ACL
+ * read now goes through `queryWithMeta` (for the security-trimmed signal), so the
+ * wrapper must forward — and record — that method too, or the check would call an
+ * undefined member.
+ */
+function tracked(http) {
+  const calls = [];
+  return {
+    http: {
+      ...http,
+      table(name) {
+        const t = http.table(name);
+        return {
+          get: (id, params) => t.get(id, params),
+          query: (params) => {
+            calls.push({ table: name, params });
+            return t.query(params);
+          },
+          queryWithMeta: (params) => {
+            calls.push({ table: name, params });
+            return t.queryWithMeta(params);
+          },
+        };
+      },
+    },
+    calls,
+  };
 }
 
 test("acl-role-sanity keeps its registered name", async () => {
@@ -59,10 +103,26 @@ test("warns when no scope is set", async () => {
   assert.match(result.message, /scope/i);
 });
 
-test("passes when there are no ACLs in scope", async () => {
+test("warns (never passes) on a plain zero-row ACL read (SN-1)", async () => {
+  // Zero visible ACLs with no pre-trim count is ambiguous — the app may ship
+  // none, or the account may not read sys_security_acl. It is NOT proof of
+  // safety, so the gate warns rather than passes green on nothing.
   const result = await run(makeHttp({ acls: [] }));
-  assert.equal(result.status, "pass");
+  assert.equal(result.status, "warn");
   assert.match(result.message, /No ACLs/i);
+  assert.match(result.message, /cannot confirm/i);
+});
+
+test("fails on a security-trimmed zero-row ACL read (SN-1)", async () => {
+  // 0 rows are visible but X-Total-Count proves ACLs match: the CI account is
+  // security-trimmed (sys_security_acl is admin-read out-of-box). A zero-row
+  // read here must fail — the gate cannot see what it is meant to inspect.
+  const result = await run(
+    makeHttp({ acls: [], totalCounts: { sys_security_acl: 3 } }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /security-trimmed/i);
+  assert.match(result.message, /\b3\b/);
 });
 
 test("passes when every ACL is role-gated and roles exist", async () => {
@@ -100,6 +160,61 @@ test("passes when every ACL is role-gated and roles exist", async () => {
   const result = await run(makeHttp({ acls, links, roles }));
   assert.equal(result.status, "pass");
   assert.match(result.message, /gated/i);
+});
+
+test("inspects the ACL tables without an explicit sysparm_limit (CC-27)", async () => {
+  const acls = [
+    {
+      sys_id: "acl1",
+      name: "incident",
+      operation: "write",
+      active: "true",
+      script: "",
+      condition: "",
+    },
+  ];
+  const links = [
+    {
+      sys_security_acl: "acl1",
+      sys_user_role: "role_sysid_1",
+      "sys_user_role.name": "itil",
+    },
+  ];
+  const roles = [{ sys_id: "role_sysid_1", name: "itil" }];
+  const { http, calls } = tracked(makeHttp({ acls, links, roles }));
+  const result = await run(http);
+  assert.equal(result.status, "pass");
+  // No ACL / role read pins a page size: the client auto-paginates so an app
+  // shipping more ACLs (or an ACL gated by more roles) than a single page is
+  // never silently truncated and misjudged as wide open (CC-27).
+  const capped = calls.filter((c) => c.params?.sysparm_limit !== undefined);
+  assert.deepEqual(capped, []);
+});
+
+test("batches ACL→role lookups into ⌈N/100⌉ queries, not N (SN-6)", async () => {
+  // 250 ACLs used to cost 250 per-ACL `sys_security_acl_role` reads (N+1).
+  // The batched IN form collapses that to ⌈250/100⌉ = 3 reads, each a single
+  // `sys_security_aclIN<ids>` membership query. Proven by counting the reads.
+  const acls = Array.from({ length: 250 }, (_, i) => ({
+    sys_id: `acl${i}`,
+    name: `acl_${i}`,
+    operation: "write",
+    active: "true",
+    // Script-gated, so every ACL passes and the run reaches the batched read.
+    script: "current.active == true;",
+    condition: "",
+  }));
+  const { http, calls } = tracked(makeHttp({ acls, links: [], roles: [] }));
+  const result = await run(http);
+  assert.equal(result.status, "pass");
+
+  const roleReads = calls.filter((c) => c.table === "sys_security_acl_role");
+  assert.equal(roleReads.length, 3);
+  for (const r of roleReads) {
+    // Each read is a batched membership clause, never a per-ACL equality.
+    assert.match(r.params.sysparm_query, /sys_security_aclIN/);
+    assert.doesNotMatch(r.params.sysparm_query, /sys_security_acl=/);
+  }
 });
 
 test("passes when an ungated ACL is guarded by a condition or script", async () => {

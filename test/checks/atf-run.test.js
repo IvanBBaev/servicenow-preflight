@@ -324,6 +324,92 @@ test("explicit options.atfSuiteId wins over the manifest suites", async () => {
   assert.match(result.message, /1 suite/);
 });
 
+test("CC-2 — an unrecognized suite status fails closed (never counted green)", async () => {
+  // A suite that settled on a status we do not recognise as a pass must fail,
+  // never be silently counted as a passed suite.
+  for (const status of ["unknown", "not_found", "skipped", "timed_out"]) {
+    const result = await atfRun.run(
+      ctx({
+        options: { atfSuiteId: "suite-1" },
+        fixtures: {
+          cicd: { runTestSuite: { status, resultId: "run-1" } },
+          tables: { sys_atf_test_result: [] },
+        },
+      }),
+    );
+    assert.equal(result.status, "fail", `status "${status}" must fail`);
+    assert.match(result.message, /unrecognized status/i);
+    assert.match(result.message, new RegExp(status));
+  }
+});
+
+test("SN-8 — a red test in a nested child suite fails the run", async () => {
+  // The root suite result is green and its own tests pass, but a nested child
+  // suite (linked via sys_atf_test_suite_result.parent) holds a red test. The
+  // run must union the child result ids, not scope only to the root.
+  const testRows = {
+    "run-root": [{ sys_id: "t-root", test: "Root smoke", status: "success" }],
+    "run-child": [
+      {
+        sys_id: "t-child",
+        test: "Nested assertion",
+        status: "failure",
+        output: "nested boom",
+      },
+    ],
+  };
+  const result = await atfRun.run({
+    instanceUrl: INSTANCE,
+    options: { atfSuiteId: "suite-1" },
+    http: createFakeSnClient({
+      cicd: { runTestSuite: { status: "success", resultId: "run-root" } },
+      tables: {
+        sys_atf_test_suite_result: [
+          { sys_id: "run-child", parent: "run-root" },
+        ],
+        sys_atf_test_result: [
+          ...testRows["run-root"],
+          ...testRows["run-child"],
+        ],
+      },
+      queryFilter: (table, rows, params) => {
+        const q = params?.sysparm_query ?? "";
+        if (table === "sys_atf_test_suite_result") {
+          const m = /parent=(\S+)/.exec(q);
+          return m ? rows.filter((r) => String(r.parent ?? "") === m[1]) : [];
+        }
+        if (table === "sys_atf_test_result") {
+          const m = /test_suite_result=(\S+)/.exec(q);
+          return m ? (testRows[m[1]] ?? []) : rows;
+        }
+        return rows;
+      },
+    }),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /Nested assertion/);
+  assert.match(result.message, /nested boom/);
+});
+
+test("SN-9 — a skipped test downgrades a green suite to warn", async () => {
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1" },
+      fixtures: {
+        cicd: { runTestSuite: { status: "success", resultId: "run-1" } },
+        tables: {
+          sys_atf_test_result: [
+            { sys_id: "t1", test: "Create incident", status: "success" },
+            { sys_id: "t2", test: "Optional check", status: "skipped" },
+          ],
+        },
+      },
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /skipped/i);
+});
+
 test("never throws — always returns a well-formed CheckResult", async () => {
   const result = await atfRun.run(
     ctx({

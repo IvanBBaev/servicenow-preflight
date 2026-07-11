@@ -267,11 +267,13 @@ test("drift errors (exit 1) when both manifests are missing (reports the source 
 
 // --- argument parsing ------------------------------------------------------
 
-test("drift without two positionals prints usage guidance and exits 1", () => {
+test("drift without two positionals prints usage guidance and exits 2", () => {
   const dir = tempProject();
   try {
     const res = runCli(["drift", "staging"], { cwd: dir });
-    assert.equal(res.status, 1);
+    // A usage error (missing positional) exits 2 (CC-41), distinct from a
+    // check/drift failure (exit 1).
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /drift needs two instances/);
     assert.match(res.stderr, /drift <source> <target>/);
   } finally {
@@ -279,12 +281,41 @@ test("drift without two positionals prints usage guidance and exits 1", () => {
   }
 });
 
-test("drift with no positionals at all prints usage guidance and exits 1", () => {
+test("drift with no positionals at all prints usage guidance and exits 2", () => {
   const dir = tempProject();
   try {
     const res = runCli(["drift"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /drift needs two instances/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift rejects comparing an instance to itself and exits 2 (CC-35)", () => {
+  const dir = tempProject();
+  try {
+    // src === dst always reports a clean promote (a manifest never drifts from
+    // itself) — almost certainly a typo, so reject it before loading anything.
+    const res = runCli(["drift", "prod", "prod"], { cwd: dir });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /two different instances/);
+    assert.match(res.stderr, /"prod" for both source and target/);
+    assert.doesNotMatch(res.stderr, /at .*\.js:\d+/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift rejects a positional instance name with a path separator and exits 2 (CC-14)", () => {
+  const dir = tempProject();
+  try {
+    // A crafted positional must not walk the tree into another directory's
+    // manifest — it is validated before it becomes a path.
+    const res = runCli(["drift", "a/b", "prod"], { cwd: dir });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /path separators or ".."/);
+    assert.doesNotMatch(res.stderr, /at .*\.js:\d+/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -298,6 +329,10 @@ test("--help lists both the sync and drift subcommands and exits 0", () => {
   assert.match(res.stdout, /servicenow-preflight drift <src> <dst>/);
   assert.match(res.stdout, /--with-last-run/);
   assert.match(res.stdout, /--registry/);
+  // The SN-1 empty-snapshot override flag is documented.
+  assert.match(res.stdout, /--allow-empty/);
+  // The manifest-age gate is documented, with its duration syntax.
+  assert.match(res.stdout, /--max-age/);
 });
 
 test("-h short flag prints the same usage and exits 0", () => {
@@ -310,11 +345,12 @@ test("-h short flag prints the same usage and exits 0", () => {
 test("an unknown bare token is treated as a run env and errors without a registry", () => {
   // There is no dedicated subcommand for an unknown leading token: it falls
   // through to the default `run` command as a positional env name, which fails
-  // cleanly (exit 1) when no registry can resolve it — no crash, no stack trace.
+  // cleanly when no registry can resolve it — no crash, no stack trace. Absent a
+  // registry this is a usage error, so it exits 2 (CC-41).
   const dir = tempProject();
   try {
     const res = runCli(["definitely-not-a-subcommand"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(
       res.stderr,
       /cannot resolve instance "definitely-not-a-subcommand"/,
@@ -362,14 +398,95 @@ test("--registry <path> points drift at a custom registry location (parsing acce
   }
 });
 
+// --- drift: manifest-freshness gate (--max-age) ----------------------------
+
+test("drift warns (exit 0) when a compared manifest is older than 30 days", () => {
+  const dir = tempProject();
+  try {
+    const tests = [{ id: "x/a", name: "A", active: true }];
+    // Source synced 40 days ago (stale); target fresh. No test drift, so the
+    // only signal is a manifest-freshness warning — informational, not blocking.
+    writeStateManifest(dir, "staging", {
+      instance: "staging",
+      tests,
+      suites: [],
+      syncedAt: new Date(Date.now() - 40 * 86_400_000).toISOString(),
+    });
+    writeStateManifest(dir, "prod", {
+      instance: "prod",
+      tests,
+      suites: [],
+      syncedAt: new Date().toISOString(),
+    });
+
+    const res = runCli(["drift", "staging", "prod", "--format", "json"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.equal(report.ok, true);
+    const freshness = report.results.find(
+      (r) => r.name === "manifest-freshness",
+    );
+    assert.ok(freshness, "a manifest-freshness result should be present");
+    assert.equal(freshness.status, "warn");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift --max-age fails (exit 1) when a manifest is older than the limit", () => {
+  const dir = tempProject();
+  try {
+    const tests = [{ id: "x/a", name: "A", active: true }];
+    // Source synced 10 days ago; --max-age 7d turns that into a hard block even
+    // though there is no test drift.
+    writeStateManifest(dir, "staging", {
+      instance: "staging",
+      tests,
+      suites: [],
+      syncedAt: new Date(Date.now() - 10 * 86_400_000).toISOString(),
+    });
+    writeStateManifest(dir, "prod", {
+      instance: "prod",
+      tests,
+      suites: [],
+      syncedAt: new Date().toISOString(),
+    });
+
+    const res = runCli(["drift", "staging", "prod", "--max-age", "7d"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 1);
+    assert.match(res.stdout, /manifest-freshness/);
+    assert.match(res.stdout, /--max-age/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift with a malformed --max-age duration is a usage error (exit 2)", () => {
+  const dir = tempProject();
+  try {
+    const res = runCli(["drift", "staging", "prod", "--max-age", "soon"], {
+      cwd: dir,
+    });
+    // Bad duration is rejected during parsing, before any manifest is loaded.
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /Invalid --max-age/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // --- sync: argument parsing + clean failures (no live network) -------------
 
-test("sync without an instance name errors cleanly and exits 1", () => {
+test("sync without an instance name errors cleanly and exits 2", () => {
   const dir = tempProject();
   try {
     writeRegistry(dir, { dev: { url: "https://dev12345.service-now.com" } });
     const res = runCli(["sync"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /sync needs an instance name/);
     assert.match(res.stderr, /servicenow-preflight sync <env>/);
   } finally {
@@ -377,13 +494,28 @@ test("sync without an instance name errors cleanly and exits 1", () => {
   }
 });
 
-test("sync without a registry errors cleanly and exits 1", () => {
+test("sync without a registry errors cleanly and exits 2", () => {
   const dir = tempProject();
   try {
     const res = runCli(["sync", "dev"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /sync needs a registry/);
     assert.match(res.stderr, /\.preflight\/instances\.json/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("sync --allow-empty is a recognized flag (parses, then fails on the missing registry)", () => {
+  const dir = tempProject();
+  try {
+    // No registry present. If --allow-empty were unknown, the arg parser would
+    // reject it up front with "Unknown option"; instead parsing succeeds and the
+    // run proceeds to the registry-load step, proving the flag is wired in.
+    const res = runCli(["sync", "dev", "--allow-empty"], { cwd: dir });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /sync needs a registry/);
+    assert.doesNotMatch(res.stderr, /Unknown option/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

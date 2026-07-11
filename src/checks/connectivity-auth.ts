@@ -1,5 +1,10 @@
 import type { Check, CheckResult } from "../types.js";
-import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
+import {
+  SnAuthError,
+  SnHttpError,
+  SnNetworkError,
+  SnResponseError,
+} from "../http/client.js";
 
 const NAME = "connectivity-auth";
 
@@ -12,6 +17,7 @@ const NAME = "connectivity-auth";
  * - success                      -> pass (reachable and authenticated)
  * - 403 (insufficient rights)    -> warn (reachable, but the account is degraded)
  * - 401 / missing credentials    -> fail (authentication failed)
+ * - non-JSON 2xx (hibernating)   -> fail (never actually reached the API)
  * - network / DNS / timeout      -> fail (instance unreachable)
  * - any other non-2xx status     -> fail (unexpected API error)
  *
@@ -60,6 +66,18 @@ export const connectivityAuth: Check = {
           message: `Authentication failed${
             err.status ? ` (HTTP ${err.status})` : ""
           }: check the configured credentials.`,
+        };
+      }
+
+      if (err instanceof SnResponseError) {
+        // A 2xx with a non-JSON body: the client never reached the API. The
+        // hallmark is a hibernating PDI's wake-up page or an SSO/proxy
+        // interstitial answering 200 with HTML. Fail closed — a green here would
+        // mean "authenticated" against an instance we never actually talked to.
+        return {
+          name: NAME,
+          status: "fail",
+          message: `The instance answered with a non-JSON ${err.status} page instead of API data — it may be hibernating (wake it in the developer portal) or an SSO/proxy returned an interstitial. Cannot confirm connectivity or authentication.`,
         };
       }
 
