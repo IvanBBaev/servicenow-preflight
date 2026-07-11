@@ -29,7 +29,8 @@
   },
   "files": [
     "build",
-    "bin"
+    "bin",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20"
