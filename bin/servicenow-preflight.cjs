@@ -15,6 +15,12 @@ if (major < 20) {
 }
 
 import("../build/cli.js").catch(function (err) {
-  console.error(err && err.stack ? err.stack : String(err));
+  var message = err && err.message ? err.message : String(err);
+  console.error("servicenow-preflight failed to start: " + message);
+  if (process.env.SNPF_DEBUG && err && err.stack) {
+    console.error(err.stack);
+  } else {
+    console.error("Set SNPF_DEBUG=1 to see the full stack trace.");
+  }
   process.exit(1);
 });

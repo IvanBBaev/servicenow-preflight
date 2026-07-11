@@ -6,17 +6,33 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege: CI only needs to read the repository contents.
+permissions:
+  contents: read
+
+# Cancel an in-flight run when a new commit lands on the same ref, so stale
+# runs do not pile up (and do not waste minutes) on a fast-moving branch/PR.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      # Test every supported Node against a failure on one leg without
+      # cancelling the other, so both results are always visible.
+      fail-fast: false
+      matrix:
+        # Cover the engines floor (20) and the dev/CI baseline (22).
+        node-version: [20, 22]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
-      - run: npm run build
-      - run: npm run lint
-      - run: npm run format:check
-      - run: npm test
+      # `check` = build + lint + format:check + coverage; running it here makes
+      # the c8 thresholds in .c8rc.json a hard CI gate, not just a local one.
+      - run: npm run check

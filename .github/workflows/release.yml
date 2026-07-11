@@ -1,6 +1,7 @@
 name: Release
 
 # Publish to npm when a version tag is pushed, e.g. `git tag v0.5.0 && git push --tags`.
+# See docs/RELEASING.md for the tag-last release discipline this workflow assumes.
 on:
   push:
     tags:
@@ -12,13 +13,34 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # A protected deployment environment: required reviewers / wait timers are
+    # configured in repo Settings → Environments → "release" (user-assisted).
+    environment: release
+    permissions:
+      contents: read
+      # Required for npm provenance / OIDC Trusted Publishing (see the publish step).
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history so the ancestry guard below can compute reachability
+          # of the tagged commit from origin/main.
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"
           cache: npm
+      # OPS-1: refuse to publish a tag whose commit is not reachable from `main`.
+      # Tag pushes bypass branch protection, so a tag on an unreviewed/never-CI'd
+      # commit must never reach npm. `fetch-depth: 0` above makes the graph complete.
+      - name: Verify tagged commit is an ancestor of main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag commit $GITHUB_SHA is not reachable from origin/main — refusing to publish."
+            exit 1
+          fi
       - run: npm ci
       # Guard against publishing a version that doesn't match the tag.
       - name: Verify tag matches package.json version
@@ -30,6 +52,13 @@ jobs:
             exit 1
           fi
       # `prepublishOnly` runs the full `check` gate (build + lint + format:check + coverage).
-      - run: npm publish --access public
+      # `--provenance` requires `id-token: write` (above) and publishes a signed
+      # provenance attestation. It works with both a token and OIDC Trusted Publishing.
+      - run: npm publish --provenance --access public
         env:
+          # OIDC Trusted Publishing is the intended long-term auth path. Keep
+          # NODE_AUTH_TOKEN until npmjs.com Trusted Publishing is configured for
+          # this repo/workflow — the two changes must land together. DELETE this
+          # env AND the NPM_TOKEN secret only AFTER Trusted Publishing is live.
+          # See docs/RELEASING.md.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

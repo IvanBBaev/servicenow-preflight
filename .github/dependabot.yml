@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Keep devDependencies fresh (there are no runtime dependencies).
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  # Keep the SHA-pinned GitHub Actions from rotting; Dependabot bumps the pin
+  # and refreshes the trailing version comment.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
