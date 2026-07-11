@@ -51,13 +51,12 @@
     "check": "npm run build && npm run lint && npm run format:check && npm run test:coverage",
     "prepublishOnly": "npm run check"
   },
-  "dependencies": {},
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.0.0",
     "c8": "^11.0.0",
-    "eslint": "^9.39.4",
-    "eslint-config-prettier": "^9.1.2",
+    "eslint": "^10.7.0",
+    "eslint-config-prettier": "^10.1.8",
     "globals": "^15.15.0",
     "prettier": "^3.8.4",
     "typescript": "^5.5.0",

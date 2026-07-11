@@ -255,9 +255,9 @@ export const scopedAppDeps: Check = {
       );
     }
 
-    let storeRows: Record<string, unknown>[] = [];
-    let appRows: Record<string, unknown>[] = [];
-    let pluginRows: Record<string, unknown>[] = [];
+    let storeRows: Record<string, unknown>[];
+    let appRows: Record<string, unknown>[];
+    let pluginRows: Record<string, unknown>[];
     try {
       // Fetch active plugins plus installed store apps and scoped apps in
       // parallel. `sys_app` (custom/scoped apps on this instance) is part of the
