@@ -26,7 +26,7 @@ It ships as both a **CLI** you drop into a CI gate and a small, dependency-free
 - **Start here** — [Quick start](#quick-start) ·
   [What it checks](#what-it-checks) · [CLI](#cli)
 - **Configure** — [Credentials & auth](#credentials--auth) ·
-  [Configuration file](#configuration-file)
+  [HTTP(S) proxy](#https-proxy) · [Configuration file](#configuration-file)
 - **Pipelines** — [Multi-instance: registry, sync & drift](#multi-instance-registry-sync--drift) ·
   [Report formats](#report-formats) · [CI integration](#ci-integration)
 - **Embed** — [Library API](#library-api) · [Development](#development) ·
@@ -50,38 +50,46 @@ npx servicenow-preflight        # run the default suite (short alias: snpf)
 ✓ instance-url-configured: Instance URL looks good: https://dev12345.service-now.com
 ✓ connectivity-auth: Instance is reachable and the credentials authenticate.
 ! update-set-state: No update set configured (set updateSetId in the config); skipping.
+! default-set-leakage: No target scope set (PreflightContext.scope); nothing to verify — skipping the Default-set leakage check.
+✓ remote-set-preview: No pending retrieved update sets on the target instance — nothing awaiting preview or commit.
+✓ atf-enablement: ATF test execution is enabled ("sn_atf.runner.enabled" is "true").
 ! atf-run: No ATF suite configured (set options.atfSuites); skipping.
 ! scoped-app-deps: No required apps declared (set options.requiredApps); skipping.
 ! i18n-completeness: No target scope set; skipping.
 ! acl-role-sanity: No scope set; skipping.
 
-2 passed, 5 warnings, 0 failed
+4 passed, 6 warnings, 0 failed
 ```
 
 Two identical binaries ship — `servicenow-preflight` and the alias `snpf`. Out
-of the box only the two universal checks do real work; the rest turn on once you
-supply their inputs (a scope, an update set, ATF suite ids, required apps) via a
-[config file](#configuration-file). The CLI **exits non-zero on any `fail`**, so
-it drops straight into a pipeline before a promote/deploy step.
+of the box only the checks that need no target-specific input do real work; the
+rest turn on once you supply their inputs (a scope, an update set, ATF suite
+ids, required apps) via a [config file](#configuration-file). The CLI **exits
+non-zero on any `fail`**, so it drops straight into a pipeline before a
+promote/deploy step.
 
 ## What it checks
 
 `runPreflight(ctx, checks?)` runs each check against the target instance and
-aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Seven checks
+aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Ten checks
 ship in the default suite; the CLI is a thin wrapper over that function.
 
-| Check                     | Needs                        | Verifies                                                                                                        |
-| ------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `instance-url-configured` | —                            | An instance URL is present and well-formed (prefers `https`).                                                   |
-| `connectivity-auth`       | credentials                  | The instance is reachable and the credentials authenticate.                                                     |
-| `update-set-state`        | `updateSetId`                | The target update set, and any batched child sets, are `complete` and non-empty (not in-progress or `ignore`d). |
-| `atf-run`                 | `options.atfSuites`          | Configured ATF test suites run green (no failing or errored tests).                                             |
-| `scoped-app-deps`         | `options.requiredApps`       | Required scoped apps / plugins are installed, active, and meet any `minVersion`.                                |
-| `i18n-completeness`       | `scope`, `options.languages` | Every configured language has full translation coverage for the scope.                                          |
-| `acl-role-sanity`         | `scope`                      | No wide-open mutating ACLs, and no ACLs referencing non-existent roles.                                         |
+| Check                     | Needs                        | Verifies                                                                                                                                                   |
+| ------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instance-url-configured` | —                            | An instance URL is present and well-formed (prefers `https`).                                                                                              |
+| `connectivity-auth`       | credentials                  | The instance is reachable and the credentials authenticate.                                                                                                |
+| `update-set-state`        | `updateSetId`                | The target update set, and any batched child sets, are `complete` and non-empty (not in-progress or `ignore`d).                                            |
+| `default-set-leakage`     | `scope`                      | No captured work is stranded in a "Default"-flagged update set for the scope — changes that would never ship.                                              |
+| `remote-set-preview`      | credentials                  | Every pending retrieved update set on the target is previewed with all preview problems resolved (`updateSetId`, when set, focuses the gate on one set).   |
+| `atf-enablement`          | credentials                  | ATF test execution is enabled instance-wide (optionally also an online scheduled client test runner, via `options.atfEnablement.requireClientTestRunner`). |
+| `atf-run`                 | `options.atfSuites`          | Configured ATF test suites run green (no failing or errored tests).                                                                                        |
+| `scoped-app-deps`         | `options.requiredApps`       | Required scoped apps / plugins are installed, active, and meet any `minVersion`.                                                                           |
+| `i18n-completeness`       | `scope`, `options.languages` | Every configured language has full translation coverage for the scope.                                                                                     |
+| `acl-role-sanity`         | `scope`                      | No wide-open mutating ACLs, and no ACLs referencing non-existent roles.                                                                                    |
 
-The first two always run; the rest `warn` (and explain what's missing) until you
-supply their inputs — they never silently pass. Each check returns one status —
+Checks whose only need is credentials always run once credentials are present;
+the rest `warn` (and explain what's missing) until you supply their inputs —
+they never silently pass. Each check returns one status —
 `pass` (`✓`, holds), `warn` (`!`, advisory), or `fail` (`✗`, blocks). **Only a
 `fail` fails the run**; warnings never do. Checks never throw (transport/auth/API
 errors map to a result), and are read-mostly (the sole write is running the ATF
@@ -161,6 +169,24 @@ assertion variable accepts an **`@path` value** (read from that file, e.g.
 `SNPF_MTLS_KEY=@./certs/client.key`); a missing `@`-file is a hard error reported
 with the path only, never contents.
 
+### HTTP(S) proxy
+
+Outbound requests can be routed through a forward proxy via standard `CONNECT`
+tunneling — still zero runtime dependencies. Precedence, first match wins: the
+config file's `proxy` → `SNPF_PROXY` → `HTTPS_PROXY` → `https_proxy`. Only
+`https:` targets are ever proxied (every ServiceNow instance is `https`), so
+`HTTP_PROXY` is deliberately ignored. Both `http://` and `https://` proxy URLs
+work (the latter speaks TLS to the proxy itself, then TLS to the instance
+through it), proxy credentials go in the URL userinfo
+(`http://user:pass@proxy:3128`, always redacted from errors and logs), and
+mutual TLS composes through the tunnel. TLS verification of the instance is
+never weakened by proxying.
+
+Bypass hosts with `NO_PROXY`-style lists — the union of the config file's
+`noProxy`, `SNPF_NO_PROXY`, and `NO_PROXY`/`no_proxy` applies: comma-separated
+entries, each a hostname, a domain suffix, a `host:port`, a bracketed IPv6
+literal, or `*` (bypass everything).
+
 **Detection precedence** (with `SNPF_AUTH` unset, first match wins): OAuth client
 id + secret (→ `oauth-refresh` if a refresh token is present, else `oauth-jwt` if
 a JWT key/assertion is, else `oauth-password` if user + pass are, else
@@ -193,13 +219,13 @@ checks to run, and per-check options — but **never credentials**.
 }
 ```
 
-| Field         | Type                                   | Used by                                                                          |
-| ------------- | -------------------------------------- | -------------------------------------------------------------------------------- |
-| `instanceUrl` | `string`                               | Target instance (CLI `--instance` overrides).                                    |
-| `scope`       | `string`                               | `i18n-completeness`, `acl-role-sanity`.                                          |
-| `updateSetId` | `string` (sys_id)                      | `update-set-state`.                                                              |
-| `select`      | `{ only?: string[]; skip?: string[] }` | Check selection (CLI flags override).                                            |
-| `options`     | `object`                               | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …). |
+| Field         | Type                                   | Used by                                                                             |
+| ------------- | -------------------------------------- | ----------------------------------------------------------------------------------- |
+| `instanceUrl` | `string`                               | Target instance (CLI `--instance` overrides).                                       |
+| `scope`       | `string`                               | `default-set-leakage`, `i18n-completeness`, `acl-role-sanity`.                      |
+| `updateSetId` | `string` (sys_id)                      | `update-set-state`; also focuses `remote-set-preview` on that set's retrieved copy. |
+| `select`      | `{ only?: string[]; skip?: string[] }` | Check selection (CLI flags override).                                               |
+| `options`     | `object`                               | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).    |
 
 ## Multi-instance: registry, sync & drift
 
@@ -251,12 +277,20 @@ except each instance looks up a **namespaced** variable first: an instance whose
   **read-only** Table API reads — into a committed **state manifest** at
   `.preflight/state/<env>.state.json`. Each entry gets a **logical `id`**
   (`scope/slug`) stable across instances, so a re-sync yields a minimal, reviewable
-  diff. `--with-last-run` also records each test's most recent result.
+  diff. `--with-last-run` also records each test's most recent result. The
+  manifest also captures the instance's **platform identity**
+  (`glide.buildname` / `glide.war`) and its **installed apps and plugins** with
+  versions, feeding the parity gates below.
 - **`drift <src> <dst>`** compares two committed manifests **offline** by logical
   `id`. A test **active upstream but missing downstream** fails the gate (exit 1)
   — it would ship a promote without coverage upstream has validated. Extra tests
   downstream `warn`; a fully-covered target `pass`es. Only _active_ source tests
-  can block.
+  can block. Two **version-parity** results ride along: `instance-version-parity`
+  fails on a release-family mismatch (`glide.buildname`) and warns on patch-level
+  skew (`glide.war`); `app-version-parity` fails when an app or plugin installed
+  on the source is missing or older on the target. Manifests written by older
+  versions of the tool (no identity/app data) degrade to an advisory `warn`,
+  never a crash.
 
 ```bash
 snpf sync staging                 # commit the two manifests, then gate the promote

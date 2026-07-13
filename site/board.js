@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the seven checks -------------------------------- */
+  /* ---- Content model: the ten checks ----------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -60,6 +60,33 @@
     },
     {
       code: "04",
+      name: "default-set-leakage",
+      tag: "scope",
+      desc: "No captured work for the target scope is stranded in a Default-flagged update set.",
+      fail: "In-scope changes sit in a Default set and will not ship, or the read failed.",
+      warn: "No target scope configured, the list is security-trimmed, or an unexpected error.",
+      pass: "Every in-scope change is recorded in a deployable update set.",
+    },
+    {
+      code: "05",
+      name: "remote-set-preview",
+      tag: "ALWAYS",
+      desc: "Every pending retrieved update set is previewed with all preview problems resolved.",
+      fail: "A retrieved set was never previewed, or preview problems remain unresolved.",
+      warn: "No credentials configured, a stale preview, or the list is security-trimmed.",
+      pass: "No pending retrieved update sets — nothing awaiting preview or commit.",
+    },
+    {
+      code: "06",
+      name: "atf-enablement",
+      tag: "ALWAYS",
+      desc: "ATF test execution is enabled instance-wide — optionally with an online client test runner.",
+      fail: "The property is false or evaluates as false, or a required runner is offline.",
+      warn: "No credentials configured, the property is not visible, or malformed options.",
+      pass: "ATF execution is enabled (and the required runner is online).",
+    },
+    {
+      code: "07",
       name: "atf-run",
       tag: "atfSuites",
       desc: "The configured ATF test suites run green — no failing or errored tests.",
@@ -68,7 +95,7 @@
       pass: "Every configured suite settled green.",
     },
     {
-      code: "05",
+      code: "08",
       name: "scoped-app-deps",
       tag: "requiredApps",
       desc: "Required scoped apps and plugins are installed, active, and meet any minVersion.",
@@ -77,7 +104,7 @@
       pass: "Every dependency present, active, and up to date.",
     },
     {
-      code: "06",
+      code: "09",
       name: "i18n-completeness",
       tag: "scope · languages",
       desc: "Every configured language has full translation coverage for the target scope.",
@@ -86,7 +113,7 @@
       pass: "Every required language is fully covered.",
     },
     {
-      code: "07",
+      code: "10",
       name: "acl-role-sanity",
       tag: "scope",
       desc: "No wide-open mutating ACLs, and no ACLs that reference non-existent roles.",
@@ -97,9 +124,42 @@
   ];
 
   var SCENARIOS = {
-    default: ["pass", "pass", "warn", "warn", "warn", "warn", "warn"],
-    configured: ["pass", "pass", "pass", "pass", "pass", "pass", "pass"],
-    failure: ["pass", "pass", "fail", "fail", "warn", "warn", "fail"],
+    default: [
+      "pass",
+      "pass",
+      "warn",
+      "warn",
+      "pass",
+      "pass",
+      "warn",
+      "warn",
+      "warn",
+      "warn",
+    ],
+    configured: [
+      "pass",
+      "pass",
+      "pass",
+      "pass",
+      "pass",
+      "pass",
+      "pass",
+      "pass",
+      "pass",
+      "pass",
+    ],
+    failure: [
+      "pass",
+      "pass",
+      "fail",
+      "warn",
+      "fail",
+      "pass",
+      "fail",
+      "warn",
+      "warn",
+      "fail",
+    ],
   };
 
   function word(st) {

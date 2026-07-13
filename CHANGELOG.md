@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Three new default-suite checks: `default-set-leakage` (captured work stranded
+  in a "Default"-flagged update set for the target scope), `remote-set-preview`
+  (every pending retrieved update set on the target is previewed with all
+  preview problems resolved; `updateSetId` focuses the gate), and
+  `atf-enablement` (ATF test execution is enabled instance-wide, optionally
+  requiring an online scheduled client test runner) — the default suite grows
+  from seven to ten checks.
+- Version parity in the promote gate: `sync` now captures the instance's
+  platform identity (`glide.buildname`/`glide.war`) and installed apps/plugins
+  with versions; `drift` adds `instance-version-parity` (release-family
+  mismatch fails, patch skew warns) and `app-version-parity` (missing or
+  downgraded apps on the target fail). Manifests from older versions degrade
+  to an advisory warning.
+- HTTP(S) forward-proxy support via `CONNECT` tunneling on both transports —
+  still zero runtime dependencies. Configured with the `proxy`/`noProxy` config
+  fields or `SNPF_PROXY`/`SNPF_NO_PROXY` (falling back to standard
+  `HTTPS_PROXY`/`https_proxy`/`NO_PROXY`); https-only by design, proxy
+  credentials always redacted, mutual TLS composes through the tunnel.
 - Validated encoded-query builder (`src/http/query.ts`), exported as public
   API, so custom checks can compose `sysparm_query` filters without raw string
   interpolation.
