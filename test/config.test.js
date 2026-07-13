@@ -119,6 +119,55 @@ test("loadConfig reads instanceUrl from SNPF_INSTANCE when the file omits it", a
   }
 });
 
+test("loadConfig reads proxy settings from SNPF_PROXY / SNPF_NO_PROXY when the file omits them (SR-5)", async () => {
+  const dir = tempDir();
+  const prev = {
+    proxy: process.env.SNPF_PROXY,
+    noProxy: process.env.SNPF_NO_PROXY,
+  };
+  process.env.SNPF_PROXY = "http://proxy.example.com:3128";
+  process.env.SNPF_NO_PROXY = "internal.example.com,localhost";
+  try {
+    const loaded = await loadConfig(dir, { skipDotEnv: true });
+    assert.equal(loaded.config.proxy, "http://proxy.example.com:3128");
+    assert.equal(loaded.config.noProxy, "internal.example.com,localhost");
+  } finally {
+    if (prev.proxy === undefined) delete process.env.SNPF_PROXY;
+    else process.env.SNPF_PROXY = prev.proxy;
+    if (prev.noProxy === undefined) delete process.env.SNPF_NO_PROXY;
+    else process.env.SNPF_NO_PROXY = prev.noProxy;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the config file's proxy settings win over SNPF_PROXY / SNPF_NO_PROXY (SR-5)", async () => {
+  const dir = tempDir();
+  writeFileSync(
+    join(dir, "preflight.config.json"),
+    JSON.stringify({
+      proxy: "http://file.example.com:8080",
+      noProxy: "from-file.example.com",
+    }),
+  );
+  const prev = {
+    proxy: process.env.SNPF_PROXY,
+    noProxy: process.env.SNPF_NO_PROXY,
+  };
+  process.env.SNPF_PROXY = "http://env.example.com:3128";
+  process.env.SNPF_NO_PROXY = "from-env.example.com";
+  try {
+    const loaded = await loadConfig(dir, { skipDotEnv: true });
+    assert.equal(loaded.config.proxy, "http://file.example.com:8080");
+    assert.equal(loaded.config.noProxy, "from-file.example.com");
+  } finally {
+    if (prev.proxy === undefined) delete process.env.SNPF_PROXY;
+    else process.env.SNPF_PROXY = prev.proxy;
+    if (prev.noProxy === undefined) delete process.env.SNPF_NO_PROXY;
+    else process.env.SNPF_NO_PROXY = prev.noProxy;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("resolveAuthFromEnv detects an API key", () => {
   const auth = resolveAuthFromEnv({ SNPF_API_KEY: "key-abc" });
   assert.deepEqual(auth, { kind: "apikey", apiKey: "key-abc" });

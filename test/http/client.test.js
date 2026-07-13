@@ -16,6 +16,23 @@ import { createFakeSnClient } from "../../build/http/fake.js";
 const INSTANCE = "https://dev12345.service-now.com";
 const AUTH = { kind: "basic", user: "admin", pass: "secret" };
 
+// SR-5: the client honours proxy environment variables per request. These
+// tests exercise the direct fetch transport, so scrub any proxy variables the
+// host machine may carry (node --test runs each file in its own process, so
+// this cannot leak into other suites).
+for (const name of [
+  "SNPF_PROXY",
+  "SNPF_NO_PROXY",
+  "HTTPS_PROXY",
+  "https_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "NO_PROXY",
+  "no_proxy",
+]) {
+  delete process.env[name];
+}
+
 const realFetch = globalThis.fetch;
 
 /** Set per test: (url, init) => fake Response, or throw to simulate a fetch reject. */

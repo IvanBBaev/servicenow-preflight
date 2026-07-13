@@ -10,7 +10,16 @@
  */
 
 import { request as httpsRequest } from "node:https";
+import {
+  request as httpRequest,
+  type ClientRequest,
+  type IncomingMessage,
+} from "node:http";
+import { connect as tlsConnect, type TLSSocket } from "node:tls";
+import { isIP, type Socket } from "node:net";
 import { createSign } from "node:crypto";
+
+import { openProxyTunnel, parseProxyUrl, resolveProxy } from "./proxy.js";
 
 /**
  * How the client authenticates to the instance.
@@ -296,6 +305,21 @@ export interface SnClientConfig {
    * explicitly with `sysparm_limit`/`sysparm_offset`.
    */
   maxRows?: number;
+  /**
+   * Outbound HTTP(S) forward proxy for reaching the instance (SR-5), e.g.
+   * `http://proxy.example.com:3128` (Basic credentials may ride in the URL
+   * userinfo — never logged, never echoed into errors). When set it outranks
+   * every proxy environment variable; when omitted the standard variables
+   * apply (`SNPF_PROXY`, then `HTTPS_PROXY`/`https_proxy` — see `./proxy.js`
+   * for the full contract). `NO_PROXY`-style bypassing applies either way.
+   */
+  proxy?: string;
+  /**
+   * Extra proxy-bypass entries merged with `SNPF_NO_PROXY` and
+   * `NO_PROXY`/`no_proxy`: comma-separated hostnames or host suffixes, each
+   * with an optional `:port`, or `*` to force direct connections.
+   */
+  noProxy?: string;
 }
 
 /** Minimal response shape the client consumes (a subset of `fetch`'s Response). */
@@ -387,6 +411,70 @@ const fetchTransport: Transport = async (url, init) => {
 };
 
 /**
+ * Adapt a node `IncomingMessage` to the {@link TransportResponse} shape, and
+ * refuse 3xx redirects exactly like the fetch path's `redirect: "error"`
+ * (CC-31). Shared by the direct `node:https` transport and the proxied tunnel
+ * transport (SR-5) so both keep identical semantics.
+ */
+function nodeResponseAdapter(
+  origin: string,
+  resolve: (res: TransportResponse) => void,
+  reject: (err: Error) => void,
+): (res: IncomingMessage) => void {
+  return (res) => {
+    const status = res.statusCode ?? 0;
+    // CC-31: never follow a redirect on an API call — align with the
+    // fetch path's `redirect: "error"`. `node:https` does not auto-follow,
+    // so a 3xx would otherwise surface as a puzzling non-JSON body; fail
+    // closed the same way instead, so credentials are never re-sent to a
+    // redirect target.
+    if (status >= 300 && status < 400) {
+      res.resume(); // drain the body so the socket can be released
+      reject(
+        new Error(
+          `Refusing to follow a ${status} redirect from ${origin} ` +
+            `(API requests must not redirect).`,
+        ),
+      );
+      return;
+    }
+    const chunks: Buffer[] = [];
+    res.on("data", (c: Buffer) => chunks.push(c));
+    res.on("end", () => {
+      const text = Buffer.concat(chunks).toString("utf8");
+      resolve({
+        status,
+        statusText: res.statusMessage ?? "",
+        headers: headersToRecord(res.headers),
+        text: () => Promise.resolve(text),
+      });
+    });
+    // CC-8: a mid-body socket failure emits an 'error' on the response
+    // stream. Without this listener Node throws it as an unhandled
+    // 'error' event and crashes the process; route it to the same reject
+    // path the request-level error uses (→ SnNetworkError).
+    res.on("error", (err) => reject(err));
+  };
+}
+
+/**
+ * Wire an `AbortSignal` to destroy an in-flight node request, preserving the
+ * reason's `name` (TimeoutError/AbortError) so the caller's timeout mapping
+ * works identically to the fetch path. Shared by both node transports.
+ */
+function wireAbort(req: ClientRequest, signal: AbortSignal | undefined): void {
+  if (!signal) return;
+  const onAbort = (): void => {
+    const reason = signal.reason as { name?: string; message?: string };
+    const err = new Error(reason?.message ?? "The operation was aborted.");
+    err.name = reason?.name ?? "AbortError";
+    req.destroy(err);
+  };
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
+}
+
+/**
  * Build a `node:https` transport that presents `tls`'s client certificate. It
  * adapts an `https.request` round-trip to the same {@link TransportResponse}
  * shape the fetch path yields, and mirrors the abort/timeout signalling so the
@@ -409,58 +497,158 @@ function createHttpsTransport(tls: SnTls): Transport {
           ca: tls.ca,
           passphrase: tls.passphrase,
         },
-        (res) => {
-          const status = res.statusCode ?? 0;
-          // CC-31: never follow a redirect on an API call — align with the
-          // fetch path's `redirect: "error"`. `node:https` does not auto-follow,
-          // so a 3xx would otherwise surface as a puzzling non-JSON body; fail
-          // closed the same way instead, so credentials are never re-sent to a
-          // redirect target.
-          if (status >= 300 && status < 400) {
-            res.resume(); // drain the body so the socket can be released
-            reject(
-              new Error(
-                `Refusing to follow a ${status} redirect from ${u.origin} ` +
-                  `(API requests must not redirect).`,
-              ),
-            );
-            return;
-          }
-          const chunks: Buffer[] = [];
-          res.on("data", (c: Buffer) => chunks.push(c));
-          res.on("end", () => {
-            const text = Buffer.concat(chunks).toString("utf8");
-            resolve({
-              status,
-              statusText: res.statusMessage ?? "",
-              headers: headersToRecord(res.headers),
-              text: () => Promise.resolve(text),
-            });
-          });
-          // CC-8: a mid-body socket failure emits an 'error' on the response
-          // stream. Without this listener Node throws it as an unhandled
-          // 'error' event and crashes the process; route it to the same reject
-          // path the request-level error uses (→ SnNetworkError).
-          res.on("error", (err) => reject(err));
-        },
+        nodeResponseAdapter(u.origin, resolve, reject),
       );
-      const signal = init.signal;
-      if (signal) {
-        const onAbort = (): void => {
-          const reason = signal.reason as { name?: string; message?: string };
-          const err = new Error(
-            reason?.message ?? "The operation was aborted.",
-          );
-          err.name = reason?.name ?? "AbortError";
-          req.destroy(err);
-        };
-        if (signal.aborted) onAbort();
-        else signal.addEventListener("abort", onAbort, { once: true });
-      }
+      wireAbort(req, init.signal);
       req.on("error", (err) => reject(err));
       if (init.body !== undefined) req.write(init.body);
       req.end();
     });
+}
+
+/** Strip the WHATWG-URL brackets off an IPv6 hostname for node dial options. */
+function dialHost(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]")
+    ? hostname.slice(1, -1)
+    : hostname;
+}
+
+/**
+ * Layer the end-to-end TLS session to the TARGET over an established proxy
+ * tunnel. Full certificate + hostname verification applies exactly as on a
+ * direct connection — the default `rejectUnauthorized` is untouched (OPP-5) —
+ * and the mTLS client certificate (when configured) is presented on this inner
+ * session, so the proxy never terminates the target TLS and never sees the
+ * client key.
+ *
+ * An abort/timeout on `signal` is honoured during the handshake too: `tlsConnect`
+ * has no built-in timeout and the tunnel socket would otherwise keep the inner
+ * handshake hanging past the request deadline. On abort the half-open TLS socket
+ * is destroyed and the promise rejects, preserving the reason's `name`
+ * (TimeoutError/AbortError) so the client's timeout mapping is identical to a
+ * direct connection. The listener is removed once the handshake settles, so a
+ * later abort during the HTTP exchange is handled by the request, not here.
+ */
+function tlsOverTunnel(
+  tunnel: Socket,
+  hostname: string,
+  tls: SnTls | undefined,
+  signal?: AbortSignal,
+): Promise<TLSSocket> {
+  return new Promise<TLSSocket>((resolve, reject) => {
+    const host = dialHost(hostname);
+
+    const abortError = (): Error => {
+      const reason = signal?.reason as { name?: string; message?: string };
+      const err = new Error(reason?.message ?? "The operation was aborted.");
+      // Preserve the reason's name (TimeoutError/AbortError) so a handshake
+      // timeout maps exactly like a direct-connection one.
+      err.name = reason?.name ?? "AbortError";
+      return err;
+    };
+
+    // Already aborted before the handshake even starts: reject without opening
+    // the inner session (the caller destroys the tunnel).
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+
+    let settled = false;
+    let onAbort: (() => void) | undefined;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+      fn();
+    };
+
+    const tlsSocket = tlsConnect(
+      {
+        socket: tunnel,
+        // `host` drives the certificate identity check (an IP target is
+        // verified against the certificate's IP SANs).
+        host,
+        // SNI only for names — RFC 6066 forbids IP literals in server_name.
+        servername: isIP(host) ? undefined : host,
+        cert: tls?.cert,
+        key: tls?.key,
+        ca: tls?.ca,
+        passphrase: tls?.passphrase,
+      },
+      () => {
+        settle(() => resolve(tlsSocket));
+      },
+    );
+    // Kept attached after settling as a guard against an unhandled 'error'
+    // event in the window before the request wires its own listener; the
+    // request's listener receives the same event and surfaces it.
+    tlsSocket.on("error", (err: Error) => {
+      settle(() => reject(err));
+    });
+    if (signal) {
+      onAbort = (): void => {
+        // Stop the hanging handshake and reject; settle() has already detached
+        // this listener by the time it runs on a normal completion.
+        tlsSocket.destroy();
+        settle(() => reject(abortError()));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+/**
+ * Perform one round-trip through an HTTP(S) forward proxy (SR-5): CONNECT
+ * tunnel, end-to-end TLS to the target, then the HTTP exchange over the
+ * tunneled TLS session. The exchange goes through `node:http` — the TLS
+ * session already exists, so the plain-HTTP writer is simply handed the
+ * secured socket via `createConnection`. Redirect refusal (CC-31), abort
+ * mapping and body handling are shared with the direct node transport, so a
+ * proxied request behaves identically to a direct one.
+ */
+async function proxiedNodeRequest(
+  url: string,
+  init: TransportInit,
+  proxy: URL,
+  tls: SnTls | undefined,
+): Promise<TransportResponse> {
+  const u = new URL(url);
+  const port = u.port ? Number(u.port) : 443;
+  const tunnel = await openProxyTunnel(
+    proxy,
+    { host: u.hostname, port },
+    init.signal,
+  );
+  let tlsSocket: TLSSocket;
+  try {
+    tlsSocket = await tlsOverTunnel(tunnel, u.hostname, tls, init.signal);
+  } catch (cause) {
+    tunnel.destroy();
+    throw cause;
+  }
+  return new Promise<TransportResponse>((resolve, reject) => {
+    const req = httpRequest(
+      {
+        method: init.method,
+        host: u.hostname,
+        port,
+        // `node:http` would otherwise treat 80 as the default port and render
+        // `Host: example.com:443`; the tunneled scheme is https.
+        defaultPort: 443,
+        path: `${u.pathname}${u.search}`,
+        headers: init.headers,
+        // The socket is already connected AND secured end-to-end; without an
+        // `agent`, node uses this connection as-is (one shot, no keep-alive).
+        createConnection: () => tlsSocket,
+      },
+      nodeResponseAdapter(u.origin, resolve, reject),
+    );
+    wireAbort(req, init.signal);
+    req.on("error", (err) => reject(err));
+    if (init.body !== undefined) req.write(init.body);
+    req.end();
+  });
 }
 
 /** Base64url-encode a string or buffer (no padding). */
@@ -995,11 +1183,33 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
   }
   const origin = parsedUrl.origin;
   const timeoutMs = cfg.timeoutMs ?? 30_000;
+  // OPP-4: validate an explicitly configured proxy URL at construction — a
+  // malformed value must fail fast here, never silently bypass the proxy.
+  if (typeof cfg.proxy === "string" && cfg.proxy.trim() !== "") {
+    try {
+      parseProxyUrl(cfg.proxy, "SnClientConfig.proxy");
+    } catch (cause) {
+      throw new SnError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
   // Mutual TLS routes over a `node:https` transport (to present the client
   // cert); every other case uses the global `fetch`.
-  const transport: Transport = cfg.tls
+  const directTransport: Transport = cfg.tls
     ? createHttpsTransport(cfg.tls)
     : fetchTransport;
+  // SR-5: honour HTTP(S) proxy configuration on BOTH transports. The verdict
+  // is re-evaluated for every request URL — so the OAuth token endpoint (which
+  // may live on another host) gets its own NO_PROXY decision, and since the
+  // client never follows redirects (CC-31), per-request is also per-hop. When
+  // a proxy applies, the request routes through the CONNECT-tunnel transport
+  // regardless of which direct transport would otherwise serve it; a malformed
+  // env-sourced proxy value throws here and surfaces as SnNetworkError (OPP-7)
+  // rather than ever silently bypassing the proxy (OPP-4).
+  const transport: Transport = async (url, init) => {
+    const proxy = resolveProxy(url, { proxy: cfg.proxy, noProxy: cfg.noProxy });
+    if (!proxy) return directTransport(url, init);
+    return proxiedNodeRequest(url, init, proxy, cfg.tls);
+  };
   const authProvider = buildAuthProvider(
     cfg.auth,
     transport,

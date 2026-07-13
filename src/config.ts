@@ -42,6 +42,21 @@ export interface PreflightConfig {
   checks?: Record<string, Record<string, unknown>>;
   /** Arbitrary options forwarded to checks. */
   options?: Record<string, unknown>;
+  /**
+   * Outbound HTTP(S) forward proxy URL for reaching the instance (SR-5).
+   * Mirrors `SNPF_PROXY` (the config file wins when both are present) and is
+   * handed to the client as its explicit proxy, which outranks the standard
+   * `HTTPS_PROXY`/`https_proxy` variables. Proxy credentials belong in the
+   * URL userinfo of the `SNPF_PROXY` environment variable, not in this file —
+   * the config file must stay committable.
+   */
+  proxy?: string;
+  /**
+   * Extra `NO_PROXY`-style bypass entries (mirrors `SNPF_NO_PROXY`), merged
+   * with `NO_PROXY`/`no_proxy`: comma-separated hostnames or host suffixes,
+   * each with an optional `:port`, or `*` to force direct connections.
+   */
+  noProxy?: string;
 }
 
 /** What {@link loadConfig} resolves: the file config plus resolved auth. */
@@ -91,6 +106,10 @@ const ENV = {
   mtlsKey: "SNPF_MTLS_KEY",
   mtlsCa: "SNPF_MTLS_CA",
   mtlsPassphrase: "SNPF_MTLS_PASSPHRASE",
+  /** Outbound proxy URL (mirrors the config file's `proxy`) — SR-5. */
+  proxy: "SNPF_PROXY",
+  /** Extra proxy-bypass entries (mirrors the config file's `noProxy`) — SR-5. */
+  noProxy: "SNPF_NO_PROXY",
 } as const;
 
 /**
@@ -501,6 +520,19 @@ export async function loadConfig(
   if (!config.updateSetId) {
     const envUpdateSet = env[ENV.updateSet]?.trim();
     if (envUpdateSet) config.updateSetId = envUpdateSet;
+  }
+
+  // The proxy settings may likewise come from the environment (SR-5); the
+  // config file wins when both are present. Within the client's proxy
+  // precedence these count as "explicit configuration" and outrank the
+  // standard HTTPS_PROXY/https_proxy variables (OPP-2).
+  if (!config.proxy) {
+    const envProxy = env[ENV.proxy]?.trim();
+    if (envProxy) config.proxy = envProxy;
+  }
+  if (!config.noProxy) {
+    const envNoProxy = env[ENV.noProxy]?.trim();
+    if (envNoProxy) config.noProxy = envNoProxy;
   }
 
   // Fail closed at load time on config values that would inject into an encoded

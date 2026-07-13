@@ -14,6 +14,23 @@ import { createSnClient, SnNetworkError } from "../../build/http/client.js";
  * fixtures live under `test/fixtures/tls/` (server + client key pairs).
  */
 
+// SR-5: the client honours proxy environment variables per request. These
+// tests need direct connections to their local servers, so scrub any proxy
+// variables the host machine may carry (node --test runs each file in its own
+// process, so this cannot leak into other suites).
+for (const name of [
+  "SNPF_PROXY",
+  "SNPF_NO_PROXY",
+  "HTTPS_PROXY",
+  "https_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "NO_PROXY",
+  "no_proxy",
+]) {
+  delete process.env[name];
+}
+
 const fixture = (name) =>
   readFileSync(
     fileURLToPath(new URL(`../fixtures/tls/${name}`, import.meta.url)),
