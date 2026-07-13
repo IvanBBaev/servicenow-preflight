@@ -89,7 +89,7 @@ function makeResult(
  * (logical `id`s or names). This is what lets the same logical suite run against
  * dev / staging / test / prod with each instance's own ids.
  */
-function resolveSuiteIds(ctx: PreflightContext): string[] {
+export function resolveSuiteIds(ctx: PreflightContext): string[] {
   const opts = ctx.options ?? {};
   const ids: string[] = [];
 

@@ -203,10 +203,16 @@ test("pullManifest without withLastRun never reads the result table", async () =
   });
 
   const readTables = calls.map((c) => c.table);
+  // The ATF tables plus the version-capture reads (OPP-1 / OPP-5) — but never
+  // sys_atf_test_result without withLastRun.
   assert.deepEqual([...new Set(readTables)].sort(), [
+    "sys_app",
     "sys_atf_test",
     "sys_atf_test_suite",
     "sys_atf_test_suite_test",
+    "sys_plugins",
+    "sys_properties",
+    "sys_store_app",
   ]);
   assert.ok(!readTables.includes("sys_atf_test_result"));
   for (const t of m.tests) assert.equal(t.lastRun, undefined);
@@ -969,4 +975,285 @@ test("syncManifest propagates the underlying pull failure (never swallows it)", 
       return true;
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// Version capture — instance identity (OPP-1) and installed apps (OPP-5).
+// ---------------------------------------------------------------------------
+
+/**
+ * Seed rows for the version-capture tables on top of the ATF footprint, with
+ * the interesting edge rows built in: an SN-5 `latest_version` trap, a
+ * scopeless app, a versionless app, a plugin keyed by `source`, and a
+ * versionless plugin.
+ */
+function versionSeedRows() {
+  return {
+    ...seedRows(),
+    sys_properties: [
+      { sys_id: "p1", name: "glide.buildname", value: "Xanadu" },
+      { sys_id: "p2", name: "glide.war", value: "glide-xanadu-07-02-2026" },
+      // Unrelated property — must never leak into the identity.
+      { sys_id: "p3", name: "glide.installation.name", value: "Dev" },
+    ],
+    sys_store_app: [
+      {
+        sys_id: "sa1",
+        scope: "x_store_app",
+        name: "Store App",
+        version: "2.0.0",
+        // SN-5 trap: the store's newest AVAILABLE version — must never be read.
+        latest_version: "9.9.9",
+      },
+    ],
+    sys_app: [
+      {
+        sys_id: "a1",
+        scope: "x_custom_app",
+        name: "Custom App",
+        version: "1.5.0",
+      },
+      // No scope — cannot be keyed by id, dropped.
+      { sys_id: "a2", scope: "", name: "Scopeless" },
+      // No version — still recorded: presence drives missing-on-target (OPP-5).
+      { sys_id: "a3", scope: "x_versionless", name: "Versionless App" },
+    ],
+    sys_plugins: [
+      {
+        sys_id: "pl1",
+        id: "com.snc.incident",
+        name: "Incident",
+        version: "10.0.1",
+      },
+      // No `id` value; the capture must fall back to `source`.
+      {
+        sys_id: "pl2",
+        source: "com.snc.source_only",
+        name: "Source Only",
+        version: "1.1",
+      },
+      // No version — a plugin carries no comparable signal without one, dropped.
+      { sys_id: "pl3", id: "com.snc.no_version", name: "No Version" },
+    ],
+  };
+}
+
+function versionSeededClient() {
+  return createFakeSnClient({
+    tables: versionSeedRows(),
+    queryFilter: scopeAwareFilter,
+  });
+}
+
+test("pullManifest captures the platform identity from sys_properties (OPP-1)", async () => {
+  const m = await pullManifest(versionSeededClient(), "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(m.identity, {
+    buildName: "Xanadu",
+    war: "glide-xanadu-07-02-2026",
+  });
+});
+
+test("identity read goes through the validated IN builder and pins its fields (SR-1)", async () => {
+  const { client, calls } = tracked(versionSeededClient());
+  await pullManifest(client, "dev", undefined, { scope: "x_acme_app" });
+  const propCalls = calls.filter((c) => c.table === "sys_properties");
+  assert.equal(propCalls.length, 1);
+  assert.equal(
+    propCalls[0].params.sysparm_query,
+    "nameINglide.buildname,glide.war",
+  );
+  assert.equal(propCalls[0].params.sysparm_fields, "name,value");
+});
+
+test("pullManifest captures the installed app/plugin inventory (OPP-5)", async () => {
+  const m = await pullManifest(versionSeededClient(), "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  const byId = new Map(m.apps.map((a) => [a.id, a]));
+  assert.deepEqual(byId.get("x_store_app"), {
+    id: "x_store_app",
+    name: "Store App",
+    version: "2.0.0",
+  });
+  assert.deepEqual(byId.get("x_custom_app"), {
+    id: "x_custom_app",
+    name: "Custom App",
+    version: "1.5.0",
+  });
+  // Recorded WITHOUT a version: presence alone drives missing-on-target.
+  assert.deepEqual(byId.get("x_versionless"), {
+    id: "x_versionless",
+    name: "Versionless App",
+  });
+  assert.deepEqual(byId.get("com.snc.incident"), {
+    id: "com.snc.incident",
+    name: "Incident",
+    version: "10.0.1",
+  });
+  // Plugin with a blank `id` is keyed by `source`.
+  assert.deepEqual(byId.get("com.snc.source_only"), {
+    id: "com.snc.source_only",
+    name: "Source Only",
+    version: "1.1",
+  });
+  // Scopeless app and versionless plugin are dropped.
+  assert.equal(byId.has("com.snc.no_version"), false);
+  assert.equal(byId.size, 5);
+});
+
+test("app capture reads the INSTALLED version column, never latest_version (SN-5)", async () => {
+  const rows = versionSeedRows();
+  rows.sys_store_app.push({
+    sys_id: "sa2",
+    scope: "x_not_yet_upgraded",
+    name: "Not Yet Upgraded",
+    // Only the store's newest available version exists; the installed
+    // `version` column is blank → the entry must carry NO version at all.
+    latest_version: "4.0.0",
+  });
+  const client = createFakeSnClient({
+    tables: rows,
+    queryFilter: scopeAwareFilter,
+  });
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(
+    m.apps.find((a) => a.id === "x_not_yet_upgraded"),
+    { id: "x_not_yet_upgraded", name: "Not Yet Upgraded" },
+  );
+  // And the seeded installed version is captured as-is, not the 9.9.9 trap.
+  assert.equal(m.apps.find((a) => a.id === "x_store_app").version, "2.0.0");
+});
+
+test("app capture dedupes by id with store > scoped app > plugin precedence (OPP-5)", async () => {
+  const rows = versionSeedRows();
+  rows.sys_store_app.push({
+    sys_id: "d1",
+    scope: "x_dup",
+    name: "Store Wins",
+    version: "2.0.0",
+  });
+  rows.sys_app.push({
+    sys_id: "d2",
+    scope: "x_dup",
+    name: "App Loses",
+    version: "1.0.0",
+  });
+  rows.sys_plugins.push({
+    sys_id: "d3",
+    id: "x_dup",
+    name: "Plugin Loses",
+    version: "0.5",
+  });
+  rows.sys_plugins.push({
+    sys_id: "d4",
+    id: "x_custom_app",
+    name: "Plugin Loses Too",
+    version: "0.1",
+  });
+  const client = createFakeSnClient({
+    tables: rows,
+    queryFilter: scopeAwareFilter,
+  });
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  const dup = m.apps.filter((a) => a.id === "x_dup");
+  assert.equal(dup.length, 1);
+  assert.deepEqual(dup[0], {
+    id: "x_dup",
+    name: "Store Wins",
+    version: "2.0.0",
+  });
+  // The sys_app row wins over the plugin carrying the same id.
+  assert.equal(m.apps.find((a) => a.id === "x_custom_app").version, "1.5.0");
+});
+
+test("a security-trimmed app read drops the whole inventory — partial would mis-gate (SN-1/OPP-5)", async () => {
+  const client = createFakeSnClient({
+    tables: versionSeedRows(),
+    queryFilter: scopeAwareFilter,
+    // More matching rows than visible ones on ONE of the three app tables.
+    totalCounts: { sys_store_app: 10 },
+  });
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.equal(m.apps, undefined);
+  // The identity is captured independently of the app inventory.
+  assert.deepEqual(m.identity, {
+    buildName: "Xanadu",
+    war: "glide-xanadu-07-02-2026",
+  });
+});
+
+test("a failing capture read records absence but the sync still succeeds (OPP-1/OPP-5)", async () => {
+  const client = createFakeSnClient({
+    tables: versionSeedRows(),
+    queryFilter: scopeAwareFilter,
+    fail: {
+      table: {
+        sys_properties: { http: 403, message: "ACL denies sys_properties" },
+        sys_plugins: { http: 403, message: "ACL denies sys_plugins" },
+      },
+    },
+  });
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.equal(m.identity, undefined);
+  // ONE of the three app reads failing drops the whole inventory.
+  assert.equal(m.apps, undefined);
+  // The ATF snapshot itself is unaffected — the sync did not abort.
+  assert.equal(m.tests.length, 2);
+});
+
+test("blank property values are recorded as absent, never fabricated (OPP-1)", async () => {
+  const rows = versionSeedRows();
+  rows.sys_properties = [
+    { sys_id: "p1", name: "glide.buildname", value: "" },
+    { sys_id: "p2", name: "glide.war", value: "glide-only.war" },
+  ];
+  const client = createFakeSnClient({
+    tables: rows,
+    queryFilter: scopeAwareFilter,
+  });
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(m.identity, { war: "glide-only.war" });
+});
+
+test("an all-empty, untrimmed inventory reads as never captured (OPP-1/OPP-5)", async () => {
+  // The base seeded client has no version tables at all: every capture read
+  // returns zero rows with no trim signal. A real instance always has plugins,
+  // so all-empty is treated as unproven ACL trimming → absent, not [].
+  const m = await pullManifest(seededClient(), "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.equal(m.identity, undefined);
+  assert.equal(m.apps, undefined);
+});
+
+test("syncManifest carries identity and apps from the fresh snapshot through the merge (OPP-1/OPP-5)", async () => {
+  const committed = {
+    instance: "dev",
+    tests: [{ id: "x_acme_app/login-works", name: "Login Works" }],
+    suites: [],
+  };
+  const m = await syncManifest(
+    versionSeededClient(),
+    "dev",
+    undefined,
+    committed,
+    { scope: "x_acme_app" },
+  );
+  assert.deepEqual(m.identity, {
+    buildName: "Xanadu",
+    war: "glide-xanadu-07-02-2026",
+  });
+  assert.ok(m.apps.some((a) => a.id === "x_store_app"));
 });

@@ -1,5 +1,6 @@
 import type { Check, CheckResult, CheckStatus } from "../types.js";
 import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
+import { compareVersions } from "../versions.js";
 
 const NAME = "scoped-app-deps";
 
@@ -87,40 +88,9 @@ function rowVersion(row: Record<string, unknown>): string | undefined {
   return str(row, "version");
 }
 
-/**
- * Parse a dot-separated version into numeric segments, or `null` when ANY
- * segment is non-numeric (or the string is empty). Returning `null` — rather
- * than silently coercing a non-numeric segment to 0 — lets the caller surface
- * "cannot parse" instead of a misleading comparison (CC-43).
- */
-function parseVersion(version: string): number[] | null {
-  const parts = version.split(".");
-  const out: number[] = [];
-  for (const part of parts) {
-    const segment = part.trim();
-    if (!/^\d+$/.test(segment)) return null;
-    out.push(Number.parseInt(segment, 10));
-  }
-  return out.length > 0 ? out : null;
-}
-
-/**
- * Compare two dot-separated versions numerically. Returns a negative number
- * when `a < b`, zero when equal, positive when `a > b`, or `null` when either
- * side has a non-numeric segment and cannot be compared (CC-43).
- */
-function compareVersions(a: string, b: string): number | null {
-  const pa = parseVersion(a);
-  const pb = parseVersion(b);
-  if (pa === null || pb === null) return null;
-  const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i++) {
-    const va = pa[i] ?? 0;
-    const vb = pb[i] ?? 0;
-    if (va !== vb) return va - vb;
-  }
-  return 0;
-}
+// `parseVersion` / `compareVersions` were extracted verbatim to
+// `src/versions.ts` (CC-43) so the sync/drift promote gate (OPP-1/OPP-5)
+// compares versions with exactly the same semantics as this check.
 
 /**
  * Resolve one required app against the fetched scoped-app rows (`sys_store_app`

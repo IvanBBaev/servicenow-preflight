@@ -90,6 +90,8 @@ export {
   type AtfSuiteState,
   type AtfCoverage,
   type AtfRunRef,
+  type InstanceIdentity,
+  type InstalledAppState,
 } from "./state/manifest.js";
 export {
   pullManifest,
@@ -109,6 +111,9 @@ export {
   instanceUrlConfigured,
   connectivityAuth,
   updateSetState,
+  defaultSetLeakage,
+  remoteSetPreview,
+  atfEnablement,
   atfRun,
   scopedAppDeps,
   i18nCompleteness,

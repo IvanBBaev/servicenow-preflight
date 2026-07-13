@@ -1,5 +1,5 @@
 import type { SnClient } from "../http/client.js";
-import { and, eq, scopeFilterClause } from "../http/query.js";
+import { and, eq, inClause, scopeFilterClause } from "../http/query.js";
 import {
   emptyManifest,
   logicalId,
@@ -8,6 +8,8 @@ import {
   type AtfRunRef,
   type AtfSuiteState,
   type AtfTestState,
+  type InstalledAppState,
+  type InstanceIdentity,
   type StateManifest,
 } from "./manifest.js";
 
@@ -26,6 +28,16 @@ const TEST_TABLE = "sys_atf_test";
 const SUITE_TABLE = "sys_atf_test_suite";
 const SUITE_TEST_TABLE = "sys_atf_test_suite_test";
 const TEST_RESULT_TABLE = "sys_atf_test_result";
+
+/** Version-capture tables read during a sync (OPP-1 / OPP-5). */
+const PROPERTIES_TABLE = "sys_properties";
+const STORE_APP_TABLE = "sys_store_app";
+const APP_TABLE = "sys_app";
+const PLUGIN_TABLE = "sys_plugins";
+
+/** The `sys_properties` names that identify the platform build (OPP-1). */
+const BUILD_NAME_PROPERTY = "glide.buildname";
+const WAR_PROPERTY = "glide.war";
 
 /**
  * Fields requested for the test read (CC-15). `sys_scope.scope` is the crucial
@@ -292,6 +304,129 @@ async function attachLastRuns(
 }
 
 /**
+ * Read the platform version identity from `sys_properties` (OPP-1). Both
+ * property names go through the validated builder ({@link inClause}) — never
+ * raw string interpolation (SR-1). A property that is unreadable, ACL-hidden,
+ * or blank is recorded as absent, never fabricated; when both are absent the
+ * whole identity is absent and drift reports an advisory instead of gating.
+ */
+async function pullIdentity(
+  client: SnClient,
+): Promise<InstanceIdentity | undefined> {
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await client.table(PROPERTIES_TABLE).query({
+      sysparm_query: inClause("name", [BUILD_NAME_PROPERTY, WAR_PROPERTY]),
+      sysparm_fields: "name,value",
+    });
+  } catch {
+    // Version capture is best-effort: the ATF reads (which ran first) already
+    // surfaced real auth/network problems, so a failure here is most likely an
+    // ACL on sys_properties. Record honest absence rather than aborting the
+    // sync — drift downgrades absence to an advisory (OPP-1).
+    return undefined;
+  }
+  const identity: InstanceIdentity = {};
+  for (const row of rows) {
+    const name = str(row.name);
+    const value = str(row.value);
+    if (!value) continue;
+    if (name === BUILD_NAME_PROPERTY) identity.buildName = value;
+    else if (name === WAR_PROPERTY) identity.war = value;
+  }
+  return identity.buildName !== undefined || identity.war !== undefined
+    ? identity
+    : undefined;
+}
+
+/**
+ * Read the installed app/plugin inventory (OPP-5): `sys_store_app` and
+ * `sys_app` rows keyed by scope, plus `sys_plugins` entries that carry a
+ * version. Only the INSTALLED `version` column is ever read — never
+ * `latest_version`, which is the store's newest available and would let an
+ * outdated app masquerade as current (SN-5).
+ *
+ * Returns `undefined` (never captured) when:
+ * - any of the three reads throws (best-effort, see {@link pullIdentity});
+ * - any read was security-trimmed — a PARTIAL inventory would produce false
+ *   "missing on target" failures at drift time, so it is dropped whole;
+ * - all three reads are empty and untrimmed — a real instance always has
+ *   plugins, so all-empty almost certainly means ACL trimming the client
+ *   could not prove (mirrors the SN-1 reasoning for ATF rows).
+ */
+async function pullApps(
+  client: SnClient,
+): Promise<InstalledAppState[] | undefined> {
+  let storeRows: Record<string, unknown>[];
+  let appRows: Record<string, unknown>[];
+  let pluginRows: Record<string, unknown>[];
+  try {
+    // Store/scoped apps are read unfiltered so scope + installed version are
+    // captured even for inactive ones; plugins are filtered to active with a
+    // static literal query (no dynamic value — SR-1 does not apply).
+    const [store, app, plugin] = await Promise.all([
+      client.table(STORE_APP_TABLE).queryWithMeta({
+        sysparm_fields: "sys_id,scope,name,version",
+      }),
+      client.table(APP_TABLE).queryWithMeta({
+        sysparm_fields: "sys_id,scope,name,version",
+      }),
+      client.table(PLUGIN_TABLE).queryWithMeta({
+        sysparm_query: "active=true",
+        sysparm_fields: "sys_id,id,source,name,version",
+      }),
+    ]);
+    if (store.securityTrimmed || app.securityTrimmed || plugin.securityTrimmed)
+      return undefined;
+    storeRows = store.rows;
+    appRows = app.rows;
+    pluginRows = plugin.rows;
+  } catch {
+    return undefined;
+  }
+
+  if (
+    storeRows.length === 0 &&
+    appRows.length === 0 &&
+    pluginRows.length === 0
+  ) {
+    return undefined;
+  }
+
+  // Dedupe by id with precedence store app > scoped app > plugin: a store app
+  // is the authoritative installed record for its scope.
+  const apps = new Map<string, InstalledAppState>();
+  const addScoped = (row: Record<string, unknown>): void => {
+    const id = str(row.scope);
+    if (!id || apps.has(id)) return;
+    const entry: InstalledAppState = { id };
+    const name = str(row.name);
+    if (name) entry.name = name;
+    // SN-5: the installed `version` column only — never `latest_version`.
+    const version = str(row.version);
+    if (version) entry.version = version;
+    // Recorded even without a version: presence alone drives the
+    // missing-on-target failure mode at drift time (OPP-5).
+    apps.set(id, entry);
+  };
+  storeRows.forEach(addScoped);
+  appRows.forEach(addScoped);
+  for (const row of pluginRows) {
+    const id = str(row.id) || str(row.source);
+    if (!id || apps.has(id)) continue;
+    // Plugins without a version carry no comparable signal (unlike apps, whose
+    // presence is meaningful per scope), so only versioned ones are recorded.
+    const version = str(row.version);
+    if (!version) continue;
+    const entry: InstalledAppState = { id, version };
+    const name = str(row.name);
+    if (name) entry.name = name;
+    apps.set(id, entry);
+  }
+  return [...apps.values()];
+}
+
+/**
  * Pull a fresh snapshot plus the `securityTrimmed` signal. Shared by
  * {@link pullManifest} (which drops the signal) and {@link syncManifest} (which
  * uses it to harden the SN-1 empty-snapshot guard).
@@ -321,10 +456,20 @@ async function pullSnapshot(
   assertNoLogicalIdCollisions(tests, "test");
   assertNoLogicalIdCollisions(suites, "suite");
 
+  // Version capture (OPP-1 / OPP-5) — best-effort AFTER the ATF reads, so a
+  // real auth/network problem has already propagated; a capture-only failure
+  // records honest absence and the sync still succeeds.
+  const [identity, apps] = await Promise.all([
+    pullIdentity(client),
+    pullApps(client),
+  ]);
+
   const manifest = emptyManifest(instance, url, opts.scope);
   manifest.tests = tests;
   manifest.suites = suites;
   if (opts.now) manifest.syncedAt = opts.now;
+  if (identity) manifest.identity = identity;
+  if (apps) manifest.apps = apps;
   return { manifest, securityTrimmed: testsTrimmed || suitesTrimmed };
 }
 

@@ -4,8 +4,11 @@ import assert from "node:assert/strict";
 import {
   computeDrift,
   stalenessResults,
+  versionParityResults,
   FRESHNESS_CHECK,
   DEFAULT_STALE_WARN_MS,
+  INSTANCE_VERSION_CHECK,
+  APP_VERSION_CHECK,
 } from "../../build/state/drift.js";
 
 /**
@@ -314,4 +317,357 @@ test("stalenessResults formats a sub-second age as 0s and defaults now to Date.n
   assert.equal(results.length, 1);
   assert.equal(results[0].status, "warn");
   assert.match(results[0].message, /0s/);
+});
+
+// --- versionParityResults (OPP-1 / OPP-5) ------------------------------------
+
+/** Build a manifest fixture with optional version-capture fields. */
+function versioned(instance, { identity, apps } = {}) {
+  return {
+    instance,
+    ...(identity ? { identity } : {}),
+    ...(apps ? { apps } : {}),
+    tests: [],
+    suites: [],
+  };
+}
+
+/** Split parity results by check name for targeted assertions. */
+function byCheck(results) {
+  return {
+    instance: results.filter((r) => r.name === INSTANCE_VERSION_CHECK),
+    apps: results.filter((r) => r.name === APP_VERSION_CHECK),
+  };
+}
+
+const FULL_IDENTITY = { buildName: "Xanadu", war: "glide-xanadu-07-02-2026" };
+
+test("version-parity check names are stable", () => {
+  assert.equal(INSTANCE_VERSION_CHECK, "instance-version-parity");
+  assert.equal(APP_VERSION_CHECK, "app-version-parity");
+});
+
+test("manifests that predate version capture yield exactly two advisory warns", () => {
+  // Both sides written before OPP-1/OPP-5 existed: no identity, no apps. Drift
+  // must degrade to an advisory — never crash, never fail purely for absence.
+  const results = versionParityResults(versioned("staging"), versioned("prod"));
+  assert.equal(results.length, 2);
+  for (const r of results) {
+    assert.equal(r.status, "warn");
+    assert.match(r.message, /predates version capture/);
+    assert.match(r.message, /re-run sync/);
+  }
+  const { instance, apps } = byCheck(results);
+  assert.equal(instance.length, 1);
+  assert.equal(apps.length, 1);
+});
+
+test("a single side lacking identity is named in the advisory warn", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: FULL_IDENTITY, apps: [] }),
+    versioned("prod", { apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance.length, 1);
+  assert.equal(instance[0].status, "warn");
+  assert.match(instance[0].message, /target "prod"/);
+  assert.doesNotMatch(instance[0].message, /source "staging"/);
+});
+
+test("a glide.buildname mismatch fails the promote gate (OPP-1)", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: { buildName: "Xanadu", war: "w1" },
+      apps: [],
+    }),
+    versioned("prod", {
+      identity: { buildName: "Washington", war: "w1" },
+      apps: [],
+    }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance.length, 1);
+  assert.equal(instance[0].status, "fail");
+  assert.match(instance[0].message, /Xanadu/);
+  assert.match(instance[0].message, /Washington/);
+  assert.match(instance[0].message, /mismatch/i);
+});
+
+test("matching buildnames with differing glide.war warn on patch-level skew", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: { buildName: "Xanadu", war: "glide-a" },
+      apps: [],
+    }),
+    versioned("prod", {
+      identity: { buildName: "Xanadu", war: "glide-b" },
+      apps: [],
+    }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.match(instance[0].message, /patch levels differ/);
+  assert.match(instance[0].message, /glide-a/);
+  assert.match(instance[0].message, /glide-b/);
+});
+
+test("identical platform identities pass with explicit positive evidence", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: FULL_IDENTITY, apps: [] }),
+    versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "pass");
+  assert.match(instance[0].message, /Xanadu/);
+});
+
+test("an unreadable buildname on one side warns as unverified (fail-closed)", () => {
+  // Identity captured, but glide.buildname itself was ACL-hidden at sync time.
+  const results = versionParityResults(
+    versioned("staging", { identity: { war: "glide-a" }, apps: [] }),
+    versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.match(instance[0].message, /unverified/);
+  assert.match(instance[0].message, /source "staging"/);
+});
+
+test("matching buildnames with an unreadable war on one side warn as unverified", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: { buildName: "Xanadu" }, apps: [] }),
+    versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.match(instance[0].message, /patch-level parity is unverified/);
+});
+
+test("an app recorded on the source but missing on the target warns, not fails (OPP-5)", () => {
+  // Absence alone is expected on a first-ever deploy or for in-development
+  // apps — advisory, never a blocking fail (the OPP-5 false-fail fix).
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_acme_app", name: "Acme App", version: "1.2.3" }],
+    }),
+    versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
+  );
+  const { apps } = byCheck(results);
+  assert.equal(apps.length, 1);
+  assert.equal(apps[0].status, "warn");
+  assert.match(apps[0].message, /not installed on target "prod"/);
+  assert.match(apps[0].message, /x_acme_app \(Acme App\)/);
+  assert.match(apps[0].message, /confirm each is intended/);
+});
+
+test("a target version below the source version fails (downgrade)", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_acme_app", version: "2.1.0" }],
+    }),
+    versioned("prod", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_acme_app", version: "2.0.5" }],
+    }),
+  );
+  const { apps } = byCheck(results);
+  assert.equal(apps[0].status, "fail");
+  assert.match(apps[0].message, /lower version/);
+  assert.match(apps[0].message, /2\.0\.5/);
+  assert.match(apps[0].message, /2\.1\.0/);
+});
+
+test("a missing app warns while a real downgrade fails (OPP-5 split)", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: FULL_IDENTITY,
+      apps: [
+        { id: "x_missing", version: "1.0.0" },
+        { id: "x_regressed", version: "2.0.0" },
+      ],
+    }),
+    versioned("prod", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_regressed", version: "1.5.0" }],
+    }),
+  );
+  const { apps } = byCheck(results);
+  assert.equal(apps.length, 2);
+  const fail = apps.find((r) => r.status === "fail");
+  const warn = apps.find((r) => r.status === "warn");
+  // The downgrade blocks and names only the regressed app.
+  assert.match(fail.message, /blocks the promote/);
+  assert.match(fail.message, /x_regressed/);
+  assert.doesNotMatch(fail.message, /x_missing/);
+  // The missing app is advisory only.
+  assert.match(warn.message, /x_missing/);
+  assert.match(warn.message, /not installed on target/);
+});
+
+test("a target version equal or newer than the source passes", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: FULL_IDENTITY,
+      apps: [
+        { id: "x_same", version: "1.0.0" },
+        { id: "x_newer", version: "1.2" },
+      ],
+    }),
+    versioned("prod", {
+      identity: FULL_IDENTITY,
+      apps: [
+        { id: "x_same", version: "1.0.0" },
+        // Newer on the target is fine; zero-padding makes 1.2.0 == 1.2 too.
+        { id: "x_newer", version: "1.3.0" },
+      ],
+    }),
+  );
+  const { apps } = byCheck(results);
+  assert.equal(apps.length, 1);
+  assert.equal(apps[0].status, "pass");
+  assert.match(apps[0].message, /All 2 recorded app\(s\)/);
+});
+
+test("unparseable versions warn naming the app, never a silent pass", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_weird", version: "Madrid" }],
+    }),
+    versioned("prod", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_weird", version: "1.0.0" }],
+    }),
+  );
+  const { apps } = byCheck(results);
+  assert.equal(apps.length, 1);
+  assert.equal(apps[0].status, "warn");
+  assert.match(apps[0].message, /x_weird/);
+  assert.match(apps[0].message, /cannot be compared/);
+  assert.match(apps[0].message, /unverified/);
+});
+
+test("a source version the target cannot confirm warns as unverified", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_acme_app", version: "1.2.3" }],
+    }),
+    versioned("prod", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_acme_app" }],
+    }),
+  );
+  const { apps } = byCheck(results);
+  assert.equal(apps[0].status, "warn");
+  assert.match(apps[0].message, /x_acme_app/);
+  assert.match(apps[0].message, /unknown/);
+  assert.match(apps[0].message, /unverified/);
+});
+
+test("a versionless source app is satisfied by presence alone", () => {
+  // The source recorded no version, so presence is the only expectation.
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_acme_app" }],
+    }),
+    versioned("prod", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_acme_app", version: "9.9.9" }],
+    }),
+  );
+  const { apps } = byCheck(results);
+  assert.equal(apps[0].status, "pass");
+});
+
+test("apps present only on the target are not a finding, just a count", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_shared", version: "1.0.0" }],
+    }),
+    versioned("prod", {
+      identity: FULL_IDENTITY,
+      apps: [
+        { id: "x_shared", version: "1.0.0" },
+        { id: "x_extra_one", version: "1.0.0" },
+        { id: "x_extra_two", version: "2.0.0" },
+      ],
+    }),
+  );
+  const { apps } = byCheck(results);
+  assert.equal(apps.length, 1);
+  assert.equal(apps[0].status, "pass");
+  assert.match(apps[0].message, /2 app\(s\) present only on the target/);
+});
+
+test("an empty source app list passes with nothing to gate", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: FULL_IDENTITY, apps: [] }),
+    versioned("prod", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_whatever", version: "1.0.0" }],
+    }),
+  );
+  const { apps } = byCheck(results);
+  assert.equal(apps.length, 1);
+  assert.equal(apps[0].status, "pass");
+  assert.match(apps[0].message, /No apps recorded/);
+});
+
+test("hard failures and advisories are reported as separate app-parity results", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: FULL_IDENTITY,
+      apps: [
+        { id: "x_downgrade", version: "2.0.0" },
+        { id: "x_unverifiable", version: "1.0.0" },
+      ],
+    }),
+    versioned("prod", {
+      identity: FULL_IDENTITY,
+      apps: [{ id: "x_downgrade", version: "1.0.0" }, { id: "x_unverifiable" }],
+    }),
+  );
+  const { apps } = byCheck(results);
+  assert.equal(apps.length, 2);
+  const fail = apps.find((r) => r.status === "fail");
+  const warn = apps.find((r) => r.status === "warn");
+  assert.match(fail.message, /x_downgrade/);
+  assert.match(warn.message, /x_unverifiable/);
+});
+
+test("long offender lists truncate to three names plus a (+N more) suffix", () => {
+  const sourceApps = ["a", "b", "c", "d", "e"].map((s) => ({
+    id: `x_${s}`,
+    version: "1.0.0",
+  }));
+  const results = versionParityResults(
+    versioned("staging", { identity: FULL_IDENTITY, apps: sourceApps }),
+    versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
+  );
+  const { apps } = byCheck(results);
+  // Missing-on-target is advisory now; the truncation logic is identical.
+  assert.equal(apps[0].status, "warn");
+  assert.match(apps[0].message, /5 app\(s\)/);
+  assert.match(apps[0].message, /not installed on target/);
+  assert.match(apps[0].message, /x_a, x_b, x_c \(\+2 more\)/);
+  assert.doesNotMatch(apps[0].message, /x_d/);
+});
+
+test("versionParityResults always emits at least one result per dimension", () => {
+  // Clean pass on both dimensions still yields positive gate evidence — the
+  // deliberate contrast with stalenessResults, which is silent when fresh.
+  const clean = versionParityResults(
+    versioned("staging", { identity: FULL_IDENTITY, apps: [] }),
+    versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
+  );
+  assert.equal(clean.length, 2);
+  assert.deepEqual(
+    clean.map((r) => r.status),
+    ["pass", "pass"],
+  );
 });

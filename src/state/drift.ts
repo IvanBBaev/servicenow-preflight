@@ -1,5 +1,10 @@
 import type { CheckResult } from "../types.js";
-import type { StateManifest, AtfTestState } from "./manifest.js";
+import type {
+  InstalledAppState,
+  StateManifest,
+  AtfTestState,
+} from "./manifest.js";
+import { compareVersions } from "../versions.js";
 
 /**
  * Test drift between two instances — the payoff of committing manifests. Two
@@ -194,4 +199,253 @@ export function stalenessResults(
     }
   }
   return out;
+}
+
+/** Check name for the platform-version parity result a drift run emits (OPP-1). */
+export const INSTANCE_VERSION_CHECK = "instance-version-parity";
+
+/** Check name for the app/plugin version parity results a drift run emits (OPP-5). */
+export const APP_VERSION_CHECK = "app-version-parity";
+
+/** How many offending names a parity message spells out before truncating. */
+const MAX_NAMED = 3;
+
+/** Join names, truncating past {@link MAX_NAMED} with a `(+N more)` suffix. */
+function nameList(names: string[]): string {
+  if (names.length <= MAX_NAMED) return names.join(", ");
+  return `${names.slice(0, MAX_NAMED).join(", ")} (+${names.length - MAX_NAMED} more)`;
+}
+
+/** Label an app for messages: `id` plus its human name when distinct. */
+function describeApp(app: InstalledAppState): string {
+  return app.name && app.name !== app.id ? `${app.id} (${app.name})` : app.id;
+}
+
+/**
+ * Compare the platform version identity of the two manifests (OPP-1).
+ *
+ * - Either manifest lacking an `identity` block (written before version
+ *   capture, or the properties were unreadable at sync time) → ADVISORY
+ *   `warn` — never a crash, never a `fail` purely for absence.
+ * - `glide.buildname` differing → `fail`: promoting between release families
+ *   is the exact regression this gate exists to block.
+ * - Build names matching but `glide.war` differing → `warn`: patch-level skew
+ *   is worth an eyeball, not a hard block.
+ * - Any single property unreadable on one side → `warn` with explicit
+ *   "unverified" wording (fail-closed: no silent pass on unknown data).
+ */
+function instanceParityResult(
+  source: StateManifest,
+  target: StateManifest,
+): CheckResult {
+  const src = source.identity;
+  const tgt = target.identity;
+  if (!src || !tgt) {
+    const noCapture: string[] = [];
+    if (!src) noCapture.push(`source "${source.instance}"`);
+    if (!tgt) noCapture.push(`target "${target.instance}"`);
+    return {
+      name: INSTANCE_VERSION_CHECK,
+      status: "warn",
+      message: `Manifest for ${noCapture.join(" and ")} predates version capture (no platform identity recorded) — re-run sync to enable instance-version parity.`,
+    };
+  }
+
+  const noBuild: string[] = [];
+  if (src.buildName === undefined) noBuild.push(`source "${source.instance}"`);
+  if (tgt.buildName === undefined) noBuild.push(`target "${target.instance}"`);
+  if (noBuild.length > 0) {
+    return {
+      name: INSTANCE_VERSION_CHECK,
+      status: "warn",
+      message: `glide.buildname was unreadable at sync time on ${noBuild.join(" and ")}; instance-version parity is unverified — re-run sync with an account that can read sys_properties.`,
+    };
+  }
+
+  if (src.buildName !== tgt.buildName) {
+    return {
+      name: INSTANCE_VERSION_CHECK,
+      status: "fail",
+      message: `Platform version mismatch: source "${source.instance}" is on ${src.buildName} but target "${target.instance}" is on ${tgt.buildName}. Align instance versions before promoting.`,
+    };
+  }
+
+  const noWar: string[] = [];
+  if (src.war === undefined) noWar.push(`source "${source.instance}"`);
+  if (tgt.war === undefined) noWar.push(`target "${target.instance}"`);
+  if (noWar.length > 0) {
+    return {
+      name: INSTANCE_VERSION_CHECK,
+      status: "warn",
+      message: `Build names match (${src.buildName}), but glide.war was unreadable at sync time on ${noWar.join(" and ")}; patch-level parity is unverified.`,
+    };
+  }
+
+  if (src.war !== tgt.war) {
+    return {
+      name: INSTANCE_VERSION_CHECK,
+      status: "warn",
+      message: `Build names match (${src.buildName}), but patch levels differ: source glide.war is "${src.war}" while target is "${tgt.war}".`,
+    };
+  }
+
+  return {
+    name: INSTANCE_VERSION_CHECK,
+    status: "pass",
+    message: `Platform versions match: ${src.buildName} (glide.war "${src.war}").`,
+  };
+}
+
+/**
+ * Compare the recorded app/plugin inventory of the two manifests (OPP-5).
+ *
+ * - Either manifest lacking an `apps` list (pre-capture manifest, or the
+ *   capture was ACL-trimmed and dropped whole) → single ADVISORY `warn`.
+ * - App recorded on the source but absent on the target → advisory `warn`
+ *   (expected on a first-ever deploy or when the source carries in-development
+ *   apps; confirm each is intended — presence alone is not a regression).
+ * - Target's installed version LOWER than the source's → `fail` (downgrade).
+ * - Unparseable versions, or a source version the target cannot confirm →
+ *   `warn` naming the app (unverified, never a silent pass).
+ * - Apps present only on the target are not a finding — at most a count in
+ *   the pass message (extra coverage never blocks a promote).
+ *
+ * Versions compare with the same semantics as the `scoped-app-deps` check
+ * ({@link compareVersions}, CC-43); only the INSTALLED version was captured
+ * (SN-5). Returns one `fail` and/or one `warn` aggregate, or a single `pass`.
+ */
+function appParityResults(
+  source: StateManifest,
+  target: StateManifest,
+): CheckResult[] {
+  const sourceApps = source.apps;
+  const targetApps = target.apps;
+  if (!sourceApps || !targetApps) {
+    const noCapture: string[] = [];
+    if (!sourceApps) noCapture.push(`source "${source.instance}"`);
+    if (!targetApps) noCapture.push(`target "${target.instance}"`);
+    return [
+      {
+        name: APP_VERSION_CHECK,
+        status: "warn",
+        message: `Manifest for ${noCapture.join(" and ")} predates version capture (no installed-app inventory recorded, or the capture was ACL-trimmed) — re-run sync to enable app-version parity.`,
+      },
+    ];
+  }
+
+  if (sourceApps.length === 0) {
+    return [
+      {
+        name: APP_VERSION_CHECK,
+        status: "pass",
+        message: `No apps recorded on source "${source.instance}" to compare; app-version parity has nothing to gate.`,
+      },
+    ];
+  }
+
+  const targetById = new Map(targetApps.map((a) => [a.id, a]));
+  const missingOnTarget: string[] = [];
+  const downgraded: string[] = [];
+  const advisories: string[] = [];
+  for (const app of sourceApps) {
+    const label = describeApp(app);
+    const counterpart = targetById.get(app.id);
+    if (!counterpart) {
+      missingOnTarget.push(label);
+      continue;
+    }
+    // No version recorded on the source → presence is the only expectation the
+    // manifest carries for this app, and it is satisfied.
+    if (app.version === undefined) continue;
+    if (counterpart.version === undefined) {
+      advisories.push(
+        `${label}: source has ${app.version} but the target's installed version is unknown — unverified`,
+      );
+      continue;
+    }
+    const order = compareVersions(counterpart.version, app.version);
+    if (order === null) {
+      advisories.push(
+        `${label}: versions "${app.version}" (source) and "${counterpart.version}" (target) cannot be compared (non-numeric segment) — unverified`,
+      );
+      continue;
+    }
+    if (order < 0) {
+      downgraded.push(
+        `${label}: target has ${counterpart.version}, below the source's ${app.version}`,
+      );
+    }
+  }
+
+  const out: CheckResult[] = [];
+  // Only a *downgrade* — the target running an OLDER version of an app both
+  // instances carry — is a genuine regression that must block the promote. An
+  // app recorded on the source but absent on the target is expected on a
+  // first-ever deploy or when the source carries in-development apps, so it
+  // degrades to an advisory warn instead of failing every fresh target (OPP-5
+  // false-fail fix). Downgrade stays fail-closed.
+  if (downgraded.length > 0) {
+    out.push({
+      name: APP_VERSION_CHECK,
+      status: "fail",
+      message: `App version drift blocks the promote: ${downgraded.length} app(s) at a lower version on target "${target.instance}": ${nameList(downgraded)}.`,
+    });
+  }
+  const advisoryParts: string[] = [];
+  if (missingOnTarget.length > 0) {
+    advisoryParts.push(
+      `${missingOnTarget.length} app(s) recorded on source "${source.instance}" not installed on target "${target.instance}": ${nameList(missingOnTarget)} — expected on a first deploy or for in-development apps; confirm each is intended before promoting`,
+    );
+  }
+  if (advisories.length > 0) {
+    advisoryParts.push(nameList(advisories));
+  }
+  if (advisoryParts.length > 0) {
+    out.push({
+      name: APP_VERSION_CHECK,
+      status: "warn",
+      message: `App version parity has advisories: ${advisoryParts.join("; ")}.`,
+    });
+  }
+  if (out.length === 0) {
+    const extraCount = targetApps.filter(
+      (a) => !sourceApps.some((s) => s.id === a.id),
+    ).length;
+    out.push({
+      name: APP_VERSION_CHECK,
+      status: "pass",
+      message:
+        `All ${sourceApps.length} recorded app(s) present on target "${target.instance}" at matching-or-newer versions` +
+        (extraCount > 0
+          ? ` (${extraCount} app(s) present only on the target).`
+          : "."),
+    });
+  }
+  return out;
+}
+
+/**
+ * Version parity between the two manifests a drift run compares: platform
+ * identity (OPP-1) and installed app/plugin versions (OPP-5). Direction
+ * follows {@link computeDrift}: `source` is the validated upstream, `target`
+ * the promote destination.
+ *
+ * A sibling of {@link stalenessResults} on the same CLI drift path — folded
+ * into the report via `mergeResults`, NOT bolted onto the `test-drift` check,
+ * whose single result would otherwise conflate ATF coverage drift with
+ * platform/app parity. Unlike staleness (silent when fresh), each dimension
+ * also emits an explicit `pass` result when it verifies clean, so a promote
+ * gate's output positively records that version parity WAS checked.
+ *
+ * Manifests written before version capture yield ADVISORY warns ("predates
+ * version capture — re-run sync"), never a crash or a fail purely for absence.
+ */
+export function versionParityResults(
+  source: StateManifest,
+  target: StateManifest,
+): CheckResult[] {
+  return [
+    instanceParityResult(source, target),
+    ...appParityResults(source, target),
+  ];
 }

@@ -69,6 +69,36 @@ export interface AtfSuiteState {
   testIds: string[];
 }
 
+/**
+ * The instance's platform version identity at sync time (OPP-1), read from
+ * `sys_properties`. `buildName` is `glide.buildname` (the release family, e.g.
+ * `"Xanadu"`); `war` is `glide.war` (the exact build artifact, which moves on
+ * every patch). Either field may be absent when the property was unreadable or
+ * ACL-hidden at sync time — absence is recorded honestly, never fabricated.
+ */
+export interface InstanceIdentity {
+  /** Value of `glide.buildname` (release family). */
+  buildName?: string;
+  /** Value of `glide.war` (exact build / patch level). */
+  war?: string;
+}
+
+/**
+ * One installed application or versioned plugin as recorded at sync time
+ * (OPP-5). `id` is the cross-instance identity: the app scope for
+ * `sys_store_app` / `sys_app` rows, or the plugin id/source for `sys_plugins`
+ * rows. `version` is the INSTALLED version only — never `latest_version`
+ * (SN-5) — and is absent when the instance did not report one.
+ */
+export interface InstalledAppState {
+  /** Cross-instance identity (app scope, or plugin id/source). */
+  id: string;
+  /** Human-readable name (informational, for messages). */
+  name?: string;
+  /** Installed version (dot-separated); absent when not reported (SN-5). */
+  version?: string;
+}
+
 /** The parsed `<instance>.state.json`. */
 export interface StateManifest {
   /** Registry instance name this manifest belongs to. */
@@ -79,6 +109,18 @@ export interface StateManifest {
   scope?: string;
   /** ISO timestamp of the last successful sync. */
   syncedAt?: string;
+  /**
+   * Platform version identity captured at sync time (OPP-1). Absent on
+   * manifests written before version capture existed, or when the properties
+   * were unreadable — drift then reports an advisory, never a hard failure.
+   */
+  identity?: InstanceIdentity;
+  /**
+   * Installed apps/plugins captured at sync time (OPP-5). Absent on manifests
+   * written before version capture existed, or when the reads were ACL-trimmed
+   * (a partial inventory would mis-gate, so it is dropped whole).
+   */
+  apps?: InstalledAppState[];
   /** Tests present on the instance. */
   tests: AtfTestState[];
   /** Suites present on the instance. */
@@ -165,7 +207,7 @@ export async function loadManifest(
   // would silently corrupt both, so fail with the file and element index named.
   validateElements(tests, "tests", path);
   validateElements(suites, "suites", path);
-  return {
+  const loaded: StateManifest = {
     instance: m.instance ?? instance,
     url: m.url,
     scope: m.scope,
@@ -173,6 +215,57 @@ export async function loadManifest(
     tests,
     suites,
   };
+  // The version-capture keys are added only when present so a manifest written
+  // BEFORE this feature loads into an object indistinguishable from what the
+  // pre-capture loader produced (round-trip compatibility, OPP-1/OPP-5).
+  const identity = sanitizeIdentity(m.identity);
+  if (identity) loaded.identity = identity;
+  const apps = sanitizeApps(m.apps);
+  if (apps) loaded.apps = apps;
+  return loaded;
+}
+
+/**
+ * Tolerantly read the optional `identity` block (OPP-1). Manifests written
+ * before version capture have none; a hand-edited or malformed block must not
+ * crash the load — drift downgrades absence to an advisory. Only string fields
+ * survive; anything else reads as absent.
+ */
+function sanitizeIdentity(raw: unknown): InstanceIdentity | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as { buildName?: unknown; war?: unknown };
+  const identity: InstanceIdentity = {};
+  if (typeof o.buildName === "string" && o.buildName !== "") {
+    identity.buildName = o.buildName;
+  }
+  if (typeof o.war === "string" && o.war !== "") identity.war = o.war;
+  return identity.buildName !== undefined || identity.war !== undefined
+    ? identity
+    : undefined;
+}
+
+/**
+ * Tolerantly read the optional `apps` list (OPP-5). Unlike tests/suites —
+ * whose missing `id` is a hard CC-18 error because logical ids drive merge and
+ * drift reconciliation — apps are advisory version metadata: a malformed entry
+ * is dropped rather than failing the whole manifest, and a non-array value
+ * reads as never-captured.
+ */
+function sanitizeApps(raw: unknown): InstalledAppState[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const apps: InstalledAppState[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const o = entry as { id?: unknown; name?: unknown; version?: unknown };
+    if (typeof o.id !== "string" || o.id === "") continue;
+    const app: InstalledAppState = { id: o.id };
+    if (typeof o.name === "string" && o.name !== "") app.name = o.name;
+    if (typeof o.version === "string" && o.version !== "") {
+      app.version = o.version;
+    }
+    apps.push(app);
+  }
+  return apps;
 }
 
 /** Assert every manifest element carries a non-empty string `id` (CC-18). */
@@ -221,11 +314,41 @@ function serialize(m: StateManifest): string {
       name: s.name,
       testIds: [...s.testIds].sort((a, b) => a.localeCompare(b)),
     }));
+  // Identity is omitted entirely when absent or empty — the omit-when-absent
+  // discipline IS the schema-compat mechanism, so a manifest without version
+  // capture (OPP-1) serializes byte-identically to the pre-capture format.
+  const identity =
+    m.identity && (m.identity.buildName ?? m.identity.war) !== undefined
+      ? {
+          identity: {
+            ...(m.identity.buildName
+              ? { buildName: m.identity.buildName }
+              : {}),
+            ...(m.identity.war ? { war: m.identity.war } : {}),
+          },
+        }
+      : {};
+  // Apps are sorted by id for stable diffs; omitted when never captured
+  // (OPP-5). An empty-but-present array is preserved — it means "captured,
+  // nothing installed", which drift treats differently from "never captured".
+  const apps = m.apps
+    ? {
+        apps: [...m.apps]
+          .sort((a, b) => a.id.localeCompare(b.id))
+          .map((a) => ({
+            id: a.id,
+            ...(a.name ? { name: a.name } : {}),
+            ...(a.version ? { version: a.version } : {}),
+          })),
+      }
+    : {};
   const out = {
     instance: m.instance,
     ...(m.url ? { url: m.url } : {}),
     ...(m.scope ? { scope: m.scope } : {}),
     ...(m.syncedAt ? { syncedAt: m.syncedAt } : {}),
+    ...identity,
+    ...apps,
     tests,
     suites,
   };
@@ -358,6 +481,13 @@ export function mergeManifest(
     // time and make the manifest read as never-synced (failing the freshness
     // gate). A fresh sync that DOES set `syncedAt` still wins.
     syncedAt: incoming.syncedAt ?? existing?.syncedAt,
+    // OPP-1/OPP-5: the incoming snapshot wins verbatim, INCLUDING absence — the
+    // deliberate opposite of the CC-38 fallback above. Version capture reflects
+    // the instance NOW; falling back to a stale committed identity/app list
+    // when the fresh pull could not read them would let outdated versions gate
+    // a promote. Honest absence (→ advisory warn in drift) beats stale data.
+    identity: incoming.identity,
+    apps: incoming.apps,
     tests,
     suites,
   };

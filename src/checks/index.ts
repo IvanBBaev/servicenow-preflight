@@ -1,6 +1,9 @@
 import type { Check } from "../types.js";
 import { connectivityAuth } from "./connectivity-auth.js";
 import { updateSetState } from "./update-set-state.js";
+import { defaultSetLeakage } from "./default-set-leakage.js";
+import { remoteSetPreview } from "./remote-set-preview.js";
+import { atfEnablement } from "./atf-enablement.js";
 import { atfRun } from "./atf-run.js";
 import { scopedAppDeps } from "./scoped-app-deps.js";
 import { i18nCompleteness } from "./i18n-completeness.js";
@@ -8,6 +11,9 @@ import { aclRoleSanity } from "./acl-role-sanity.js";
 
 export { connectivityAuth } from "./connectivity-auth.js";
 export { updateSetState } from "./update-set-state.js";
+export { defaultSetLeakage } from "./default-set-leakage.js";
+export { remoteSetPreview } from "./remote-set-preview.js";
+export { atfEnablement } from "./atf-enablement.js";
 export { atfRun } from "./atf-run.js";
 export { scopedAppDeps } from "./scoped-app-deps.js";
 export { i18nCompleteness } from "./i18n-completeness.js";
@@ -75,6 +81,14 @@ export const defaultChecks: Check[] = [
   instanceUrlConfigured,
   connectivityAuth,
   updateSetState,
+  // Update-set hygiene on top of the basic state gate: work stranded in a
+  // "Default" set never ships (OPP-3), and a retrieved-but-unpreviewed or
+  // collision-ridden remote set blocks the target side (OPP-4).
+  defaultSetLeakage,
+  remoteSetPreview,
+  // Verify ATF is enabled before atf-run burns its poll budget on a runner
+  // that can never start (OPP-2) — so it must sort before atfRun.
+  atfEnablement,
   atfRun,
   scopedAppDeps,
   i18nCompleteness,

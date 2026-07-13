@@ -496,6 +496,8 @@ test("writeManifest omits absent optional fields from the serialized output", as
       '"url"',
       '"scope"',
       '"syncedAt"',
+      '"identity"',
+      '"apps"',
       '"sysId"',
       '"covers"',
       '"active"',
@@ -553,6 +555,190 @@ test("writeManifest drops a lastRun.resultId only when it is absent", async () =
       status: "fail",
     });
     assert.ok(!("resultId" in parsed.tests[0].lastRun));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- version capture fields (OPP-1 / OPP-5) ---------------------------------
+
+test("manifest with identity and apps round-trips through write/load (OPP-1/OPP-5)", async () => {
+  const dir = tempDir();
+  try {
+    const manifest = {
+      instance: "dev",
+      url: "https://dev.example.service-now.com",
+      scope: "x_acme",
+      syncedAt: "2026-07-04T00:00:00.000Z",
+      identity: { buildName: "Xanadu", war: "glide-xanadu-07-02-2026" },
+      apps: [
+        { id: "com.snc.incident", version: "10.1.0" },
+        { id: "x_acme_app", name: "Acme App", version: "1.2.3" },
+        { id: "x_acme_util", name: "Acme Util" },
+      ],
+      tests: [{ id: "x/a", name: "A" }],
+      suites: [],
+    };
+    await writeManifest(manifest, dir);
+    const loaded = await loadManifest("dev", dir);
+    assert.deepEqual(loaded, manifest);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeManifest sorts apps by id and omits absent name/version", async () => {
+  const dir = tempDir();
+  try {
+    const path = await writeManifest(
+      {
+        instance: "dev",
+        apps: [
+          { id: "z_last", version: "2.0.0" },
+          { id: "a_first" },
+          { id: "m_mid", name: "Mid", version: "1.0.0" },
+        ],
+        tests: [],
+        suites: [],
+      },
+      dir,
+    );
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    assert.deepEqual(parsed.apps, [
+      { id: "a_first" },
+      { id: "m_mid", name: "Mid", version: "1.0.0" },
+      { id: "z_last", version: "2.0.0" },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeManifest omits an identity block with neither buildName nor war", async () => {
+  const dir = tempDir();
+  try {
+    const path = await writeManifest(
+      { instance: "dev", identity: {}, tests: [], suites: [] },
+      dir,
+    );
+    const text = readFileSync(path, "utf8");
+    assert.doesNotMatch(text, /"identity"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeManifest serializes a partial identity (buildName only)", async () => {
+  const dir = tempDir();
+  try {
+    const path = await writeManifest(
+      {
+        instance: "dev",
+        identity: { buildName: "Xanadu" },
+        tests: [],
+        suites: [],
+      },
+      dir,
+    );
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    assert.deepEqual(parsed.identity, { buildName: "Xanadu" });
+    assert.ok(!("war" in parsed.identity));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeManifest preserves an empty-but-present apps list (captured, nothing installed)", async () => {
+  const dir = tempDir();
+  try {
+    // An empty ARRAY means "captured and nothing recorded" — distinct from an
+    // ABSENT key ("never captured"), which drift treats as an advisory.
+    const path = await writeManifest(
+      { instance: "dev", apps: [], tests: [], suites: [] },
+      dir,
+    );
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    assert.deepEqual(parsed.apps, []);
+    const loaded = await loadManifest("dev", dir);
+    assert.deepEqual(loaded.apps, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest tolerates a manifest written before version capture (no identity/apps)", async () => {
+  const dir = tempDir();
+  try {
+    // Byte-for-byte what a pre-OPP-1/OPP-5 sync wrote: no identity, no apps.
+    writeFileSync(
+      manifestPathWithMkdir(dir, "dev"),
+      JSON.stringify({
+        instance: "dev",
+        syncedAt: "2026-07-01T00:00:00.000Z",
+        tests: [{ id: "x/a", name: "A" }],
+        suites: [],
+      }),
+    );
+    const loaded = await loadManifest("dev", dir);
+    assert.equal(loaded.identity, undefined);
+    assert.equal(loaded.apps, undefined);
+    assert.equal(loaded.tests.length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest sanitizes malformed identity/apps instead of crashing", async () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(
+      manifestPathWithMkdir(dir, "dev"),
+      JSON.stringify({
+        instance: "dev",
+        // buildName is not a string → dropped; war survives.
+        identity: { buildName: 42, war: "glide-x" },
+        apps: [
+          null,
+          "not-an-object",
+          ["array"],
+          { name: "no id" },
+          { id: "" },
+          { id: "x_ok", name: 7, version: "1.0.0" },
+          { id: "x_also_ok", version: 99 },
+        ],
+        tests: [],
+        suites: [],
+      }),
+    );
+    const loaded = await loadManifest("dev", dir);
+    assert.deepEqual(loaded.identity, { war: "glide-x" });
+    // Malformed entries are dropped; non-string name/version are stripped —
+    // apps are advisory version metadata, not the CC-18 hard id contract.
+    assert.deepEqual(loaded.apps, [
+      { id: "x_ok", version: "1.0.0" },
+      { id: "x_also_ok" },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest reads a non-object identity and a non-array apps as never captured", async () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(
+      manifestPathWithMkdir(dir, "dev"),
+      JSON.stringify({
+        instance: "dev",
+        identity: "Xanadu",
+        apps: { x_acme_app: "1.0.0" },
+        tests: [],
+        suites: [],
+      }),
+    );
+    const loaded = await loadManifest("dev", dir);
+    assert.equal(loaded.identity, undefined);
+    assert.equal(loaded.apps, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -954,6 +1140,55 @@ test("mergeManifest takes the instance from incoming", () => {
   const existing = { instance: "dev", tests: [], suites: [] };
   const incoming = { instance: "prod", tests: [], suites: [] };
   assert.equal(mergeManifest(existing, incoming).instance, "prod");
+});
+
+test("mergeManifest takes identity/apps from incoming verbatim, including absence (OPP-1/OPP-5)", () => {
+  const existing = {
+    instance: "dev",
+    identity: { buildName: "Washington", war: "glide-old" },
+    apps: [{ id: "x_old_app", version: "1.0.0" }],
+    tests: [],
+    suites: [],
+  };
+
+  // A fresh capture replaces the committed one wholesale.
+  const incomingWithCapture = {
+    instance: "dev",
+    identity: { buildName: "Xanadu", war: "glide-new" },
+    apps: [{ id: "x_new_app", version: "2.0.0" }],
+    tests: [],
+    suites: [],
+  };
+  const merged1 = mergeManifest(existing, incomingWithCapture);
+  assert.deepEqual(merged1.identity, {
+    buildName: "Xanadu",
+    war: "glide-new",
+  });
+  assert.deepEqual(merged1.apps, [{ id: "x_new_app", version: "2.0.0" }]);
+
+  // Deliberate contrast to the CC-38 syncedAt fallback: when the fresh pull
+  // could NOT capture versions, the committed values must NOT survive — stale
+  // versions could mis-gate a promote, while honest absence only downgrades
+  // drift to an advisory warn.
+  const incomingWithout = { instance: "dev", tests: [], suites: [] };
+  const merged2 = mergeManifest(existing, incomingWithout);
+  assert.equal(merged2.identity, undefined);
+  assert.equal(merged2.apps, undefined);
+});
+
+test("mergeManifest carries identity/apps into a first-ever merge (no existing manifest)", () => {
+  const incoming = {
+    instance: "dev",
+    identity: { buildName: "Xanadu" },
+    apps: [{ id: "x_acme_app", name: "Acme", version: "1.2.3" }],
+    tests: [],
+    suites: [],
+  };
+  const merged = mergeManifest(undefined, incoming);
+  assert.deepEqual(merged.identity, { buildName: "Xanadu" });
+  assert.deepEqual(merged.apps, [
+    { id: "x_acme_app", name: "Acme", version: "1.2.3" },
+  ]);
 });
 
 test("mergeManifest result round-trips through write/load with stable ids", async () => {
