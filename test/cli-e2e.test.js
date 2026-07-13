@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createServer as createHttpServer } from "node:http";
+import { once } from "node:events";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +32,37 @@ function runCli(args, { cwd, env } = {}) {
     cwd: cwd ?? tmpdir(),
     env: { ...cleanEnv, ...env },
     encoding: "utf8",
+  });
+}
+
+/**
+ * Asynchronous counterpart of {@link runCli}, resolving to the same
+ * `{ status, stdout, stderr }` shape once the CLI exits. `runCli` uses
+ * `spawnSync`, which blocks this process's event loop for the child's entire
+ * lifetime — fine when the child only talks to the outside world, but fatal
+ * when it must reach a server running *in this same test process* (e.g. an
+ * in-process mock proxy): the blocked loop can never accept the child's
+ * connection, so it would hang until the request times out. Awaiting an async
+ * `spawn` keeps the loop free to serve those connections.
+ */
+function runCliAsync(args, { cwd, env } = {}) {
+  const cleanEnv = { ...process.env };
+  for (const key of Object.keys(cleanEnv)) {
+    if (key.startsWith("SNPF_")) delete cleanEnv[key];
+  }
+  const child = spawn(process.execPath, [BIN, ...args], {
+    cwd: cwd ?? tmpdir(),
+    env: { ...cleanEnv, ...env },
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  return new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
   });
 }
 
@@ -534,4 +567,99 @@ test("CLI splits exit codes: a check failure is 1, a usage error is 2 (CC-41)", 
   const misused = runCli(["--nope"]);
   assert.equal(misused.status, 2);
   assert.match(misused.stderr, /Unknown option "--nope"/);
+});
+
+// --- Config-file proxy / noProxy reach the client (SR-5) -------------------
+
+/**
+ * A minimal CONNECT-capturing mock proxy. Its `connect` handler records the
+ * target of every CONNECT the instant it arrives — BEFORE any tunnelling — and
+ * then tears the socket down with a 502. We only assert that a CONNECT reached
+ * the proxy, not that a real tunnel was established. Kept local to this file
+ * (test files do not cross-import).
+ */
+async function startCapturingProxy() {
+  const connects = [];
+  const server = createHttpServer();
+  server.on("connect", (req, clientSocket) => {
+    connects.push(req.url); // e.g. "localhost:39999"
+    clientSocket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n"); // no real tunnel needed
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = server.address().port;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    connects,
+    async stop() {
+      server.close();
+      await once(server, "close");
+    },
+  };
+}
+
+test("CLI forwards the --config proxy / noProxy settings to the client (SR-5)", async () => {
+  // Regression guard for cli.ts runOneInstance: the loaded config's `proxy` and
+  // `noProxy` must be forwarded to createSnClient. The proxy is configured ONLY
+  // via the --config file (never SNPF_PROXY/HTTPS_PROXY), so a dropped
+  // passthrough cannot be masked by resolveProxy's env fallbacks. The single
+  // https:// dial is made by connectivity-auth, which only fires when
+  // credentials are present — hence SNPF_USER / SNPF_PASS via the env. We assert
+  // only on whether the mock proxy saw a CONNECT; the CLI's exit status/stdout
+  // are irrelevant (the fake target is unreachable, so the check fails anyway).
+  // The proxy runs in this process, so the CLI must be launched with the async
+  // `runCliAsync` (never the synchronous `runCli`) — see its doc comment.
+  const proxy = await startCapturingProxy();
+  const dir = mkdtempSync(join(tmpdir(), "snpf-proxy-"));
+  try {
+    // (1) With `proxy` set and no bypass, the https dial must tunnel through the
+    // proxy: the mock records a CONNECT to the instance host:port.
+    const withProxyCfg = join(dir, "with-proxy.config.json");
+    writeFileSync(
+      withProxyCfg,
+      JSON.stringify({
+        instanceUrl: "https://localhost:39999",
+        proxy: proxy.url,
+        select: { only: ["connectivity-auth"] },
+      }),
+    );
+    await runCliAsync(["--config", withProxyCfg], {
+      cwd: dir,
+      env: { SNPF_USER: "u", SNPF_PASS: "p" },
+    });
+    // A CONNECT for the instance proves the `proxy` passthrough survived.
+    // (Drop it → no proxy → no CONNECT → empty array → this assertion fails.)
+    assert.ok(
+      proxy.connects.some((c) => c.includes("localhost:39999")),
+      `expected a CONNECT to the instance, got ${JSON.stringify(proxy.connects)}`,
+    );
+
+    // (2) With `noProxy: "localhost"`, the bypass must reach the client so the
+    // request goes direct — the proxy records NO CONNECT.
+    proxy.connects.length = 0;
+    const noProxyCfg = join(dir, "no-proxy.config.json");
+    writeFileSync(
+      noProxyCfg,
+      JSON.stringify({
+        instanceUrl: "https://localhost:39999",
+        proxy: proxy.url,
+        noProxy: "localhost",
+        select: { only: ["connectivity-auth"] },
+      }),
+    );
+    await runCliAsync(["--config", noProxyCfg], {
+      cwd: dir,
+      env: { SNPF_USER: "u", SNPF_PASS: "p" },
+    });
+    // No CONNECT proves the `noProxy` passthrough survived.
+    // (Drop it → proxy still used → a CONNECT appears → this assertion fails.)
+    assert.equal(
+      proxy.connects.length,
+      0,
+      `expected no CONNECT with noProxy set, got ${JSON.stringify(proxy.connects)}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await proxy.stop();
+  }
 });

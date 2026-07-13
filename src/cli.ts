@@ -15,6 +15,7 @@ import { syncManifest } from "./state/sync.js";
 import {
   DEFAULT_STALE_WARN_MS,
   stalenessResults,
+  versionParityResults,
   type DriftManifestRef,
 } from "./state/drift.js";
 import { testDrift } from "./checks/index.js";
@@ -482,6 +483,10 @@ async function runOneInstance(
     instanceUrl: instanceUrl ?? "https://invalid.invalid",
     ...(loaded.auth ? { auth: loaded.auth } : {}),
     ...(loaded.tls ? { tls: loaded.tls } : {}),
+    // Config-file / SNPF_PROXY settings ride along as explicit client
+    // configuration, outranking HTTPS_PROXY/https_proxy (SR-5).
+    ...(loaded.config.proxy ? { proxy: loaded.config.proxy } : {}),
+    ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
   });
 
   const ctx: PreflightContext = {
@@ -553,6 +558,8 @@ async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
     instanceUrl: inst.url,
     ...(loaded.auth ? { auth: loaded.auth } : {}),
     ...(loaded.tls ? { tls: loaded.tls } : {}),
+    ...(loaded.config.proxy ? { proxy: loaded.config.proxy } : {}),
+    ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
   });
 
   const existing = await loadManifest(env, cwd);
@@ -623,7 +630,13 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
     warnAfterMs: DEFAULT_STALE_WARN_MS,
     maxAgeMs: args.maxAgeMs,
   });
-  const finalReport = stale.length > 0 ? mergeResults(report, stale) : report;
+  // Fold in version parity: platform identity (OPP-1) and installed app/plugin
+  // versions (OPP-5) recorded at sync time. A build-name mismatch or an app
+  // missing/downgraded on the target fails the promote gate; manifests written
+  // before version capture yield an advisory warn instead.
+  const parity = versionParityResults(source, target);
+  const extra = [...stale, ...parity];
+  const finalReport = extra.length > 0 ? mergeResults(report, extra) : report;
 
   process.stdout.write(render(finalReport, args.format));
   process.exitCode = finalReport.ok ? 0 : 1;

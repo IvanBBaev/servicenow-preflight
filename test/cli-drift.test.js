@@ -111,7 +111,9 @@ test("drift --format json reports ok:false and a failing test-drift result", () 
     assert.equal(res.status, 1);
     const report = JSON.parse(res.stdout);
     assert.equal(report.ok, false);
-    assert.equal(report.results.length, 1);
+    // test-drift plus the two version-parity results (OPP-1 / OPP-5), which
+    // are advisory warns here because the manifests predate version capture.
+    assert.equal(report.results.length, 3);
     assert.equal(report.results[0].name, "test-drift");
     assert.equal(report.results[0].status, "fail");
     assert.match(report.results[0].message, /missing on "prod"/);
@@ -559,6 +561,165 @@ test("sync against an unreachable instance fails cleanly without leaking credent
     assert.ok(!res.stderr.includes(secret), "password must not leak to stderr");
     assert.ok(!res.stdout.includes(secret), "password must not leak to stdout");
     assert.doesNotMatch(res.stderr, /at .*\.js:\d+/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- drift: version parity (OPP-1 / OPP-5) ----------------------------------
+
+test("drift on pre-capture manifests reports advisory version-parity warns (exit 0)", () => {
+  const dir = tempProject();
+  try {
+    // Manifests written BEFORE version capture existed: no identity, no apps.
+    // Schema compatibility is non-negotiable — they must load cleanly and the
+    // parity checks must downgrade to advisories, never crash or block.
+    const tests = [{ id: "x/a", name: "A", active: true }];
+    writeStateManifest(dir, "staging", {
+      instance: "staging",
+      tests,
+      suites: [],
+    });
+    writeStateManifest(dir, "prod", { instance: "prod", tests, suites: [] });
+
+    const res = runCli(["drift", "staging", "prod", "--format", "json"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.equal(report.ok, true);
+    const instance = report.results.find(
+      (r) => r.name === "instance-version-parity",
+    );
+    const apps = report.results.find((r) => r.name === "app-version-parity");
+    assert.ok(instance, "an instance-version-parity result should be present");
+    assert.ok(apps, "an app-version-parity result should be present");
+    assert.equal(instance.status, "warn");
+    assert.equal(apps.status, "warn");
+    assert.match(instance.message, /predates version capture/);
+    assert.match(instance.message, /re-run sync/);
+    assert.match(apps.message, /predates version capture/);
+    assert.match(apps.message, /re-run sync/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift blocks (exit 1) on a platform build-name mismatch (OPP-1)", () => {
+  const dir = tempProject();
+  try {
+    // No test drift at all — the ONLY blocker is the instance-version skew.
+    const tests = [{ id: "x/a", name: "A", active: true }];
+    writeStateManifest(dir, "staging", {
+      instance: "staging",
+      identity: { buildName: "Yokohama", war: "glide-yokohama.war" },
+      apps: [{ id: "x_acme_app", version: "1.0.0" }],
+      tests,
+      suites: [],
+    });
+    writeStateManifest(dir, "prod", {
+      instance: "prod",
+      identity: { buildName: "Xanadu", war: "glide-xanadu.war" },
+      apps: [{ id: "x_acme_app", version: "1.0.0" }],
+      tests,
+      suites: [],
+    });
+
+    const res = runCli(["drift", "staging", "prod", "--format", "json"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 1);
+    const report = JSON.parse(res.stdout);
+    assert.equal(report.ok, false);
+    const instance = report.results.find(
+      (r) => r.name === "instance-version-parity",
+    );
+    assert.equal(instance.status, "fail");
+    assert.match(instance.message, /Platform version mismatch/);
+    assert.match(instance.message, /Yokohama/);
+    assert.match(instance.message, /Xanadu/);
+    // The app inventories match, so app parity passes alongside.
+    const apps = report.results.find((r) => r.name === "app-version-parity");
+    assert.equal(apps.status, "pass");
+    assert.equal(report.summary.fail, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift blocks (exit 1) when the target runs a lower app version (OPP-5)", () => {
+  const dir = tempProject();
+  try {
+    const tests = [{ id: "x/a", name: "A", active: true }];
+    const identity = { buildName: "Xanadu", war: "glide-xanadu.war" };
+    writeStateManifest(dir, "staging", {
+      instance: "staging",
+      identity,
+      apps: [{ id: "x_acme_app", name: "Acme App", version: "2.1.0" }],
+      tests,
+      suites: [],
+    });
+    writeStateManifest(dir, "prod", {
+      instance: "prod",
+      identity,
+      apps: [{ id: "x_acme_app", name: "Acme App", version: "2.0.5" }],
+      tests,
+      suites: [],
+    });
+
+    const res = runCli(["drift", "staging", "prod"], { cwd: dir });
+    assert.equal(res.status, 1);
+    // Pretty output names the check, the app and the direction of the drift.
+    assert.match(res.stdout, /app-version-parity/);
+    assert.match(res.stdout, /x_acme_app/);
+    assert.match(res.stdout, /lower version on target "prod"/);
+    assert.match(res.stdout, /1 failed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift passes cleanly (exit 0) when identity and apps match on both sides", () => {
+  const dir = tempProject();
+  try {
+    const tests = [{ id: "x/a", name: "A", active: true }];
+    const identity = { buildName: "Xanadu", war: "glide-xanadu.war" };
+    const apps = [
+      { id: "x_acme_app", name: "Acme App", version: "1.2.3" },
+      { id: "com.snc.incident", version: "10.0.1" },
+    ];
+    writeStateManifest(dir, "staging", {
+      instance: "staging",
+      identity,
+      apps,
+      tests,
+      suites: [],
+    });
+    writeStateManifest(dir, "prod", {
+      instance: "prod",
+      identity,
+      apps,
+      tests,
+      suites: [],
+    });
+
+    const res = runCli(["drift", "staging", "prod", "--format", "json"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.equal(report.ok, true);
+    // Full capture on both sides: every result is a positive pass — no warns.
+    assert.equal(report.summary.warn, 0);
+    assert.equal(report.summary.fail, 0);
+    assert.equal(
+      report.results.find((r) => r.name === "instance-version-parity").status,
+      "pass",
+    );
+    assert.equal(
+      report.results.find((r) => r.name === "app-version-parity").status,
+      "pass",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
