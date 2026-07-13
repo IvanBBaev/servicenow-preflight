@@ -476,6 +476,34 @@ function assertSafeQueryInputs(config: PreflightConfig): void {
   check(config.options?.baseLanguage, "Config baseLanguage");
 }
 
+/**
+ * Reject non-string `proxy` / `noProxy` config-file values (SR-5). Both are
+ * declared `string`, but a JSON config file is untyped at runtime: a `noProxy`
+ * array (a natural guess for a list-valued field) would otherwise reach
+ * {@link resolveProxy}, whose `.split(",")` throws mid-request and surfaces as a
+ * misleading "cannot reach ServiceNow" network error rather than a config
+ * mistake; a non-string `proxy` (e.g. a bare port number) is worse — the
+ * client's `typeof === "string"` guards silently skip it, bypassing the
+ * configured proxy and violating the "a configured proxy is never silently
+ * bypassed" invariant. Fail closed at load time with an actionable
+ * {@link UsageError} instead. Env fallbacks are always strings, so only
+ * config-FILE values can trip this.
+ */
+function assertProxyConfigTypes(config: PreflightConfig): void {
+  const check = (value: unknown, label: string, expected: string): void => {
+    if (value === undefined || typeof value === "string") return;
+    throw new UsageError(
+      `Config ${label} must be ${expected}, got ${describeJson(value)}.`,
+    );
+  };
+  check(config.proxy, "proxy", 'a proxy URL string (e.g. "http://proxy:3128")');
+  check(
+    config.noProxy,
+    "noProxy",
+    'a comma-separated host string (e.g. "localhost,*.internal"), not a JSON array',
+  );
+}
+
 /** Options for {@link loadConfig}. */
 export interface LoadConfigOptions {
   /** Explicit config file path (overrides auto-discovery). */
@@ -534,6 +562,10 @@ export async function loadConfig(
     const envNoProxy = env[ENV.noProxy]?.trim();
     if (envNoProxy) config.noProxy = envNoProxy;
   }
+
+  // Fail closed at load time on a mistyped proxy/noProxy config value (SR-5)
+  // before it can reach the client as a silent bypass or a mid-request crash.
+  assertProxyConfigTypes(config);
 
   // Fail closed at load time on config values that would inject into an encoded
   // query (SR-1), after env fallbacks so env-supplied values are covered too.

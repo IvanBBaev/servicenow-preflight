@@ -168,6 +168,50 @@ test("the config file's proxy settings win over SNPF_PROXY / SNPF_NO_PROXY (SR-5
   }
 });
 
+test("loadConfig rejects a non-string proxy config value (SR-5)", async () => {
+  const dir = tempDir();
+  writeFileSync(
+    join(dir, "preflight.config.json"),
+    // A bare port number would slip past the client's `typeof === "string"`
+    // guard and silently bypass the configured proxy — reject it at load time.
+    '{ "proxy": 3128 }',
+  );
+  try {
+    await assert.rejects(loadConfig(dir, { skipDotEnv: true }), (err) => {
+      assert.ok(err instanceof UsageError);
+      assert.match(err.message, /Config proxy must be a proxy URL string/);
+      assert.match(err.message, /got number/);
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig rejects an array noProxy config value (SR-5)", async () => {
+  const dir = tempDir();
+  writeFileSync(
+    join(dir, "preflight.config.json"),
+    // A JSON array is a natural guess for a list-valued field, but resolveProxy
+    // calls `.split(",")` on it — reject it here with a message naming the field
+    // rather than letting it crash every request as a bogus "network" error.
+    '{ "noProxy": ["intranet.example.com", "localhost"] }',
+  );
+  try {
+    await assert.rejects(loadConfig(dir, { skipDotEnv: true }), (err) => {
+      assert.ok(err instanceof UsageError);
+      assert.match(
+        err.message,
+        /Config noProxy must be a comma-separated host string/,
+      );
+      assert.match(err.message, /got an array/);
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("resolveAuthFromEnv detects an API key", () => {
   const auth = resolveAuthFromEnv({ SNPF_API_KEY: "key-abc" });
   assert.deepEqual(auth, { kind: "apikey", apiKey: "key-abc" });
