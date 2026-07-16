@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { runPreflight } from "./index.js";
 import { loadConfig, UsageError } from "./config.js";
 import { createSnClient } from "./http/client.js";
@@ -57,6 +59,8 @@ interface ParsedArgs {
   /** `drift`: max manifest age before the compare hard-fails (milliseconds). */
   maxAgeMs?: number;
   help: boolean;
+  /** Print the package version and exit. */
+  version: boolean;
 }
 
 /** Split a comma-separated list into trimmed, non-empty items. */
@@ -116,6 +120,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     allowEmpty: false,
     format: "pretty",
     help: false,
+    version: false,
   };
 
   // A leading bare token naming a subcommand selects it; otherwise the default
@@ -160,6 +165,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "-h":
       case "--help":
         args.help = true;
+        break;
+      case "-v":
+      case "--version":
+        args.version = true;
         break;
       case "--json":
         args.format = "json";
@@ -229,6 +238,23 @@ function parseArgs(argv: string[]): ParsedArgs {
   return args;
 }
 
+/**
+ * The package version, read from package.json at runtime (relative to the built
+ * module) so `--version` never drifts from what npm shipped. Falls back to
+ * "unknown" if the file cannot be read/parsed — a version flag must never crash.
+ */
+function readVersion(): string {
+  try {
+    const pkgUrl = new URL("../package.json", import.meta.url);
+    const parsed = JSON.parse(readFileSync(fileURLToPath(pkgUrl), "utf8")) as {
+      version?: unknown;
+    };
+    return typeof parsed.version === "string" ? parsed.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 const HELP = `servicenow-preflight — pre-deployment checks for ServiceNow
 
 Usage:
@@ -257,6 +283,7 @@ Options:
                          Duration is <number><unit>, unit s|m|h|d|w (e.g. 7d,
                          24h). Without it, a manifest older than 30d only warns.
   -h, --help             Show this help
+  -v, --version          Print the version and exit
 
 Exit codes:
   0  no check failed
@@ -644,6 +671,10 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.version) {
+    process.stdout.write(`${readVersion()}\n`);
+    return;
+  }
   if (args.help) {
     process.stdout.write(HELP);
     return;

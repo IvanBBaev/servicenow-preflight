@@ -30,7 +30,18 @@
   "files": [
     "build",
     "bin",
+    "src",
     "CHANGELOG.md"
+  ],
+  "funding": [
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/IvanBBaev"
+    },
+    {
+      "type": "ko-fi",
+      "url": "https://ko-fi.com/ivanbbaev"
+    }
   ],
   "engines": {
     "node": ">=20"
@@ -64,10 +75,18 @@
   },
   "keywords": [
     "servicenow",
+    "service-now",
     "preflight",
     "cli",
     "deployment",
+    "promote-gate",
     "validation",
-    "devops"
+    "devops",
+    "ci",
+    "atf",
+    "update-set",
+    "drift",
+    "sarif",
+    "junit"
   ]
 }

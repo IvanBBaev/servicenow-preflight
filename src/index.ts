@@ -1,3 +1,16 @@
+/**
+ * Pre-deployment preflight checks for ServiceNow, as a library.
+ *
+ * The entry point is {@link runPreflight}, which runs a list of {@link Check}s
+ * against a target instance ({@link PreflightContext}) and returns an aggregate
+ * {@link PreflightReport}. Call it with no explicit list to run
+ * {@link defaultChecks}, or pass your own {@link CheckSelection}. The bundled
+ * CLI (`servicenow-preflight` / `snpf`) is a thin wrapper over this same
+ * function. Every symbol needed to build and run checks, or to drive a
+ * {@link SnClient} directly, is re-exported here.
+ *
+ * @packageDocumentation
+ */
 import { defaultChecks } from "./checks/index.js";
 import type {
   Check,

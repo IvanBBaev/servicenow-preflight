@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { once } from "node:events";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -144,6 +150,20 @@ test("CLI --help prints usage and exits 0 without running checks", () => {
   assert.match(res.stdout, /Usage:/);
   assert.match(res.stdout, /--only/);
   assert.match(res.stdout, /--format/);
+  assert.match(res.stdout, /--version/);
+});
+
+test("CLI --version prints the package version and exits 0", () => {
+  const pkg = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  for (const flag of ["--version", "-v"]) {
+    const res = runCli([flag]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.trim(), pkg.version);
+    // A version query must never run checks or touch an instance.
+    assert.equal(res.stderr, "");
+  }
 });
 
 test("CLI reads instance + selection from a --config file", () => {
