@@ -74,6 +74,7 @@ export {
   resolveAuthFromEnv,
   resolveTlsFromEnv,
   namespacedEnv,
+  UsageError,
   type PreflightConfig,
   type LoadedConfig,
   type LoadConfigOptions,
