@@ -373,6 +373,24 @@ test("cicd status maps a status_label string when no numeric code is present", a
   assert.equal(out.status, "success");
 });
 
+test("cicd status falls back to 'unknown' for an unmapped numeric code", async () => {
+  // A numeric status code the client does not recognise must fail closed as
+  // "unknown", never as a fabricated pass. With no progress link the run
+  // settles immediately on that unknown status.
+  handler = () =>
+    fakeResponse({ body: { result: { status: 9999, links: {} } } });
+  const out = await client().cicd.runTestSuite("suite-1");
+  assert.equal(out.status, "unknown");
+});
+
+test("cicd status falls back to 'unknown' for a payload with no status field", async () => {
+  // Neither `status` nor `status_label` present: the fail-closed default is
+  // "unknown" so a malformed CI/CD body can never be read as a terminal pass.
+  handler = () => fakeResponse({ body: { result: { links: {} } } });
+  const out = await client().cicd.runTestSuite("suite-1");
+  assert.equal(out.status, "unknown");
+});
+
 test("oauth auth sends a Bearer Authorization header", async () => {
   handler = () => fakeResponse({ body: { result: { sys_id: "z" } } });
   await createSnClient({

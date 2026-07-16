@@ -343,6 +343,40 @@ test("CC-2 — an unrecognized suite status fails closed (never counted green)",
   }
 });
 
+test('an empty/blank terminal suite status fails closed as ("empty")', async () => {
+  // A suite that settles with a blank status string must never be counted as a
+  // pass: it falls into the terminal-but-unrecognised branch and is surfaced as
+  // ("empty") in the message.
+  const blank = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1" },
+      fixtures: {
+        cicd: { runTestSuite: { status: "", resultId: "run-1" } },
+        tables: { sys_atf_test_result: [] },
+      },
+    }),
+  );
+  assert.equal(blank.status, "fail");
+  assert.match(blank.message, /unrecognized status/i);
+  assert.match(blank.message, /\("empty"\)/);
+
+  // Same path when the CI/CD payload carries no `status` field at all. The fake
+  // only treats a single canned result with a string `status` as one suite, so
+  // to reach a status-less payload it must be keyed by suite id.
+  const missing = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1" },
+      fixtures: {
+        cicd: { runTestSuite: { "suite-1": { resultId: "run-1" } } },
+        tables: { sys_atf_test_result: [] },
+      },
+    }),
+  );
+  assert.equal(missing.status, "fail");
+  assert.match(missing.message, /unrecognized status/i);
+  assert.match(missing.message, /\("empty"\)/);
+});
+
 test("SN-8 — a red test in a nested child suite fails the run", async () => {
   // The root suite result is green and its own tests pass, but a nested child
   // suite (linked via sys_atf_test_suite_result.parent) holds a red test. The

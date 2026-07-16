@@ -254,6 +254,78 @@ test("update-set-state: SN-2 — recursion reaches an in-progress grandchild", a
   assert.match(result.message, /Grandchild/);
 });
 
+test("update-set-state: batch form — an 'ignore' child fails and is named", async () => {
+  // The batch (multi-set) branch of the ignore verdict — distinct from the
+  // single-set SN-3 message — must name the excluded child, not just the root.
+  const http = createFakeSnClient({
+    tables: {
+      sys_update_set: [
+        { sys_id: "us_parent", name: "Parent", state: "complete" },
+        {
+          sys_id: "us_child",
+          name: "IgnoreChild",
+          state: "ignore",
+          parent: "us_parent",
+        },
+      ],
+      sys_update_xml: [{ sys_id: "x1", update_set: "us_child" }],
+    },
+    queryFilter: routed,
+  });
+  const result = await updateSetState.run(ctx(http, "us_parent"));
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /ignore/i);
+  assert.match(result.message, /IgnoreChild/);
+});
+
+test("update-set-state: batch form — all complete but 0 changes across the batch", async () => {
+  // Every set in the batch is complete, yet no set carries a change row: the
+  // batch is empty and must fail with the batch-specific "across the batch" text.
+  const http = createFakeSnClient({
+    tables: {
+      sys_update_set: [
+        { sys_id: "us_parent", name: "Parent", state: "complete" },
+        {
+          sys_id: "us_child",
+          name: "Child",
+          state: "complete",
+          parent: "us_parent",
+        },
+      ],
+      sys_update_xml: [],
+    },
+    queryFilter: routed,
+  });
+  const result = await updateSetState.run(ctx(http, "us_parent"));
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /0 changes/);
+  assert.match(result.message, /across the batch/);
+});
+
+test("update-set-state: batch form — an unrecognised child state warns and is named", async () => {
+  // The batch branch of the unrecognised-state verdict must warn (not fail) and
+  // name the offending child with its state.
+  const http = createFakeSnClient({
+    tables: {
+      sys_update_set: [
+        { sys_id: "us_parent", name: "Parent", state: "complete" },
+        {
+          sys_id: "us_child",
+          name: "BogusChild",
+          state: "bogus",
+          parent: "us_parent",
+        },
+      ],
+      sys_update_xml: [{ sys_id: "x1", update_set: "us_child" }],
+    },
+    queryFilter: routed,
+  });
+  const result = await updateSetState.run(ctx(http, "us_parent"));
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /unrecognised/i);
+  assert.match(result.message, /BogusChild/);
+});
+
 test("update-set-state: fails on an auth error", async () => {
   const http = createFakeSnClient({
     tables: { sys_update_set: [], sys_update_xml: [] },

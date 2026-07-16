@@ -134,3 +134,70 @@ test("connectivity-auth fails on an unexpected non-2xx HTTP status", async () =>
   assert.equal(result.name, "connectivity-auth");
   assert.equal(result.status, "fail");
 });
+
+test("connectivity-auth fails an SnAuthError with no HTTP status (no '(HTTP' text)", async () => {
+  // A credential problem surfaced without a status code (e.g. the client could
+  // not build the auth header) still fails closed, and the message must not
+  // fabricate an "(HTTP …)" suffix from a missing status.
+  const base = createFakeSnClient({ tables: { sys_user: [{ sys_id: "u1" }] } });
+  const http = {
+    ...base,
+    table() {
+      return {
+        get: () => Promise.reject(new SnAuthError("missing credentials")),
+        query: () => Promise.reject(new SnAuthError("missing credentials")),
+      };
+    },
+  };
+  const result = await connectivityAuth.run({
+    instanceUrl: INSTANCE,
+    auth: AUTH,
+    http,
+  });
+  assert.equal(result.name, "connectivity-auth");
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /authentication failed/i);
+  assert.doesNotMatch(result.message, /\(HTTP/);
+});
+
+test("connectivity-auth fails closed on an unexpected non-Sn throw (catch-all)", async () => {
+  // The final catch-all must map any error the client can throw — including a
+  // plain Error or a non-Error value — to a well-formed fail carrying the detail.
+  const base = createFakeSnClient({ tables: { sys_user: [{ sys_id: "u1" }] } });
+
+  const plain = {
+    ...base,
+    table() {
+      return {
+        get: () => Promise.reject(new Error("boom")),
+        query: () => Promise.reject(new Error("boom")),
+      };
+    },
+  };
+  const plainResult = await connectivityAuth.run({
+    instanceUrl: INSTANCE,
+    auth: AUTH,
+    http: plain,
+  });
+  assert.equal(plainResult.status, "fail");
+  assert.match(plainResult.message, /failed unexpectedly/i);
+  assert.match(plainResult.message, /boom/);
+
+  const nonError = {
+    ...base,
+    table() {
+      return {
+        get: () => Promise.reject("boom"),
+        query: () => Promise.reject("boom"),
+      };
+    },
+  };
+  const nonErrorResult = await connectivityAuth.run({
+    instanceUrl: INSTANCE,
+    auth: AUTH,
+    http: nonError,
+  });
+  assert.equal(nonErrorResult.status, "fail");
+  assert.match(nonErrorResult.message, /failed unexpectedly/i);
+  assert.match(nonErrorResult.message, /boom/);
+});
