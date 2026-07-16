@@ -1,6 +1,7 @@
 import type { CheckResult } from "../types.js";
 import type {
   InstalledAppState,
+  InstanceIdentity,
   StateManifest,
   AtfTestState,
 } from "./manifest.js";
@@ -231,8 +232,12 @@ function describeApp(app: InstalledAppState): string {
  *   is the exact regression this gate exists to block.
  * - Build names matching but `glide.war` differing → `warn`: patch-level skew
  *   is worth an eyeball, not a hard block.
- * - Any single property unreadable on one side → `warn` with explicit
- *   "unverified" wording (fail-closed: no silent pass on unknown data).
+ * - `glide.buildname` absent on BOTH sides (some instances genuinely do not set
+ *   the property) → fall back to `glide.war` alone: identical → `pass` (verified
+ *   at patch level), differing → `warn`. See {@link warOnlyParityResult}.
+ * - `glide.buildname` present on one side but not the other, or any single
+ *   property unreadable → `warn` with explicit "unverified" wording (fail-closed:
+ *   no silent pass on unknown data).
  */
 function instanceParityResult(
   source: StateManifest,
@@ -251,14 +256,28 @@ function instanceParityResult(
     };
   }
 
-  const noBuild: string[] = [];
-  if (src.buildName === undefined) noBuild.push(`source "${source.instance}"`);
-  if (tgt.buildName === undefined) noBuild.push(`target "${target.instance}"`);
-  if (noBuild.length > 0) {
+  const srcNoBuild = src.buildName === undefined;
+  const tgtNoBuild = tgt.buildName === undefined;
+
+  // Neither instance recorded glide.buildname. Rather than warn forever with no
+  // route to a pass, fall back to glide.war — which still pins the patch level —
+  // for a narrower but legitimate parity signal (surfaced by live validation
+  // against a PDI where the property is genuinely unset).
+  if (srcNoBuild && tgtNoBuild) {
+    return warOnlyParityResult(source, target, src, tgt);
+  }
+
+  // Exactly one side is missing glide.buildname: the manifests are not
+  // comparable at the release-family level. Fail closed with explicit wording
+  // rather than guess from glide.war across an asymmetric pair.
+  if (srcNoBuild || tgtNoBuild) {
+    const which = srcNoBuild
+      ? `source "${source.instance}"`
+      : `target "${target.instance}"`;
     return {
       name: INSTANCE_VERSION_CHECK,
       status: "warn",
-      message: `glide.buildname was unreadable at sync time on ${noBuild.join(" and ")}; instance-version parity is unverified — re-run sync with an account that can read sys_properties.`,
+      message: `glide.buildname was unreadable at sync time on ${which}; instance-version parity is unverified — re-run sync with an account that can read sys_properties.`,
     };
   }
 
@@ -293,6 +312,46 @@ function instanceParityResult(
     name: INSTANCE_VERSION_CHECK,
     status: "pass",
     message: `Platform versions match: ${src.buildName} (glide.war "${src.war}").`,
+  };
+}
+
+/**
+ * Parity fallback when NEITHER manifest recorded `glide.buildname`. Some
+ * instances genuinely do not set the property, so `glide.war` — which still
+ * pins the exact build/patch — is the only version signal available: identical
+ * → `pass` (verified at patch level), differing → `warn`, unreadable on either
+ * side → `warn` (fail-closed). Never a `fail`: with no build family to compare,
+ * a differing patch is an eyeball, not a proven cross-release promote.
+ */
+function warOnlyParityResult(
+  source: StateManifest,
+  target: StateManifest,
+  src: InstanceIdentity,
+  tgt: InstanceIdentity,
+): CheckResult {
+  const noWar: string[] = [];
+  if (src.war === undefined) noWar.push(`source "${source.instance}"`);
+  if (tgt.war === undefined) noWar.push(`target "${target.instance}"`);
+  if (noWar.length > 0) {
+    return {
+      name: INSTANCE_VERSION_CHECK,
+      status: "warn",
+      message: `glide.buildname is not set on either instance and glide.war was unreadable at sync time on ${noWar.join(" and ")}; instance-version parity is unverified.`,
+    };
+  }
+
+  if (src.war !== tgt.war) {
+    return {
+      name: INSTANCE_VERSION_CHECK,
+      status: "warn",
+      message: `glide.buildname is not set on either instance; patch levels differ: source glide.war is "${src.war}" while target is "${tgt.war}". Confirm both instances are on the same release before promoting.`,
+    };
+  }
+
+  return {
+    name: INSTANCE_VERSION_CHECK,
+    status: "pass",
+    message: `glide.buildname is not set on either instance; platform patch levels match (verified via glide.war "${src.war}").`,
   };
 }
 

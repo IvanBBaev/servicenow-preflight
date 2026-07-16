@@ -443,6 +443,75 @@ test("matching buildnames with an unreadable war on one side warn as unverified"
   assert.match(instance[0].message, /patch-level parity is unverified/);
 });
 
+test("an unreadable buildname on the TARGET side is named in the unverified warn", () => {
+  // Mirror of the source-side case: only the target lacks glide.buildname.
+  const results = versionParityResults(
+    versioned("staging", { identity: FULL_IDENTITY, apps: [] }),
+    versioned("prod", { identity: { war: "glide-a" }, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.match(instance[0].message, /unverified/);
+  assert.match(instance[0].message, /target "prod"/);
+  assert.doesNotMatch(instance[0].message, /source "staging"/);
+});
+
+test("both sides lacking glide.buildname pass when glide.war is identical (OPP-1 war fallback)", () => {
+  // Some instances genuinely never set glide.buildname; glide.war alone still
+  // pins the patch level, so an identical war on both is a legitimate pass.
+  const results = versionParityResults(
+    versioned("staging", { identity: { war: "glide-a" }, apps: [] }),
+    versioned("prod", { identity: { war: "glide-a" }, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "pass");
+  assert.match(instance[0].message, /not set on either instance/);
+  assert.match(instance[0].message, /glide\.war/);
+  assert.match(instance[0].message, /glide-a/);
+});
+
+test("both sides lacking glide.buildname warn when glide.war differs (OPP-1 war fallback)", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: { war: "glide-a" }, apps: [] }),
+    versioned("prod", { identity: { war: "glide-b" }, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.match(instance[0].message, /not set on either instance/);
+  assert.match(instance[0].message, /patch levels differ/);
+  assert.match(instance[0].message, /glide-a/);
+  assert.match(instance[0].message, /glide-b/);
+});
+
+test("both sides lacking glide.buildname warn as unverified when glide.war is unreadable", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: {}, apps: [] }),
+    versioned("prod", { identity: { war: "glide-a" }, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.match(instance[0].message, /not set on either instance/);
+  assert.match(instance[0].message, /unverified/);
+  assert.match(instance[0].message, /source "staging"/);
+});
+
+test("a glide.buildname mismatch still FAILS even when one war is identical (fail beats war fallback)", () => {
+  // Guard: the war fallback only applies when buildname is absent on BOTH sides.
+  // A present-but-differing buildname must still hard-fail regardless of war.
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: { buildName: "Xanadu", war: "glide-a" },
+      apps: [],
+    }),
+    versioned("prod", {
+      identity: { buildName: "Washington", war: "glide-a" },
+      apps: [],
+    }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "fail");
+});
+
 test("an app recorded on the source but missing on the target warns, not fails (OPP-5)", () => {
   // Absence alone is expected on a first-ever deploy or for in-development
   // apps — advisory, never a blocking fail (the OPP-5 false-fail fix).
