@@ -1,4 +1,5 @@
 import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
+import { eq } from "../http/query.js";
 import type { CheckResult, PreflightContext } from "../types.js";
 import type { Check } from "../types.js";
 
@@ -188,7 +189,7 @@ async function collectSuiteResultIds(
     const next: string[] = [];
     for (const parentId of frontier) {
       const children = await ctx.http.table(SUITE_RESULT_TABLE).query({
-        sysparm_query: `parent=${parentId}`,
+        sysparm_query: eq("parent", parentId),
         sysparm_fields: "sys_id,parent",
       });
       for (const child of children) {
@@ -225,7 +226,7 @@ async function collectTestOutcomes(
 
   for (const rid of resultIds) {
     const rows = await ctx.http.table(TEST_RESULT_TABLE).query({
-      sysparm_query: `test_suite_result=${rid}`,
+      sysparm_query: eq("test_suite_result", rid),
       sysparm_fields: "sys_id,status,output,test,test.name,test_suite_result",
     });
     for (const row of rows) {
