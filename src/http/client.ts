@@ -1476,6 +1476,13 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           all.push(...rows);
           // A short page means the result set is exhausted.
           if (rows.length < pageSize) break;
+          // The pre-trim match count (X-Total-Count) is authoritative: once we
+          // have collected at least that many rows the set is exhausted even if
+          // the final page came back full. Without this, a result set whose
+          // size is an exact multiple of the page size AND equals `maxRows`
+          // (e.g. exactly 100_000 rows) would trip the cap below and throw a
+          // false truncation error despite nothing having been dropped.
+          if (totalCount !== undefined && all.length >= totalCount) break;
           // A full page at the cap means more rows remain: fail closed rather
           // than silently drop them (the old behaviour), so the caller learns
           // to narrow the query instead of trusting a truncated result.

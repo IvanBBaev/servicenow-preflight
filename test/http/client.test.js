@@ -238,6 +238,28 @@ test("auto-pagination throws SnTruncationError at the row cap rather than trunca
   assert.equal(calls.length, 2);
 });
 
+test("auto-pagination does NOT throw when a full final page reaches X-Total-Count at the cap", async () => {
+  // A result set whose size is an exact multiple of the page size AND equals
+  // maxRows (here 2000 = 2×1000) would trip the cap on the last full page. The
+  // pre-trim X-Total-Count says the set is exhausted, so it must resolve, not
+  // throw a false truncation error.
+  handler = (url) => {
+    const offset = Number(new URL(url).searchParams.get("sysparm_offset"));
+    return fakeResponse({
+      headers: { "X-Total-Count": "2000" },
+      body: {
+        result: Array.from({ length: 1000 }, (_, i) => ({
+          sys_id: `r${offset + i}`,
+        })),
+      },
+    });
+  };
+  const rows = await client({ maxRows: 2000 }).table("sys_user_role").query();
+  assert.equal(rows.length, 2000);
+  // Exactly two pages; the X-Total-Count break fired before the cap throw.
+  assert.equal(calls.length, 2);
+});
+
 test("request() resolves with status and body for any status (no throw)", async () => {
   handler = () =>
     fakeResponse({ status: 500, body: { error: { message: "x" } } });
