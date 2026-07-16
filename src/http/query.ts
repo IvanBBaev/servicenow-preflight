@@ -130,7 +130,12 @@ export function chunk<T>(
   items: readonly T[],
   size: number = IN_CHUNK_SIZE,
 ): T[][] {
-  const step = Math.max(1, Math.floor(size));
+  // Guard against a non-finite `size` (NaN/Infinity): `i += step` would never
+  // advance past the first iteration's non-finite value, silently returning an
+  // empty result and dropping every item. Fall back to the default in that case.
+  const step = Number.isFinite(size)
+    ? Math.max(1, Math.floor(size))
+    : IN_CHUNK_SIZE;
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += step) {
     out.push(items.slice(i, i + step));

@@ -174,6 +174,22 @@ test("chunk defaults to IN_CHUNK_SIZE and never yields a zero-size step", () => 
   assert.equal(chunk([1, 2], 0).length, 2);
 });
 
+test("chunk falls back to the default step on a non-finite size (never drops items)", () => {
+  // NaN/Infinity as `step` would make `i += step` never advance past the first
+  // iteration, silently returning [] and dropping every item — guard falls back
+  // to IN_CHUNK_SIZE so all items survive.
+  const items = Array.from({ length: 250 }, (_, i) => i);
+  for (const bad of [NaN, Infinity, -Infinity]) {
+    const chunks = chunk(items, bad);
+    assert.equal(
+      chunks.reduce((n, c) => n + c.length, 0),
+      250,
+      `size=${bad} must preserve all items`,
+    );
+    assert.equal(chunks.length, 3); // ceil(250 / IN_CHUNK_SIZE)
+  }
+});
+
 // ---------------------------------------------------------------------------
 // scopeFilterClause (no lookup)
 // ---------------------------------------------------------------------------
