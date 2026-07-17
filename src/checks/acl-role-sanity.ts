@@ -236,6 +236,33 @@ export const aclRoleSanity: Check = {
         return result("fail", parts.join("; ") + ".");
       }
 
+      // A partially trimmed read is no more proof of safety than a zero-row one:
+      // the ACLs this account cannot see are exactly the ones this gate cannot
+      // clear. Reporting on the visible subset alone would state a guarantee
+      // that was never checked, so the zero-row case's verdict applies here too
+      // — with whatever the visible subset did turn up appended, since that is
+      // still actionable.
+      if (securityTrimmed) {
+        const seen: string[] = [];
+        if (openRead.length > 0) {
+          seen.push(
+            `${openRead.length} ungated read ACL(s): ${openRead.join(", ")}`,
+          );
+        }
+        if (inactive.length > 0) {
+          seen.push(
+            `${inactive.length} inactive ACL(s): ${inactive.join(", ")}`,
+          );
+        }
+        return result(
+          "fail",
+          `Cannot fully inspect ACLs in scope "${scope}": ${
+            totalCount ?? "more"
+          } ACL(s) match but only ${acls.length} are visible — the account is security-trimmed (sys_security_acl is admin-read out-of-box). Grant the CI account read access; the ACLs it cannot see are the ones this gate cannot clear.` +
+            (seen.length > 0 ? ` Of those visible: ${seen.join("; ")}.` : ""),
+        );
+      }
+
       // Advisory issues: open reads or inactive ACLs — degraded, not fatal.
       if (openRead.length > 0 || inactive.length > 0) {
         const parts: string[] = [];

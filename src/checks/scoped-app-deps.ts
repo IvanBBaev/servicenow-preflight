@@ -162,8 +162,16 @@ function resolveApp(
 function parseRequiredApps(raw: unknown): {
   apps: RequiredApp[];
   invalid: number;
+  malformed: boolean;
 } {
-  if (!Array.isArray(raw)) return { apps: [], invalid: 0 };
+  // Nothing declared and declared-with-the-wrong-shape are different mistakes.
+  // Collapsing them answers a misconfigured `requiredApps` with "none declared",
+  // which reads as confirmation that there was nothing to verify — when in fact
+  // the dependencies the caller asked about went unchecked.
+  if (raw === undefined || raw === null) {
+    return { apps: [], invalid: 0, malformed: false };
+  }
+  if (!Array.isArray(raw)) return { apps: [], invalid: 0, malformed: true };
   const apps: RequiredApp[] = [];
   let invalid = 0;
   for (const entry of raw) {
@@ -182,7 +190,7 @@ function parseRequiredApps(raw: unknown): {
     }
     apps.push(app);
   }
-  return { apps, invalid };
+  return { apps, invalid, malformed: false };
 }
 
 function result(status: CheckStatus, message: string): CheckResult {
@@ -212,7 +220,17 @@ export const scopedAppDeps: Check = {
   description:
     "The scoped application's dependencies are present on the target instance.",
   async run(ctx): Promise<CheckResult> {
-    const { apps, invalid } = parseRequiredApps(ctx.options?.requiredApps);
+    const { apps, invalid, malformed } = parseRequiredApps(
+      ctx.options?.requiredApps,
+    );
+
+    if (malformed) {
+      return result(
+        "warn",
+        `options.requiredApps must be an array of { id, minVersion? } objects, but a ${typeof ctx
+          .options?.requiredApps} was supplied; no dependency was verified.`,
+      );
+    }
 
     if (apps.length === 0) {
       return result(

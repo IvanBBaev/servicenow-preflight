@@ -125,6 +125,145 @@ test("fails on a security-trimmed zero-row ACL read (SN-1)", async () => {
   assert.match(result.message, /\b3\b/);
 });
 
+test("fails on a partially trimmed ACL read rather than passing on the visible subset", async () => {
+  // The visible ACLs are all clean, so the check would otherwise report green
+  // — while 40 ACLs match and only 2 were ever looked at. The 38 it cannot see
+  // are exactly the ones it cannot clear, so a trimmed read never passes.
+  const acls = [
+    {
+      sys_id: "acl1",
+      name: "incident",
+      operation: "write",
+      active: "true",
+      script: "",
+      condition: "",
+    },
+    {
+      sys_id: "acl2",
+      name: "incident",
+      operation: "read",
+      active: "true",
+      script: "",
+      condition: "",
+    },
+  ];
+  const links = [
+    {
+      sys_security_acl: "acl1",
+      sys_user_role: "role_sysid_1",
+      "sys_user_role.name": "itil",
+    },
+    {
+      sys_security_acl: "acl2",
+      sys_user_role: "role_sysid_1",
+      "sys_user_role.name": "itil",
+    },
+  ];
+  const roles = [{ sys_id: "role_sysid_1", name: "itil" }];
+  const result = await run(
+    makeHttp({ acls, links, roles, totalCounts: { sys_security_acl: 40 } }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /security-trimmed/i);
+  assert.match(result.message, /40 ACL\(s\) match but only 2 are visible/);
+});
+
+test("a trimmed read still reports what the visible ACLs turned up", async () => {
+  // Failing closed must not throw away the advisory findings the visible subset
+  // did produce — they are still actionable.
+  const acls = [
+    {
+      sys_id: "acl1",
+      name: "incident",
+      operation: "read",
+      active: "true",
+      script: "",
+      condition: "",
+    },
+  ];
+  const result = await run(
+    makeHttp({
+      acls,
+      links: [],
+      roles: [],
+      totalCounts: { sys_security_acl: 12 },
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /security-trimmed/i);
+  assert.match(result.message, /Of those visible/);
+  assert.match(result.message, /ungated read ACL\(s\)/);
+});
+
+test("a dangling role reference outranks a trimmed read", async () => {
+  // A concrete, actionable defect is more useful than "I could not see
+  // everything", so the hard failure keeps precedence.
+  const acls = [
+    {
+      sys_id: "acl1",
+      name: "incident",
+      operation: "write",
+      active: "true",
+      script: "",
+      condition: "",
+    },
+  ];
+  const links = [
+    {
+      sys_security_acl: "acl1",
+      sys_user_role: "role_sysid_gone",
+      "sys_user_role.name": "ghost",
+    },
+  ];
+  const result = await run(
+    makeHttp({ acls, links, roles: [], totalCounts: { sys_security_acl: 40 } }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /does not exist/i);
+  assert.match(result.message, /ghost/);
+});
+
+test("names a dangling role by sys_id when the link carries no role name", async () => {
+  const acls = [
+    {
+      sys_id: "acl1",
+      name: "incident",
+      operation: "write",
+      active: "true",
+      script: "",
+      condition: "",
+    },
+  ];
+  const links = [
+    { sys_security_acl: "acl1", sys_user_role: "role_sysid_gone" },
+  ];
+  const result = await run(makeHttp({ acls, links, roles: [] }));
+  assert.equal(result.status, "fail");
+  // With no name to print, the id is the only handle the operator has.
+  assert.match(result.message, /incident → role_sysid_gone/);
+});
+
+test("labels a dangling role reference that carries neither name nor id", async () => {
+  const acls = [
+    {
+      sys_id: "acl1",
+      name: "incident",
+      operation: "write",
+      active: "true",
+      script: "",
+      condition: "",
+    },
+  ];
+  // A link row with an empty role reference: broken, and still reported rather
+  // than skipped as if the ACL were gated.
+  const links = [
+    { sys_security_acl: "acl1", sys_user_role: "", "sys_user_role.name": "" },
+  ];
+  const result = await run(makeHttp({ acls, links, roles: [] }));
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /\(unknown\)/);
+});
+
 test("passes when every ACL is role-gated and roles exist", async () => {
   const acls = [
     {
