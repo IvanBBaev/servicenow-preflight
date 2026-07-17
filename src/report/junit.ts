@@ -7,14 +7,23 @@ import type { CheckResult, PreflightReport } from "../types.js";
 // eslint-disable-next-line no-control-regex
 const XML_INVALID_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g;
 
+// The rest of what XML 1.0's Char production excludes, and for the same reason:
+// the two BMP noncharacters, plus any unpaired surrogate. A surrogate encodes a
+// character only as a high+low pair, so a lone one cannot be serialised as UTF-8
+// at all — truncating a message mid-astral-character is the usual way one shows
+// up. Valid pairs match neither alternative and survive: they are legal XML.
+const XML_INVALID_UNICODE =
+  /[\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 /**
- * Escape the five XML predefined entities (and strip XML-1.0-illegal control
- * characters) so arbitrary check messages and names are safe inside both
- * element text and double-quoted attribute values.
+ * Escape the five XML predefined entities (and strip the characters XML 1.0
+ * does not permit at all) so arbitrary check messages and names are safe inside
+ * both element text and double-quoted attribute values.
  */
 function escapeXml(value: string): string {
   return value
     .replace(XML_INVALID_CHARS, "")
+    .replace(XML_INVALID_UNICODE, "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

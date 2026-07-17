@@ -110,6 +110,45 @@ test("formatJUnit strips XML-1.0-illegal control characters from messages", () =
   assert.match(xml, /line1line2\tkept\nkept/);
 });
 
+test("formatJUnit strips noncharacters and unpaired surrogates", () => {
+  // U+FFFE/U+FFFF and lone surrogates are outside XML 1.0's Char production, so
+  // a single one makes the whole document unparseable — the CI system reports a
+  // broken report instead of the failure the report was written to carry.
+  // A lone surrogate arrives by truncating a message mid-astral-character.
+  const xml = formatJUnit({
+    ok: false,
+    results: [
+      {
+        name: "atfRun\uFFFE",
+        status: "fail",
+        message: "before\uFFFF\uD83D middle \uDE00\uFFFEafter",
+      },
+    ],
+    summary: { pass: 0, warn: 0, fail: 1 },
+  });
+  for (const ch of ["\uFFFE", "\uFFFF", "\uD83D", "\uDE00"]) {
+    assert.ok(
+      !xml.includes(ch),
+      "an XML-illegal character leaked into the XML",
+    );
+  }
+  assert.match(xml, /before middle after/);
+  assert.match(xml, /name="atfRun"/);
+});
+
+test("formatJUnit keeps a well-formed surrogate pair intact", () => {
+  // Only LONE surrogates are illegal: a valid pair is a legal XML character and
+  // must survive, or every emoji in a check message would be silently eaten.
+  const xml = formatJUnit({
+    ok: false,
+    results: [
+      { name: "atfRun", status: "fail", message: "boom \u{1F600} done" },
+    ],
+    summary: { pass: 0, warn: 0, fail: 1 },
+  });
+  assert.match(xml, /boom \u{1F600} done/u);
+});
+
 test("formatJUnit handles an empty report", () => {
   const xml = formatJUnit({
     ok: true,
