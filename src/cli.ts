@@ -442,6 +442,13 @@ function resolveRunTargets(
         "--all needs a registry; create .preflight/instances.json or drop --all.",
       );
     }
+    if (args.instanceUrl) {
+      // One URL cannot stand in for every registry instance: the run would
+      // check a single target while labelling the results dev/staging/prod.
+      throw new UsageError(
+        "--instance cannot be combined with --all; --all takes each instance's URL from the registry.",
+      );
+    }
     const names = instanceNames(registry);
     if (names.length === 0) {
       // An empty registry means `--all` verified nothing; a pre-deployment gate
@@ -466,6 +473,11 @@ function resolveRunTargets(
     if (!registry) {
       throw new UsageError(
         `No registry found; cannot resolve instance "${env}". Create .preflight/instances.json or use --instance <url>.`,
+      );
+    }
+    if (args.instanceUrl) {
+      throw new UsageError(
+        `--instance conflicts with the registry instance "${env}"; pass one or the other.`,
       );
     }
     const inst = resolveInstance(registry, env);

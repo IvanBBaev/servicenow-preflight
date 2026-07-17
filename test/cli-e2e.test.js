@@ -291,13 +291,53 @@ test("CLI run --all without a registry errors cleanly", () => {
   }
 });
 
-test("CLI run <unknown-env> lists the known instances", () => {
+test("CLI run --all rejects a conflicting --instance", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com" },
+    prod: { url: "https://prod12345.service-now.com" },
+  });
+  try {
+    // One URL cannot stand in for every instance: silently honouring
+    // --instance would check a single target and label the results dev/prod.
+    const res = runCli(
+      ["run", "--all", "--instance", "https://x.example.com"],
+      {
+        cwd: dir,
+      },
+    );
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /--instance cannot be combined with --all/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run <env> rejects a conflicting --instance", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com" },
+  });
+  try {
+    const res = runCli(["run", "dev", "--instance", "https://x.example.com"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 2);
+    assert.match(
+      res.stderr,
+      /--instance conflicts with the registry instance "dev"/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run <unknown-env> lists the known instances and exits 2", () => {
   const dir = projectWithRegistry({
     dev: { url: "https://dev12345.service-now.com" },
   });
   try {
     const res = runCli(["staging"], { cwd: dir });
-    assert.equal(res.status, 1);
+    // A typo'd instance name is a usage error (exit 2), not a failed check.
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /Unknown instance "staging"/);
     assert.match(res.stderr, /Known instances: dev/);
   } finally {

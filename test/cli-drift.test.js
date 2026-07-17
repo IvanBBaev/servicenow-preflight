@@ -523,12 +523,12 @@ test("sync --allow-empty is a recognized flag (parses, then fails on the missing
   }
 });
 
-test("sync for an unknown instance lists the known instances and exits 1", () => {
+test("sync for an unknown instance lists the known instances and exits 2", () => {
   const dir = tempProject();
   try {
     writeRegistry(dir, { dev: { url: "https://dev12345.service-now.com" } });
     const res = runCli(["sync", "staging"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /Unknown instance "staging"/);
     assert.match(res.stderr, /Known instances: dev/);
   } finally {

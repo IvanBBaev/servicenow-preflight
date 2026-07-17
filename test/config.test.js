@@ -90,6 +90,25 @@ test("loadConfig honours an explicit relative --config path", async () => {
   }
 });
 
+test("loadConfig rejects an explicit --config path that does not exist", async () => {
+  const dir = tempDir();
+  try {
+    // Fail closed: a typo'd --config must not degrade to the empty config and
+    // let a run report green on checks it never loaded.
+    await assert.rejects(
+      () => loadConfig(dir, { configPath: "nope.json", skipDotEnv: true }),
+      (err) => {
+        assert.equal(err.name, "UsageError");
+        assert.match(err.message, /Config file not found/);
+        assert.match(err.message, /nope\.json/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfig loads a JS config module's default export", async () => {
   const dir = tempDir();
   try {

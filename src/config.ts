@@ -396,7 +396,10 @@ function findConfigFile(
     const abs = isAbsolute(explicitPath)
       ? explicitPath
       : resolve(cwd, explicitPath);
-    return existsSync(abs) ? abs : undefined;
+    if (!existsSync(abs)) {
+      throw new UsageError(`Config file not found: ${abs}`);
+    }
+    return abs;
   }
   for (const name of CONFIG_BASENAMES) {
     const abs = resolve(cwd, name);

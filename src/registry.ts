@@ -326,7 +326,9 @@ export function resolveInstance(
   const def = registry.instances[name];
   if (!def) {
     const known = instanceNames(registry).join(", ") || "(none)";
-    throw new Error(`Unknown instance "${name}". Known instances: ${known}.`);
+    throw new UsageError(
+      `Unknown instance "${name}". Known instances: ${known}.`,
+    );
   }
   return {
     name,
