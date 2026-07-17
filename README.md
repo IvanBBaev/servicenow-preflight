@@ -163,7 +163,9 @@ cert composes with _any_ header method above, or stands alone (cert-only).
 > integration user — without that binding the grant returns no token.
 
 Beyond the matrix inputs: `SNPF_INSTANCE` sets the URL when `--instance`/config
-is unset; `SNPF_AUTH` forces a method; JWT claims come from `SNPF_OAUTH_JWT_KID`
+is unset; `SNPF_UPDATE_SET` likewise supplies `updateSetId` when the config file
+does not (the file wins when both are present); `SNPF_AUTH` forces a method; JWT
+claims come from `SNPF_OAUTH_JWT_KID`
 / `_SUB` / `_AUD` / `_ISS` (or supply a pre-signed `_ASSERTION`). Any PEM / key /
 assertion variable accepts an **`@path` value** (read from that file, e.g.
 `SNPF_MTLS_KEY=@./certs/client.key`); a missing `@`-file is a hard error reported
@@ -389,9 +391,12 @@ console.log(report.ok, report.summary); // e.g. false { pass: 2, warn: 4, fail: 
   (`instanceUrlConfigured`, `connectivityAuth`, …) are exported to compose your
   own list.
 - **`createSnClient(config)`** → `SnClient` (`{ instanceUrl, auth?, tls?,
-timeoutMs?, cicdPollIntervalMs?, cicdMaxPolls? }`), backed by Node's global
-  `fetch` (or `node:https` when `tls` is set). `table(name).query()`
-  **auto-paginates** unless you pass a `sysparm_limit`.
+timeoutMs?, cicdPollIntervalMs?, cicdMaxPolls?, maxRows?, proxy?, noProxy? }`),
+  backed by Node's global `fetch` (or `node:https` when `tls` is set).
+  `table(name).query()` **auto-paginates** unless you pass a `sysparm_limit`, and
+  throws `SnTruncationError` past `maxRows` (default 100000) rather than
+  truncating. `proxy` outranks the `HTTPS_PROXY` / `HTTP_PROXY` environment
+  variables; `noProxy` overrides `NO_PROXY`.
 - **`formatJUnit`** / **`formatSarif`**, and **`loadConfig`** /
   **`resolveAuthFromEnv`** / **`resolveTlsFromEnv`** (the CLI's own resolution).
 
@@ -406,6 +411,8 @@ secrets never appear in the messages:
 | `SnAuthError`    | HTTP 401 / 403, or missing credentials (`.status`).        |
 | `SnNetworkError` | DNS / connection failure / timeout — instance unreachable. |
 | `SnHttpError`    | Any other non-2xx status (`.status`, `.body`).             |
+| `SnResponseError` | A 2xx carrying a non-JSON body — a hibernating instance's wake-up page or an SSO/proxy interstitial. |
+| `SnTruncationError` | An auto-paginated `query()` hit `maxRows` (default 100000) — fails closed instead of silently truncating. |
 
 To add your own check, implement the `Check` interface (a `run(ctx)` returning a
 `CheckResult`, catching every `ctx.http` error) and pass a custom list to
