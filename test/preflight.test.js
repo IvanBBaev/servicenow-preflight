@@ -229,6 +229,82 @@ test("runPreflight rejects a check set with duplicate names (CC-46)", async () =
   assert.match(report.results[0].message, /dup/);
 });
 
+// --- coerceResult: a bad check return must fail only that check ---------
+
+test("runPreflight treats a check returning null as fail without taking down other checks", async () => {
+  const returnsNull = {
+    name: "returns-null",
+    description: "returns null instead of a CheckResult",
+    run() {
+      return null;
+    },
+  };
+  const passing = {
+    name: "passing-check",
+    description: "always passes",
+    run() {
+      return { name: "passing-check", status: "pass", message: "ok" };
+    },
+  };
+  const report = await runPreflight(ctx(), [returnsNull, passing]);
+  assert.equal(report.ok, false);
+  const byName = Object.fromEntries(report.results.map((r) => [r.name, r]));
+  assert.equal(byName["returns-null"].status, "fail");
+  assert.match(byName["returns-null"].message, /returned null/);
+  assert.match(byName["returns-null"].message, /treated as fail/);
+  // The bad return took down only its own check: the well-behaved check next
+  // to it still produced its normal result, and the run itself did not reject.
+  assert.equal(byName["passing-check"].status, "pass");
+  assert.equal(byName["passing-check"].message, "ok");
+  assert.equal(report.results.length, 2);
+});
+
+test("runPreflight treats a check returning a primitive as fail, naming the type", async () => {
+  const returnsString = {
+    name: "returns-string",
+    description: "returns a bare string instead of a CheckResult",
+    run() {
+      return "not a result";
+    },
+  };
+  const returnsUndefined = {
+    name: "returns-undefined",
+    description: "returns undefined instead of a CheckResult",
+    run() {
+      return undefined;
+    },
+  };
+  const report = await runPreflight(ctx(), [returnsString, returnsUndefined]);
+  assert.equal(report.ok, false);
+  const byName = Object.fromEntries(report.results.map((r) => [r.name, r]));
+  assert.equal(byName["returns-string"].status, "fail");
+  assert.match(byName["returns-string"].message, /returned a string/);
+  assert.match(byName["returns-string"].message, /treated as fail/);
+  assert.equal(byName["returns-undefined"].status, "fail");
+  assert.match(byName["returns-undefined"].message, /returned undefined/);
+  assert.match(byName["returns-undefined"].message, /treated as fail/);
+});
+
+test("runPreflight falls back to the producing check's name when the returned object lacks one", async () => {
+  const nameless = {
+    name: "nameless-result-check",
+    description: "returns an object with no `name` field",
+    run() {
+      return { status: "pass", message: "looks fine, forgot my name" };
+    },
+  };
+  const report = await runPreflight(ctx(), [nameless]);
+  // coerceResult only fills in the missing `name`; it leaves `status` alone,
+  // and here it is a valid status, so the summariser counts it as a pass.
+  assert.equal(report.results.length, 1);
+  assert.equal(report.results[0].name, "nameless-result-check");
+  assert.equal(report.results[0].status, "pass");
+  assert.equal(report.results[0].message, "looks fine, forgot my name");
+  assert.equal(report.ok, true);
+  assert.equal(report.summary.pass, 1);
+  assert.equal(report.summary.fail, 0);
+});
+
 test("SnTruncationError is re-exported from the package root (WP-A extra)", () => {
   assert.equal(typeof SnTruncationError, "function");
   const err = new SnTruncationError("hit the cap", 10000);

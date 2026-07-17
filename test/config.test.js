@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -853,4 +853,40 @@ test("loadConfig accepts a clean scope, updateSetId and languages (SR-1 no false
   });
   assert.equal(loaded.config.scope, "x_acme_app");
   assert.equal(loaded.config.updateSetId, "0123456789abcdef0123456789abcdef");
+});
+
+// ---------------------------------------------------------------------------
+// Fail-closed .env read errors: a `.env` that exists but cannot be read must
+// not be swallowed like a missing one — doing so drops every credential it
+// carries, so the run would continue unauthenticated, report warns rather
+// than failures, and exit 0 on a build that verified nothing.
+// ---------------------------------------------------------------------------
+
+test("loadConfig rejects with UsageError when .env exists but cannot be read (a directory named .env)", async () => {
+  const dir = tempDir();
+  const envPath = join(dir, ".env");
+  // A directory named `.env` makes readFile fail with EISDIR rather than
+  // ENOENT — a portable, deterministic stand-in for "exists but unreadable"
+  // that (unlike chmod 0000) also works when the suite runs as root.
+  mkdirSync(envPath);
+  try {
+    await assert.rejects(loadConfig(dir), (err) => {
+      assert.ok(err instanceof UsageError);
+      assert.match(err.message, /^Could not read/);
+      assert.ok(err.message.includes(envPath));
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig still succeeds when .env is simply absent", async () => {
+  const dir = tempDir();
+  try {
+    const loaded = await loadConfig(dir);
+    assert.deepEqual(loaded.config, {});
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

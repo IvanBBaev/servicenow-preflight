@@ -182,7 +182,9 @@ function coerceResult(check: Check, produced: unknown): CheckResult {
       name: check.name,
       status: "fail",
       message: `Check "${check.name}" returned ${
-        produced === null ? "null" : `a ${typeof produced}`
+        produced === null || produced === undefined
+          ? String(produced)
+          : `a ${typeof produced}`
       } instead of a CheckResult object; treated as fail.`,
     };
   }

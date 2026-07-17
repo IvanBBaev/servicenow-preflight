@@ -38,6 +38,50 @@ test("warns when every requiredApps entry is malformed", async () => {
   assert.match(result.message, /malformed/);
 });
 
+test("warns with a distinct malformed-container message when requiredApps is a string, not an array", async () => {
+  // A very plausible operator mistake: `requiredApps: "my-app"` instead of
+  // `requiredApps: [{ id: "my-app" }]`. This must not collapse into "no
+  // required apps declared" — that would read as confirmation that there was
+  // nothing to verify, when the dependencies asked about went unchecked.
+  const result = await scopedAppDeps.run(ctx("my-app"));
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /options\.requiredApps must be an array/);
+  assert.match(result.message, /no dependency was verified/i);
+  assert.doesNotMatch(result.message, /No required apps declared/);
+});
+
+test("warns with the malformed-container message when requiredApps is a non-array object", async () => {
+  const result = await scopedAppDeps.run(ctx({ id: "x" }));
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /options\.requiredApps must be an array/);
+  assert.match(result.message, /no dependency was verified/i);
+  assert.doesNotMatch(result.message, /No required apps declared/);
+});
+
+test("still takes the 'no required apps declared' branch when requiredApps is explicitly null", async () => {
+  const result = await scopedAppDeps.run(ctx(null));
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /No required apps declared/);
+});
+
+test("still takes the 'no required apps declared' branch when requiredApps is undefined", async () => {
+  const result = await scopedAppDeps.run({
+    instanceUrl: INSTANCE,
+    http: createFakeSnClient({}),
+    options: { requiredApps: undefined },
+  });
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /No required apps declared/);
+});
+
+test("an array with malformed entries still reports the malformed-entries-ignored warn, not the malformed-container warn", async () => {
+  const result = await scopedAppDeps.run(ctx([{ noId: 1 }, "junk"]));
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /No valid required apps declared/);
+  assert.match(result.message, /2 malformed entries ignored/);
+  assert.doesNotMatch(result.message, /must be an array/);
+});
+
 test("passes when a required scoped app is present (no version constraint)", async () => {
   const result = await scopedAppDeps.run(
     ctx([{ id: "x_acme_core" }], {
