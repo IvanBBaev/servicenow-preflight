@@ -115,10 +115,22 @@ export {
 } from "./state/sync.js";
 export {
   computeDrift,
+  stalenessResults,
+  versionParityResults,
+  FRESHNESS_CHECK,
+  INSTANCE_VERSION_CHECK,
+  APP_VERSION_CHECK,
+  DEFAULT_STALE_WARN_MS,
   type DriftReport,
   type DriftEntry,
+  type DriftManifestRef,
+  type StalenessOptions,
 } from "./state/drift.js";
-export { formatJUnit } from "./report/junit.js";
+export {
+  formatJUnit,
+  formatJUnitSuites,
+  type NamedReport,
+} from "./report/junit.js";
 export { formatSarif } from "./report/sarif.js";
 export {
   defaultChecks,
@@ -155,6 +167,32 @@ export function selectChecks(
     out = out.filter((c) => !skip.has(c.name));
   }
   return out;
+}
+
+/**
+ * A check's return value, forced into something the report can render. Checks
+ * are supplied by the caller, so a bad return is third-party input: it must
+ * fail that one check — exactly as a throw already does — rather than reject
+ * the whole run with a TypeError raised deep inside the summariser, which would
+ * take every other check's result down with it.
+ */
+function coerceResult(check: Check, produced: unknown): CheckResult {
+  if (typeof produced !== "object" || produced === null) {
+    return {
+      name: check.name,
+      status: "fail",
+      message: `Check "${check.name}" returned ${
+        produced === null ? "null" : `a ${typeof produced}`
+      } instead of a CheckResult object; treated as fail.`,
+    };
+  }
+  // An object of the wrong shape still gets rendered: a bad `status` is caught
+  // by the summariser below, but `name` is what identifies the row, so a
+  // missing one falls back to the check that produced it.
+  const candidate = produced as CheckResult;
+  return typeof candidate.name === "string"
+    ? candidate
+    : { ...candidate, name: check.name };
 }
 
 /**
@@ -212,7 +250,7 @@ export async function runPreflight(
   const results: CheckResult[] = [];
   for (const check of selected) {
     try {
-      results.push(await check.run(ctx));
+      results.push(coerceResult(check, await check.run(ctx)));
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       results.push({
