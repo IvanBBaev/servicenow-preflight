@@ -9,6 +9,7 @@ import {
   writeFileSync,
   readFileSync,
   rmSync,
+  existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -483,6 +484,110 @@ test("CLI rejects an unknown --format value (Q-4, exit 2)", () => {
   assert.equal(res.status, 2);
   assert.match(res.stderr, /Unknown --format/);
   assert.match(res.stderr, /xml/);
+});
+
+// --- An instance name the CLI cannot honour is never silently dropped ------
+//
+// Every shape here used to read only the first name and exit 0, which an
+// operator reads as "every instance I named passed".
+
+const TWO_INSTANCES = {
+  dev: { url: "https://dev12345.service-now.com" },
+  prod: { url: "https://prod12345.service-now.com" },
+};
+
+test("CLI run with a second instance name is a usage error (exit 2)", () => {
+  const dir = projectWithRegistry(TWO_INSTANCES);
+  try {
+    const res = runCli(
+      ["run", "dev", "prod", "--only", "instance-url-configured"],
+      {
+        cwd: dir,
+      },
+    );
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /at most one instance name/);
+    // The dropped name is named back, so the operator sees what was ignored.
+    assert.match(res.stderr, /prod/);
+    assert.doesNotMatch(res.stdout, /passed/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run rejects a positional that contradicts --env (exit 2)", () => {
+  // `--env dev prod` slipped past a count-only guard: one positional, but the
+  // `--env ?? positional` precedence still dropped "prod".
+  const dir = projectWithRegistry(TWO_INSTANCES);
+  try {
+    const res = runCli(
+      ["run", "--env", "dev", "prod", "--only", "instance-url-configured"],
+      { cwd: dir },
+    );
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /two different instance names/);
+    assert.match(res.stderr, /dev/);
+    assert.match(res.stderr, /prod/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run accepts a positional that merely repeats --env", () => {
+  // Same name twice is not a contradiction: nothing is being dropped, so the
+  // guard must not fire. Reaching a check (exit 0) proves resolution happened.
+  const dir = projectWithRegistry(TWO_INSTANCES);
+  try {
+    const res = runCli(
+      ["run", "--env", "dev", "dev", "--only", "instance-url-configured"],
+      { cwd: dir },
+    );
+    assert.equal(res.status, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run --all alongside an instance name is a usage error (exit 2)", () => {
+  const dir = projectWithRegistry(TWO_INSTANCES);
+  try {
+    const res = runCli(
+      ["run", "--all", "dev", "--only", "instance-url-configured"],
+      { cwd: dir },
+    );
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /--all cannot be combined with an instance name/);
+    assert.match(res.stderr, /dev/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI sync with a second instance name is a usage error (exit 2)", () => {
+  // Refused before any network call: no manifest is written for "dev" while
+  // "prod" goes unsynced.
+  const dir = projectWithRegistry(TWO_INSTANCES);
+  try {
+    const res = runCli(["sync", "dev", "prod"], { cwd: dir });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /at most one instance name/);
+    assert.match(res.stderr, /prod/);
+    assert.ok(!existsSync(join(dir, ".preflight", "state", "dev.state.json")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI drift with a third instance name is a usage error (exit 2)", () => {
+  const dir = projectWithRegistry(TWO_INSTANCES);
+  try {
+    const res = runCli(["drift", "dev", "prod", "staging"], { cwd: dir });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /exactly two instances/);
+    assert.match(res.stderr, /staging/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // --- Empty / malformed registry (CC-19) -----------------------------------

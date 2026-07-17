@@ -431,23 +431,46 @@ interface RunTarget {
   scope?: string;
 }
 
+/**
+ * The one instance name a command was given, via `--env` or a lone positional.
+ *
+ * Both silent-drop shapes are refused here rather than at each call site: a
+ * second positional (`sync dev prod` read only `dev`), and a positional that
+ * contradicts an explicit `--env` (`--env dev prod` read only `dev`). Either way
+ * the command answered a narrower question than the operator typed and exited 0
+ * — which reads as every named instance having passed. `hint` completes the
+ * sentence "…run one at a time" with whatever the command offers instead.
+ */
+function singleInstanceName(
+  command: string,
+  args: ParsedArgs,
+  hint: string,
+): string | undefined {
+  if (args.positionals.length > 1) {
+    throw new UsageError(
+      `${command} takes at most one instance name, but got ${
+        args.positionals.length
+      }: ${args.positionals.join(", ")}. ${hint}`,
+    );
+  }
+  const positional = args.positionals[0];
+  if (
+    args.env !== undefined &&
+    positional !== undefined &&
+    positional !== args.env
+  ) {
+    throw new UsageError(
+      `${command} got two different instance names: --env "${args.env}" and "${positional}". Pass one or the other.`,
+    );
+  }
+  return args.env ?? positional;
+}
+
 /** Resolve which instance(s) a `run` targets from args + registry. */
 function resolveRunTargets(
   args: ParsedArgs,
   registry: InstanceRegistry | undefined,
 ): RunTarget[] {
-  // `run` takes at most one instance name. Only the first positional was ever
-  // read, so `run dev prod` checked dev, said nothing about prod, and exited 0
-  // — the operator reads that as both instances passing.
-  if (args.positionals.length > 1) {
-    const extra = args.positionals.slice(1).join(", ");
-    throw new UsageError(
-      `run takes at most one instance name, but got ${args.positionals.length}: ${args.positionals.join(
-        ", ",
-      )}. Use --all to check every instance, or run one at a time (unrecognised: ${extra}).`,
-    );
-  }
-
   if (args.all) {
     // `--all` outranks a named instance, so naming one alongside it meant the
     // name was silently dropped — the opposite of what the operator typed.
@@ -488,7 +511,11 @@ function resolveRunTargets(
     });
   }
 
-  const env = args.env ?? args.positionals[0];
+  const env = singleInstanceName(
+    "run",
+    args,
+    "Use --all to check every instance, or run one at a time.",
+  );
   if (env) {
     if (!registry) {
       throw new UsageError(
@@ -595,7 +622,7 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
 
 /** `sync <env>` — pull ATF metadata and write the instance's manifest. */
 async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
-  const env = args.env ?? args.positionals[0];
+  const env = singleInstanceName("sync", args, "Sync one instance at a time.");
   if (!env) {
     throw new UsageError(
       "sync needs an instance name: servicenow-preflight sync <env>.",
@@ -641,6 +668,18 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
   if (!src || !dst) {
     throw new UsageError(
       "drift needs two instances: servicenow-preflight drift <source> <target>.",
+    );
+  }
+  // A third positional was dropped on the floor, so `drift dev staging prod`
+  // compared dev→staging and said nothing about prod — while exiting 0, which
+  // reads as a clean promote for all three.
+  if (args.positionals.length > 2) {
+    throw new UsageError(
+      `drift compares exactly two instances, but got ${
+        args.positionals.length
+      }: ${args.positionals.join(
+        ", ",
+      )}. Compare one source/target pair at a time.`,
     );
   }
   // CC-14: the positionals become manifest paths — validate them (reject
