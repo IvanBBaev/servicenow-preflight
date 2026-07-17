@@ -210,12 +210,19 @@ function parseDotEnvValue(raw: string): string {
  */
 async function loadDotEnv(cwd: string): Promise<void> {
   const envPath = resolve(cwd, ".env");
-  if (!existsSync(envPath)) return;
   let text: string;
   try {
     text = await readFile(envPath, "utf8");
-  } catch {
-    return;
+  } catch (err) {
+    // No `.env` at all is the normal case. A `.env` that exists but cannot be
+    // read is a real misconfiguration (wrong permissions, or a directory of that
+    // name), and swallowing it drops every credential the file carries: the run
+    // would continue unauthenticated, report warns rather than failures, and
+    // exit 0 — a green build that verified nothing. Same rule as a missing
+    // `@`-file, which already throws.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new UsageError(`Could not read ${envPath}: ${detail}`);
   }
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();

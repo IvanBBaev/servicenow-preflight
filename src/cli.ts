@@ -436,7 +436,27 @@ function resolveRunTargets(
   args: ParsedArgs,
   registry: InstanceRegistry | undefined,
 ): RunTarget[] {
+  // `run` takes at most one instance name. Only the first positional was ever
+  // read, so `run dev prod` checked dev, said nothing about prod, and exited 0
+  // — the operator reads that as both instances passing.
+  if (args.positionals.length > 1) {
+    const extra = args.positionals.slice(1).join(", ");
+    throw new UsageError(
+      `run takes at most one instance name, but got ${args.positionals.length}: ${args.positionals.join(
+        ", ",
+      )}. Use --all to check every instance, or run one at a time (unrecognised: ${extra}).`,
+    );
+  }
+
   if (args.all) {
+    // `--all` outranks a named instance, so naming one alongside it meant the
+    // name was silently dropped — the opposite of what the operator typed.
+    const named = args.positionals[0] ?? args.env;
+    if (named) {
+      throw new UsageError(
+        `--all cannot be combined with an instance name ("${named}"); --all already checks every instance in the registry.`,
+      );
+    }
     if (!registry) {
       throw new UsageError(
         "--all needs a registry; create .preflight/instances.json or drop --all.",
