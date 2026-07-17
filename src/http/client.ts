@@ -664,9 +664,38 @@ function base64url(input: string | Buffer): string {
 /** Auth kinds that acquire a token from the OAuth token endpoint. */
 type OAuthGrantAuth = Extract<SnAuth, { kind: `oauth-${string}` }>;
 
+/**
+ * A URL's safe-to-echo form: everything except the userinfo, which may carry a
+ * password. Errors that must name a URL (its path is the actionable part) go
+ * through this rather than echoing the raw configured string.
+ */
+function redactedUrl(url: URL): string {
+  return `${url.protocol}//${url.host}${url.pathname}${url.search}${url.hash}`;
+}
+
 /** The token endpoint URL for a grant flow (config override or the default). */
 function tokenEndpoint(auth: OAuthGrantAuth, origin: string): string {
-  return auth.tokenUrl ?? `${origin}/oauth_token.do`;
+  if (auth.tokenUrl === undefined) return `${origin}/oauth_token.do`;
+  let parsed: URL;
+  try {
+    parsed = new URL(auth.tokenUrl);
+  } catch {
+    throw new SnError(
+      "The configured OAuth tokenUrl is not a valid URL. Configure the token " +
+        "endpoint as an absolute https URL.",
+    );
+  }
+  // The grant POSTs the client secret — and, for the password grant, the
+  // user's password — in the request body. Over http: that is cleartext on the
+  // wire, so a downgrade is refused rather than honoured.
+  if (parsed.protocol !== "https:") {
+    throw new SnError(
+      `The OAuth tokenUrl "${redactedUrl(parsed)}" uses ${parsed.protocol}//; ` +
+        `the grant sends the client secret in the request body and must not ` +
+        `leave the process unencrypted. Configure an https endpoint.`,
+    );
+  }
+  return auth.tokenUrl;
 }
 
 /**
@@ -1140,6 +1169,16 @@ function buildUrl(
   query?: Record<string, string>,
 ): string {
   const url = new URL(path, origin);
+  // `path` can be server-supplied — a CI/CD payload's `links.progress.url` is
+  // followed verbatim — and an absolute URL silently overrides `origin`, which
+  // would carry the Authorization header to whatever host the payload names.
+  // Every request is pinned to the configured instance instead.
+  if (url.origin !== new URL(origin).origin) {
+    throw new SnError(
+      `Refusing to send an authenticated request to "${url.origin}": ` +
+        `it is not the configured instance origin "${origin}".`,
+    );
+  }
   if (query) {
     for (const [key, value] of Object.entries(query)) {
       url.searchParams.set(key, value);
@@ -1174,11 +1213,21 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     parsedUrl.hash
   ) {
     throw new SnError(
-      `instanceUrl "${cfg.instanceUrl}" carries a path/query/fragment ` +
+      `instanceUrl "${redactedUrl(parsedUrl)}" carries a path/query/fragment ` +
         `("${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}") that ` +
         `URL.origin would silently drop, sending every request to ` +
         `"${parsedUrl.origin}" instead. Configure the bare instance origin ` +
         `(scheme + host [+ port]) only.`,
+    );
+  }
+  // `URL.origin` drops userinfo just as silently as it drops a path. Credentials
+  // embedded in the instance URL would be quietly ignored — the run would
+  // authenticate as someone else, or not at all — so they are refused here.
+  if (parsedUrl.username !== "" || parsedUrl.password !== "") {
+    throw new SnError(
+      `instanceUrl "${redactedUrl(parsedUrl)}" carries credentials in its ` +
+        `userinfo, which URL.origin would silently drop. Supply them through ` +
+        `SNPF_USER / SNPF_PASS (or another SNPF_* auth variable) instead.`,
     );
   }
   const origin = parsedUrl.origin;

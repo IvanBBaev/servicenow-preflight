@@ -514,6 +514,87 @@ test("a grant flow honours a tokenUrl override", async () => {
   assert.equal(calls[1].init.headers.Authorization, "Bearer acc-ov");
 });
 
+test("a plain-http tokenUrl override is refused before any secret is sent", async () => {
+  // The grant POSTs client_secret (and, for the password grant, the user's
+  // password) in the body — a downgrade to http would put both on the wire.
+  await assert.rejects(
+    () =>
+      createSnClient({
+        instanceUrl: INSTANCE,
+        auth: {
+          kind: "oauth-client",
+          clientId: "cid",
+          clientSecret: "csec",
+          tokenUrl: "http://auth.example.com/token",
+        },
+      })
+        .table("incident")
+        .get("z"),
+    (err) => {
+      assert.ok(err instanceof SnError);
+      assert.match(err.message, /must not.*unencrypted|https/is);
+      return true;
+    },
+  );
+  // Nothing left the process: the refusal precedes the token request.
+  assert.equal(calls.length, 0);
+});
+
+test("a tokenUrl error never echoes the userinfo password", async () => {
+  await assert.rejects(
+    () =>
+      createSnClient({
+        instanceUrl: INSTANCE,
+        auth: {
+          kind: "oauth-client",
+          clientId: "cid",
+          clientSecret: "csec",
+          tokenUrl: "http://tokenuser:hunter2@auth.example.com/token",
+        },
+      })
+        .table("incident")
+        .get("z"),
+    (err) => {
+      assert.ok(!err.message.includes("hunter2"));
+      assert.ok(!err.message.includes("tokenuser"));
+      assert.match(err.message, /auth\.example\.com/);
+      return true;
+    },
+  );
+});
+
+test("an instanceUrl carrying userinfo is refused, redacted", () => {
+  assert.throws(
+    () =>
+      createSnClient({
+        instanceUrl: "https://admin:hunter2@dev12345.service-now.com",
+        auth: AUTH,
+      }),
+    (err) => {
+      assert.ok(err instanceof SnError);
+      // URL.origin would drop these credentials silently.
+      assert.match(err.message, /userinfo/);
+      assert.ok(!err.message.includes("hunter2"));
+      return true;
+    },
+  );
+});
+
+test("the instanceUrl path guard redacts the userinfo it echoes", () => {
+  assert.throws(
+    () =>
+      createSnClient({
+        instanceUrl: "https://admin:hunter2@dev12345.service-now.com/servicenow",
+        auth: AUTH,
+      }),
+    (err) => {
+      assert.match(err.message, /path\/query\/fragment/);
+      assert.ok(!err.message.includes("hunter2"));
+      return true;
+    },
+  );
+});
+
 test("an acquired OAuth token is cached across requests", async () => {
   handler = grantHandler("acc-cache", { expires_in: 1800 });
   const c = createSnClient({
@@ -1051,6 +1132,44 @@ test("CC-13: persistent poll failures beyond the tolerance give up with the erro
       return true;
     },
   );
+});
+
+// --- a server-supplied progress URL cannot redirect the credential ----------
+
+test("a cross-origin progress link is refused, not followed with the token", async () => {
+  // The kickoff payload is server-supplied: a compromised or hostile instance
+  // naming another host would otherwise get the Authorization header delivered
+  // to it verbatim.
+  handler = (url, init) => {
+    if (init.method === "POST") {
+      return fakeResponse({
+        body: {
+          result: {
+            status: 1,
+            links: {
+              progress: {
+                id: "p1",
+                url: "https://attacker.example.com/api/sn_cicd/progress/p1",
+              },
+            },
+          },
+        },
+      });
+    }
+    return settledOk();
+  };
+  await assert.rejects(
+    () => client().cicd.runTestSuite("suite-1"),
+    (err) => {
+      assert.ok(err instanceof SnError);
+      assert.match(err.message, /attacker\.example\.com/);
+      assert.match(err.message, /not the configured instance origin/);
+      return true;
+    },
+  );
+  // The POST kickoff is the only request that ever left: no poll was issued.
+  assert.equal(calls.length, 1);
+  assert.ok(!calls.some((c) => String(c.url).includes("attacker.example.com")));
 });
 
 // --- CC-31: never follow redirects on an API call ---------------------------
