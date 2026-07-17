@@ -35,6 +35,36 @@ test("instanceUrlConfigured passes on a valid https URL", async () => {
   assert.equal(result.status, "pass");
 });
 
+test("instanceUrlConfigured fails on a malformed URL", async () => {
+  // A bare hostname with no scheme is the realistic paste-o: `new URL` throws,
+  // and the check must surface that as a fail that echoes the offending value.
+  const result = await instanceUrlConfigured.run(
+    ctx({ instanceUrl: "dev12345.service-now.com" }),
+  );
+  assert.equal(result.name, "instance-url-configured");
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /not a valid URL/);
+  assert.match(result.message, /dev12345\.service-now\.com/);
+});
+
+test("instanceUrlConfigured fails closed on every unparseable URL shape", async () => {
+  // Fail-closed doctrine: an unparseable target must never warn or pass its way
+  // through, whatever shape the garbage takes. Notably it must not be mistaken
+  // for the empty-URL case, nor fall through to the non-https warn.
+  const malformed = [
+    "not a url",
+    "https://",
+    "://dev12345.service-now.com",
+    "ht!tp://dev12345.service-now.com",
+    "  dev12345.service-now.com  ",
+  ];
+  for (const instanceUrl of malformed) {
+    const result = await instanceUrlConfigured.run(ctx({ instanceUrl }));
+    assert.equal(result.status, "fail", `expected fail for ${instanceUrl}`);
+    assert.match(result.message, /not a valid URL/);
+  }
+});
+
 test("runPreflight runs every default check and the summary totals match", async () => {
   const report = await runPreflight(ctx());
   // Check-agnostic: one result per default check, and the summary buckets
@@ -90,6 +120,23 @@ test("runPreflight fails closed when a selection matches no checks (vacuous guar
   assert.equal(report.results.length, 1);
   assert.equal(report.results[0].name, "preflight");
   assert.match(report.results[0].message, /nothing was verified/i);
+});
+
+test("runPreflight fails closed when the instance URL is unparseable", async () => {
+  // End-to-end pin: the malformed-URL fail must propagate to report.ok, so a
+  // typo'd target can never be reported as a clean run.
+  const report = await runPreflight(
+    ctx({
+      instanceUrl: "dev12345.service-now.com",
+      select: { only: [instanceUrlConfigured.name] },
+    }),
+  );
+  assert.equal(report.ok, false);
+  assert.equal(report.summary.fail, 1);
+  assert.equal(report.summary.pass, 0);
+  assert.equal(report.summary.warn, 0);
+  assert.equal(report.results[0].status, "fail");
+  assert.match(report.results[0].message, /not a valid URL/);
 });
 
 test("runPreflight with an explicit empty check list is not ok (CC-21)", async () => {

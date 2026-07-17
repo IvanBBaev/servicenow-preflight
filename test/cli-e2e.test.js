@@ -576,6 +576,80 @@ test("CLI run --all --format sarif emits a single SARIF log with a run per insta
   }
 });
 
+// --- --all through the DEFAULT (pretty) renderer ---------------------------
+
+test("CLI run --all renders a pretty block per instance and a passing rollup", () => {
+  // No --format: this is the default human-readable path an operator actually
+  // sees. `staging` is deliberately http:// so the run also exercises the warn
+  // icon and proves a warning does NOT fail the aggregate gate.
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com" },
+    staging: { url: "http://staging12345.service-now.com" },
+  });
+  try {
+    const res = runCli(["run", "--all", "--only", "instance-url-configured"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(
+      res.stdout,
+      [
+        "== dev ==",
+        "✓ instance-url-configured: Instance URL looks good: https://dev12345.service-now.com",
+        "",
+        "1 passed, 0 warnings, 0 failed",
+        "",
+        "== staging ==",
+        "! instance-url-configured: Instance URL should use https, got http.",
+        "",
+        "0 passed, 1 warnings, 0 failed",
+        "",
+        "All 2 instance(s) passed.",
+        "",
+      ].join("\n"),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run --all pretty names the failing instances and exits 1", () => {
+  // The vacuous-selection guard fails every instance, so the rollup must switch
+  // from "All N passed" to the failed-instance list and the run must exit 1.
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com" },
+    prod: { url: "https://prod98765.service-now.com" },
+  });
+  try {
+    const res = runCli(["run", "--all", "--only", "no-such-check"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 1);
+    const failLine =
+      "✗ preflight: No checks matched the selection (ctx.select.only/skip); nothing was verified.";
+    assert.equal(
+      res.stdout,
+      [
+        "== dev ==",
+        failLine,
+        "",
+        "0 passed, 0 warnings, 1 failed",
+        "",
+        "== prod ==",
+        failLine,
+        "",
+        "0 passed, 0 warnings, 1 failed",
+        "",
+        "Failed on: dev, prod",
+        "",
+      ].join("\n"),
+    );
+    assert.doesNotMatch(res.stdout, /All 2 instance\(s\) passed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // --- Argument-parser hardening (CC-22 / CC-23 / CC-24) ---------------------
 
 test("CLI rejects an unknown option (CC-23, exit 2)", () => {
@@ -721,5 +795,109 @@ test("CLI forwards the --config proxy / noProxy settings to the client (SR-5)", 
   } finally {
     rmSync(dir, { recursive: true, force: true });
     await proxy.stop();
+  }
+});
+
+// --- sync success path (fake instance) -------------------------------------
+
+/**
+ * A minimal in-process stand-in for a ServiceNow instance's Table API: it
+ * answers `GET /api/now/table/<name>` with `{ result: [...] }` taken from
+ * `tables` (an unlisted table answers with no rows), which is all `sync` reads.
+ * Plain http on loopback — the client only ever proxies https:// targets, so
+ * ambient proxy variables cannot divert these requests.
+ * Kept local to this file (test files do not cross-import).
+ */
+async function startFakeInstance(tables) {
+  const server = createHttpServer((req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const table = url.pathname.replace("/api/now/table/", "");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ result: tables[table] ?? [] }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}`,
+    async stop() {
+      server.closeAllConnections();
+      server.close();
+      await once(server, "close");
+    },
+  };
+}
+
+test("CLI sync writes the manifest and reports what it pulled", async () => {
+  // The success path of `sync`: pull ATF tests/suites from an instance, write
+  // `.preflight/state/<instance>.state.json`, and report the counts. Everything
+  // is served in-process, so the CLI must be launched with the async
+  // `runCliAsync` (never the synchronous `runCli`) — see its doc comment.
+  const instance = await startFakeInstance({
+    sys_atf_test: [
+      {
+        sys_id: "t1",
+        name: "Alpha Test",
+        active: "true",
+        "sys_scope.scope": "x_acme_app",
+      },
+      {
+        sys_id: "t2",
+        name: "Beta Test",
+        active: "false",
+        "sys_scope.scope": "x_acme_app",
+      },
+    ],
+    sys_atf_test_suite: [
+      { sys_id: "s1", name: "Smoke Suite", "sys_scope.scope": "x_acme_app" },
+    ],
+    sys_atf_test_suite_test: [{ sys_id: "l1", test_suite: "s1", test: "t1" }],
+  });
+  const dir = projectWithRegistry({ dev: { url: instance.url } });
+  try {
+    const res = await runCliAsync(["sync", "dev"], { cwd: dir });
+    assert.equal(res.status, 0, res.stderr);
+    // The operator-facing receipt: the counts and the file it landed in. The
+    // path is matched loosely because macOS resolves tmpdir() through a symlink
+    // (/var/… vs the child's /private/var/…).
+    assert.match(
+      res.stdout,
+      /^Synced 2 test\(s\), 1 suite\(s\) from "dev" → .*[/\\]\.preflight[/\\]state[/\\]dev\.state\.json\n$/,
+    );
+
+    // The message is not enough — the manifest must actually be on disk, with
+    // the pulled rows normalised into logical ids and the suite's membership
+    // resolved from the m2m table.
+    const manifest = JSON.parse(
+      readFileSync(join(dir, ".preflight", "state", "dev.state.json"), "utf8"),
+    );
+    assert.equal(manifest.instance, "dev");
+    assert.equal(manifest.url, instance.url);
+    assert.match(manifest.syncedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.deepEqual(manifest.tests, [
+      {
+        id: "x_acme_app/alpha-test",
+        sysId: "t1",
+        name: "Alpha Test",
+        active: true,
+      },
+      {
+        id: "x_acme_app/beta-test",
+        sysId: "t2",
+        name: "Beta Test",
+        active: false,
+      },
+    ]);
+    assert.deepEqual(manifest.suites, [
+      {
+        id: "x_acme_app/smoke-suite",
+        sysId: "s1",
+        name: "Smoke Suite",
+        testIds: ["x_acme_app/alpha-test"],
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await instance.stop();
   }
 });
