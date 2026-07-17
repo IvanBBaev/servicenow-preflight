@@ -584,7 +584,8 @@ test("the instanceUrl path guard redacts the userinfo it echoes", () => {
   assert.throws(
     () =>
       createSnClient({
-        instanceUrl: "https://admin:hunter2@dev12345.service-now.com/servicenow",
+        instanceUrl:
+          "https://admin:hunter2@dev12345.service-now.com/servicenow",
         auth: AUTH,
       }),
     (err) => {
@@ -1257,9 +1258,7 @@ test("SN-1: queryWithMeta surfaces X-Total-Count and flags security-trimming", a
       body: { result: [{ sys_id: "1" }, { sys_id: "2" }] },
       headers: { "X-Total-Count": "50" },
     });
-  const res = await client()
-    .table("sys_security_acl")
-    .queryWithMeta({ sysparm_limit: "10" });
+  const res = await client().table("sys_security_acl").queryWithMeta();
   assert.equal(res.rows.length, 2);
   assert.equal(res.totalCount, 50);
   assert.equal(res.securityTrimmed, true);
@@ -1271,18 +1270,14 @@ test("SN-1: queryWithMeta reports securityTrimmed false when the count matches",
       body: { result: [{ sys_id: "1" }, { sys_id: "2" }] },
       headers: { "x-total-count": "2" },
     });
-  const res = await client()
-    .table("incident")
-    .queryWithMeta({ sysparm_limit: "10" });
+  const res = await client().table("incident").queryWithMeta();
   assert.equal(res.totalCount, 2);
   assert.equal(res.securityTrimmed, false);
 });
 
 test("SN-1: queryWithMeta leaves totalCount undefined when the header is absent", async () => {
   handler = () => fakeResponse({ body: { result: [{ sys_id: "1" }] } });
-  const res = await client()
-    .table("incident")
-    .queryWithMeta({ sysparm_limit: "10" });
+  const res = await client().table("incident").queryWithMeta();
   assert.equal(res.totalCount, undefined);
   assert.equal(res.securityTrimmed, false);
 });
@@ -1293,10 +1288,47 @@ test("SN-1: a malformed X-Total-Count is ignored (totalCount undefined)", async 
       body: { result: [{ sys_id: "1" }] },
       headers: { "x-total-count": "not-a-number" },
     });
+  const res = await client().table("incident").queryWithMeta();
+  assert.equal(res.totalCount, undefined);
+});
+
+test("SN-1: queryWithMeta refuses a caller-pinned sysparm_limit", async () => {
+  // Under a pinned limit a short result is just the page ending, so
+  // `securityTrimmed` would fire on a perfectly readable table. Callers read
+  // that flag as a permissions failure, so the pairing is refused outright
+  // rather than answered with a guess.
+  handler = () =>
+    fakeResponse({
+      body: { result: [{ sys_id: "1" }, { sys_id: "2" }] },
+      headers: { "X-Total-Count": "50" },
+    });
+  await assert.rejects(
+    () => client().table("incident").queryWithMeta({ sysparm_limit: "10" }),
+    (err) => {
+      assert.ok(err instanceof SnError);
+      assert.match(err.message, /sysparm_limit/);
+      assert.match(err.message, /security-trimmed/);
+      return true;
+    },
+  );
+  // The refusal precedes the request: nothing was asked of the instance.
+  assert.equal(calls.length, 0);
+});
+
+test("SN-1: an empty sysparm_limit is absent, not a pinned page", async () => {
+  // `paramPresent` treats "" as unsupplied everywhere else in the client; the
+  // guard has to agree, or a blank passthrough value would break a caller that
+  // is in fact auto-paginating.
+  handler = () =>
+    fakeResponse({
+      body: { result: [{ sys_id: "1" }] },
+      headers: { "X-Total-Count": "9" },
+    });
   const res = await client()
     .table("incident")
-    .queryWithMeta({ sysparm_limit: "10" });
-  assert.equal(res.totalCount, undefined);
+    .queryWithMeta({ sysparm_limit: "  " });
+  assert.equal(res.totalCount, 9);
+  assert.equal(res.securityTrimmed, true);
 });
 
 test("SN-1: auto-pagination captures X-Total-Count from the first page", async () => {

@@ -177,9 +177,7 @@ test("SN-1: mTLS queryWithMeta surfaces the X-Total-Count header", async () => {
       instanceUrl: `https://localhost:${port}`,
       tls: { cert: clientCrt, key: clientKey, ca: serverCrt },
     });
-    const res = await http
-      .table("sys_security_acl")
-      .queryWithMeta({ sysparm_limit: "10" });
+    const res = await http.table("sys_security_acl").queryWithMeta();
     assert.equal(res.rows.length, 1);
     assert.equal(res.totalCount, 42);
     // 42 pre-trim matches but only 1 visible row → security-trimmed.

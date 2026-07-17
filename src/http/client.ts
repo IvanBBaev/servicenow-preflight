@@ -1571,6 +1571,22 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           return (await runQuery(params)).rows;
         },
         async queryWithMeta(params) {
+          // `securityTrimmed` is derived from `totalCount > rows.length`, which
+          // only means "ACLs hid rows" when the client fetched every page. Under
+          // a caller-pinned `sysparm_limit` a short result is just the page
+          // ending, so the signal would fire on a perfectly readable table —
+          // and callers treat it as a permissions failure. This method exists to
+          // answer a question a single page cannot, so refuse it rather than
+          // answer with a coin flip.
+          if (paramPresent(params?.sysparm_limit)) {
+            throw new SnError(
+              `Table API queryWithMeta on "${name}" supplied sysparm_limit=` +
+                `"${params.sysparm_limit.trim()}". The security-trimmed signal ` +
+                `compares the pre-trim X-Total-Count against the rows fetched, ` +
+                `which is only meaningful across the full result set. Drop the ` +
+                `limit to auto-paginate, or use query() if you only need a page.`,
+            );
+          }
           return runQuery(params);
         },
       };

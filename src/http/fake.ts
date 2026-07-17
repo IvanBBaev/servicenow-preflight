@@ -43,6 +43,7 @@
 
 import {
   SnAuthError,
+  SnError,
   SnHttpError,
   SnNetworkError,
   SnResponseError,
@@ -52,6 +53,32 @@ import {
   type SnTable,
   type TableQueryResult,
 } from "./client.js";
+
+/**
+ * Whether a `sysparm_*` value was really supplied. Mirrors the real client:
+ * an empty string means "absent", not "zero".
+ */
+function paramPresent(value: string | undefined): value is string {
+  return value !== undefined && value.trim() !== "";
+}
+
+/**
+ * Parse a `sysparm_limit` / `sysparm_offset` into a row count. The fake is
+ * deliberately stricter than the platform here: production forwards a nonsense
+ * value and lets ServiceNow interpret it, but in a test double a bad count is a
+ * bug in the test, and silently slicing by NaN would hand back an empty result
+ * that looks like a legitimate "no rows".
+ */
+function parseCount(table: string, param: string, raw: string): number {
+  const n = Number(raw.trim());
+  if (!Number.isInteger(n) || n < 0) {
+    throw new SnError(
+      `Table API query on "${table}" supplied ${param}="${raw.trim()}", ` +
+        `which is not a non-negative integer.`,
+    );
+  }
+  return n;
+}
 
 /** A forced failure — exactly one kind should be set. */
 export interface ForcedFailure {
@@ -344,6 +371,35 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
           projectRow(name, r, cols, refs, fields),
         );
       };
+      // The rows a real query would actually return, honouring the caller's
+      // paging window. Ignoring `sysparm_limit` here would let a check that
+      // pages explicitly pass its tests against every seeded row while seeing
+      // only the first page in production — exactly the class of bug this fake
+      // exists to catch.
+      const pagedRows = (
+        params?: Record<string, string>,
+      ): Record<string, unknown>[] => {
+        const rows = shapedRows(params);
+        if (!paramPresent(params?.sysparm_limit)) {
+          // A `sysparm_offset` without a `sysparm_limit` is ambiguous, and the
+          // real client fails closed rather than return the wrong window. The
+          // fake must not quietly answer what production refuses.
+          if (paramPresent(params?.sysparm_offset)) {
+            throw new SnError(
+              `Table API query on "${name}" supplied sysparm_offset=` +
+                `"${params.sysparm_offset.trim()}" without a sysparm_limit. ` +
+                `Pair an offset with an explicit sysparm_limit to page manually, ` +
+                `or drop the offset to let the client auto-paginate.`,
+            );
+          }
+          return rows;
+        }
+        const limit = parseCount(name, "sysparm_limit", params.sysparm_limit);
+        const offset = paramPresent(params?.sysparm_offset)
+          ? parseCount(name, "sysparm_offset", params.sysparm_offset)
+          : 0;
+        return rows.slice(offset, offset + limit);
+      };
       return {
         get(sysId, params) {
           maybeThrow(tableFail(name), `table ${name}`);
@@ -357,11 +413,23 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
         },
         query(params) {
           maybeThrow(tableFail(name), `table ${name}`);
-          return Promise.resolve(shapedRows(params));
+          return Promise.resolve(pagedRows(params));
         },
         queryWithMeta(params): Promise<TableQueryResult> {
           maybeThrow(tableFail(name), `table ${name}`);
-          const rows = shapedRows(params);
+          // The real client refuses this pairing: `securityTrimmed` compares the
+          // pre-trim count against the rows fetched, which says nothing when a
+          // limit already capped them.
+          if (paramPresent(params?.sysparm_limit)) {
+            throw new SnError(
+              `Table API queryWithMeta on "${name}" supplied sysparm_limit=` +
+                `"${params.sysparm_limit.trim()}". The security-trimmed signal ` +
+                `compares the pre-trim X-Total-Count against the rows fetched, ` +
+                `which is only meaningful across the full result set. Drop the ` +
+                `limit to auto-paginate, or use query() if you only need a page.`,
+            );
+          }
+          const rows = pagedRows(params);
           const totalCount = fixtures.totalCounts?.[name];
           return Promise.resolve({
             rows,
