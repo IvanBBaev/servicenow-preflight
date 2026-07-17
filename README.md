@@ -406,12 +406,12 @@ CI/CD responses, or force error surfaces with the `fail` fixture. Client helpers
 throw a small typed hierarchy (all extend `SnError`) that checks map to results;
 secrets never appear in the messages:
 
-| Error            | Raised when                                                |
-| ---------------- | ---------------------------------------------------------- |
-| `SnAuthError`    | HTTP 401 / 403, or missing credentials (`.status`).        |
-| `SnNetworkError` | DNS / connection failure / timeout — instance unreachable. |
-| `SnHttpError`    | Any other non-2xx status (`.status`, `.body`).             |
-| `SnResponseError` | A 2xx carrying a non-JSON body — a hibernating instance's wake-up page or an SSO/proxy interstitial. |
+| Error               | Raised when                                                                                               |
+| ------------------- | --------------------------------------------------------------------------------------------------------- |
+| `SnAuthError`       | HTTP 401 / 403, or missing credentials (`.status`).                                                       |
+| `SnNetworkError`    | DNS / connection failure / timeout — instance unreachable.                                                |
+| `SnHttpError`       | Any other non-2xx status (`.status`, `.body`).                                                            |
+| `SnResponseError`   | A 2xx carrying a non-JSON body — a hibernating instance's wake-up page or an SSO/proxy interstitial.      |
 | `SnTruncationError` | An auto-paginated `query()` hit `maxRows` (default 100000) — fails closed instead of silently truncating. |
 
 To add your own check, implement the `Check` interface (a `run(ctx)` returning a
