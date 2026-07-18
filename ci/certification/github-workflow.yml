@@ -1,0 +1,81 @@
+# ServiceNow scoped-app certification gate — GitHub Actions
+# -----------------------------------------------------------------------------
+# Copy this file to .github/workflows/certification.yml in your ServiceNow
+# scoped-app repo. It runs the same ci/certification/scan.sh scanner as the
+# pre-commit hook, so local and CI checks never drift apart.
+#   * blockers : fails the check (blocks the PR) on Tier 1/2 security issues,
+#                recursive before-BR, or tabnabbing links.
+#   * advisory : never fails (continue-on-error); surfaces Tier 3/4 items.
+# The scan report is written to the job summary and uploaded as an artifact.
+# -----------------------------------------------------------------------------
+name: Certification Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+    tags: ["*"]
+
+permissions:
+  contents: read
+
+jobs:
+  blockers:
+    name: Certification blockers (Tier 1/2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so PR base diff is available
+      - name: Run blocking certification scan
+        shell: bash
+        run: |
+          chmod +x ci/certification/scan.sh
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -n "$BASE" ]; then
+            ci/certification/scan.sh --mode blocking --diff "$BASE"
+          else
+            ci/certification/scan.sh --mode blocking
+          fi
+      - name: Publish report to job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## ServiceNow certification gate — blockers";
+            echo '```';
+            cat cert-report.txt 2>/dev/null || echo "(no report)";
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cert-report
+          path: |
+            cert-report.txt
+            cert-junit.xml
+          if-no-files-found: ignore
+          retention-days: 30
+
+  advisory:
+    name: Certification advisory (Tier 3/4)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run advisory certification scan
+        shell: bash
+        run: |
+          chmod +x ci/certification/scan.sh
+          ci/certification/scan.sh --mode advisory
+      - name: Publish advisory report to job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## ServiceNow certification gate — advisory";
+            echo '```';
+            cat cert-report.txt 2>/dev/null || echo "(no report)";
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,38 @@
+# ServiceNow scoped-app certification gate — pre-commit framework config
+# -----------------------------------------------------------------------------
+# Copy this file to .pre-commit-config.yaml at the root of your ServiceNow
+# scoped-app repo (alongside ci/certification/scan.sh).
+# -----------------------------------------------------------------------------
+# Install once:   pipx install pre-commit   (or: pip install pre-commit)
+# Enable in repo: pre-commit install
+# Run manually:   pre-commit run --all-files
+#
+# Both hooks call the SAME scanner used by CI (ci/certification/scan.sh),
+# so local and server checks never drift apart.
+#
+#   * certification-blockers : FAILS the commit on Tier 1/2 security issues,
+#     recursive before-BR, or tabnabbing links.
+#   * certification-advisory : never blocks; prints Tier 3/4 best-practice and
+#     performance warnings (shown because verbose: true).
+#
+# Bypass in an emergency (records intent):  git commit --no-verify
+# -----------------------------------------------------------------------------
+repos:
+  - repo: local
+    hooks:
+      - id: certification-blockers
+        name: ServiceNow certification gate (blockers)
+        entry: ci/certification/scan.sh --mode blocking
+        language: script
+        files: \.(xml|js)$
+        pass_filenames: true
+        require_serial: true
+
+      - id: certification-advisory
+        name: ServiceNow certification gate (advisory, non-blocking)
+        entry: ci/certification/scan.sh --mode advisory
+        language: script
+        files: \.(xml|js)$
+        pass_filenames: true
+        require_serial: true
+        verbose: true
