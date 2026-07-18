@@ -8,6 +8,11 @@ import { atfRun } from "./atf-run.js";
 import { scopedAppDeps } from "./scoped-app-deps.js";
 import { i18nCompleteness } from "./i18n-completeness.js";
 import { aclRoleSanity } from "./acl-role-sanity.js";
+import { clientCallableAcl } from "./client-callable-acl.js";
+import { restEndpointSecurity } from "./rest-endpoint-security.js";
+import { scriptFieldExposure } from "./script-field-exposure.js";
+import { scheduledJobRunAs } from "./scheduled-job-run-as.js";
+import { mobileMenuHygiene } from "./mobile-menu-hygiene.js";
 
 export { connectivityAuth } from "./connectivity-auth.js";
 export { updateSetState } from "./update-set-state.js";
@@ -18,6 +23,11 @@ export { atfRun } from "./atf-run.js";
 export { scopedAppDeps } from "./scoped-app-deps.js";
 export { i18nCompleteness } from "./i18n-completeness.js";
 export { aclRoleSanity } from "./acl-role-sanity.js";
+export { clientCallableAcl } from "./client-callable-acl.js";
+export { restEndpointSecurity } from "./rest-endpoint-security.js";
+export { scriptFieldExposure } from "./script-field-exposure.js";
+export { scheduledJobRunAs } from "./scheduled-job-run-as.js";
+export { mobileMenuHygiene } from "./mobile-menu-hygiene.js";
 export { testDrift } from "./test-drift.js";
 
 /**
@@ -93,4 +103,12 @@ export const defaultChecks: Check[] = [
   scopedAppDeps,
   i18nCompleteness,
   aclRoleSanity,
+  // ServiceNow Store certification gates — live-instance versions of the
+  // recurring reviewer findings in ci/certification/CHECKLIST.md; the
+  // metadata rules the text scanner (ci/certification/scan.sh) cannot cover.
+  clientCallableAcl,
+  restEndpointSecurity,
+  scriptFieldExposure,
+  scheduledJobRunAs,
+  mobileMenuHygiene,
 ];
