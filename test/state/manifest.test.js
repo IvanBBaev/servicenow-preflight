@@ -744,6 +744,144 @@ test("loadManifest reads a non-object identity and a non-array apps as never cap
   }
 });
 
+test("identity missing-reasons round-trip through write/load (OPP-1)", async () => {
+  const dir = tempDir();
+  try {
+    const manifest = {
+      instance: "dev",
+      identity: { war: "glide-x", buildNameMissing: "trimmed" },
+      tests: [],
+      suites: [],
+    };
+    await writeManifest(manifest, dir);
+    const loaded = await loadManifest("dev", dir);
+    assert.deepEqual(loaded.identity, {
+      war: "glide-x",
+      buildNameMissing: "trimmed",
+    });
+
+    manifest.identity = { buildName: "Xanadu", warMissing: "absent" };
+    await writeManifest(manifest, dir);
+    const reloaded = await loadManifest("dev", dir);
+    assert.deepEqual(reloaded.identity, {
+      buildName: "Xanadu",
+      warMissing: "absent",
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest drops unknown missing-reason values — fail-safe to unclassified (OPP-1)", async () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(
+      manifestPathWithMkdir(dir, "dev"),
+      JSON.stringify({
+        instance: "dev",
+        // Only the literal strings "absent"/"trimmed" are meaningful; anything
+        // else (wrong case, wrong type) must read as "cause unknown".
+        identity: {
+          war: "glide-x",
+          buildNameMissing: "ABSENT",
+          warMissing: 42,
+        },
+        tests: [],
+        suites: [],
+      }),
+    );
+    const loaded = await loadManifest("dev", dir);
+    assert.deepEqual(loaded.identity, { war: "glide-x" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest drops a missing-reason that contradicts a present value (OPP-1)", async () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(
+      manifestPathWithMkdir(dir, "dev"),
+      JSON.stringify({
+        instance: "dev",
+        identity: {
+          buildName: "Xanadu",
+          buildNameMissing: "trimmed",
+          war: "glide-x",
+          warMissing: "absent",
+        },
+        tests: [],
+        suites: [],
+      }),
+    );
+    const loaded = await loadManifest("dev", dir);
+    assert.deepEqual(loaded.identity, { buildName: "Xanadu", war: "glide-x" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeManifest omits a missing-reason when the value is present (OPP-1)", async () => {
+  const dir = tempDir();
+  try {
+    const path = await writeManifest(
+      {
+        instance: "dev",
+        // Contradictory in-memory identity: the serializer must not let the
+        // reason reach disk next to a captured value.
+        identity: { buildName: "Xanadu", buildNameMissing: "trimmed" },
+        tests: [],
+        suites: [],
+      },
+      dir,
+    );
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    assert.deepEqual(parsed.identity, { buildName: "Xanadu" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeManifest omits a missing-reason next to a present war value (OPP-1)", async () => {
+  const dir = tempDir();
+  try {
+    const path = await writeManifest(
+      {
+        instance: "dev",
+        identity: { war: "glide-x", warMissing: "trimmed" },
+        tests: [],
+        suites: [],
+      },
+      dir,
+    );
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    assert.deepEqual(parsed.identity, { war: "glide-x" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest drops an identity carrying only missing-reasons (OPP-1)", async () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(
+      manifestPathWithMkdir(dir, "dev"),
+      JSON.stringify({
+        instance: "dev",
+        // Reasons without a single captured value identify nothing — the
+        // block reads as if no identity was recorded at all.
+        identity: { buildNameMissing: "trimmed", warMissing: "absent" },
+        tests: [],
+        suites: [],
+      }),
+    );
+    const loaded = await loadManifest("dev", dir);
+    assert.equal(loaded.identity, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("writeManifest honours an absolute explicitPath", async () => {
   const dir = tempDir();
   try {

@@ -1,5 +1,6 @@
-import type { SnClient } from "../http/client.js";
+import type { SnClient, TableQueryResult } from "../http/client.js";
 import { and, eq, inClause, scopeFilterClause } from "../http/query.js";
+import { triageZeroRead } from "../checks/cert-common.js";
 import {
   emptyManifest,
   logicalId,
@@ -8,6 +9,7 @@ import {
   type AtfRunRef,
   type AtfSuiteState,
   type AtfTestState,
+  type IdentityMissingReason,
   type InstalledAppState,
   type InstanceIdentity,
   type StateManifest,
@@ -304,18 +306,70 @@ async function attachLastRuns(
 }
 
 /**
+ * Classify WHY one identity property's value is missing (OPP-1 part (b)),
+ * reusing the certification checks' zero-read triage ({@link triageZeroRead})
+ * over `queryWithMeta`'s pre-trim `X-Total-Count`. Proof discipline: a reason
+ * is returned only when the metadata PROVES it; any ambiguity — no count, a
+ * failed re-read, contradictory rows — returns `undefined` (unknown).
+ *
+ * - An untrimmed combined read that carried a count proves every matching row
+ *   was visible, so the missing value is real — no row, or only blank rows —
+ *   → `"absent"`. A blank visible row under a TRIMMED or count-less read is
+ *   NOT proof: a second, valued row for the same name could be ACL-hidden.
+ * - Otherwise the combined read cannot attribute hidden rows to one property
+ *   NAME, so the name is re-read alone for a per-name count. Zero visible
+ *   rows triage as the certification checks do: provably zero → `"absent"`,
+ *   hidden rows → `"trimmed"`. Visible rows that are all blank are `"absent"`
+ *   only when the per-name count proves nothing else is hidden, `"trimmed"`
+ *   when it proves hidden matching rows exist; a visible VALUE contradicts
+ *   the captured absence, so no reason may be claimed.
+ */
+async function classifyMissingProperty(
+  client: SnClient,
+  name: string,
+  meta: TableQueryResult,
+): Promise<IdentityMissingReason | undefined> {
+  if (meta.totalCount !== undefined && !meta.securityTrimmed) return "absent";
+  let single: TableQueryResult;
+  try {
+    single = await client.table(PROPERTIES_TABLE).queryWithMeta({
+      sysparm_query: eq("name", name),
+      sysparm_fields: "name,value",
+    });
+  } catch {
+    return undefined;
+  }
+  if (single.rows.length > 0) {
+    if (!single.rows.every((r) => str(r.value) === "")) return undefined;
+    if (single.totalCount === undefined) return undefined;
+    return single.securityTrimmed ? "trimmed" : "absent";
+  }
+  const triage = triageZeroRead(single);
+  if (triage === "empty") return "absent";
+  if (triage === "trimmed") return "trimmed";
+  return undefined;
+}
+
+/**
  * Read the platform version identity from `sys_properties` (OPP-1). Both
  * property names go through the validated builder ({@link inClause}) — never
  * raw string interpolation (SR-1). A property that is unreadable, ACL-hidden,
  * or blank is recorded as absent, never fabricated; when both are absent the
  * whole identity is absent and drift reports an advisory instead of gating.
+ *
+ * Part (b): a missing value on an otherwise-captured identity is classified
+ * via {@link classifyMissingProperty} and recorded as `buildNameMissing` /
+ * `warMissing`, so drift can say "not set on the instance" instead of sending
+ * the user to fix ACLs for a property that provably does not exist. No reason
+ * is attached when BOTH values are missing — the identity block itself stays
+ * absent and drift's pre-capture advisory covers that case.
  */
 async function pullIdentity(
   client: SnClient,
 ): Promise<InstanceIdentity | undefined> {
-  let rows: Record<string, unknown>[];
+  let meta: TableQueryResult;
   try {
-    rows = await client.table(PROPERTIES_TABLE).query({
+    meta = await client.table(PROPERTIES_TABLE).queryWithMeta({
       sysparm_query: inClause("name", [BUILD_NAME_PROPERTY, WAR_PROPERTY]),
       sysparm_fields: "name,value",
     });
@@ -326,17 +380,34 @@ async function pullIdentity(
     // sync — drift downgrades absence to an advisory (OPP-1).
     return undefined;
   }
-  const identity: InstanceIdentity = {};
-  for (const row of rows) {
+  const values = new Map<string, string>();
+  for (const row of meta.rows) {
     const name = str(row.name);
+    if (name !== BUILD_NAME_PROPERTY && name !== WAR_PROPERTY) continue;
     const value = str(row.value);
-    if (!value) continue;
-    if (name === BUILD_NAME_PROPERTY) identity.buildName = value;
-    else if (name === WAR_PROPERTY) identity.war = value;
+    if (value) values.set(name, value);
   }
-  return identity.buildName !== undefined || identity.war !== undefined
-    ? identity
-    : undefined;
+  const buildName = values.get(BUILD_NAME_PROPERTY);
+  const war = values.get(WAR_PROPERTY);
+  if (buildName === undefined && war === undefined) return undefined;
+  const identity: InstanceIdentity = {};
+  if (buildName !== undefined) {
+    identity.buildName = buildName;
+  } else {
+    const reason = await classifyMissingProperty(
+      client,
+      BUILD_NAME_PROPERTY,
+      meta,
+    );
+    if (reason) identity.buildNameMissing = reason;
+  }
+  if (war !== undefined) {
+    identity.war = war;
+  } else {
+    const reason = await classifyMissingProperty(client, WAR_PROPERTY, meta);
+    if (reason) identity.warMissing = reason;
+  }
+  return identity;
 }
 
 /**

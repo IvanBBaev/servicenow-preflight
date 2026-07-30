@@ -70,17 +70,45 @@ export interface AtfSuiteState {
 }
 
 /**
+ * Why an identity property value is missing (OPP-1 part (b)), proven at sync
+ * time from the pre-trim `X-Total-Count` metadata:
+ *
+ * - `"absent"` — the instance proved the property does not exist or holds no
+ *   value: zero matching rows pre-trim, or every matching row visible under an
+ *   untrimmed counted read with none carrying a value. A blank visible row
+ *   alone is NOT proof — a second, valued row could be ACL-hidden beside it.
+ * - `"trimmed"` — matching rows exist but were ACL-hidden from the syncing
+ *   account (re-syncing with a more privileged account would capture them).
+ *
+ * An unprovable miss carries NO reason (the field is omitted) — a reason is
+ * never fabricated, and drift keeps its generic "unreadable" wording for it.
+ */
+export type IdentityMissingReason = "absent" | "trimmed";
+
+/**
  * The instance's platform version identity at sync time (OPP-1), read from
  * `sys_properties`. `buildName` is `glide.buildname` (the release family, e.g.
  * `"Xanadu"`); `war` is `glide.war` (the exact build artifact, which moves on
  * every patch). Either field may be absent when the property was unreadable or
  * ACL-hidden at sync time — absence is recorded honestly, never fabricated.
+ * When a value is absent, its `*Missing` companion may record WHY (part (b)),
+ * so drift can distinguish "not set on the instance" from "ACL-hidden".
  */
 export interface InstanceIdentity {
   /** Value of `glide.buildname` (release family). */
   buildName?: string;
+  /**
+   * Why `buildName` is missing ({@link IdentityMissingReason}). Present only
+   * when `buildName` is absent AND the cause was proven at sync time.
+   */
+  buildNameMissing?: IdentityMissingReason;
   /** Value of `glide.war` (exact build / patch level). */
   war?: string;
+  /**
+   * Why `war` is missing ({@link IdentityMissingReason}). Present only when
+   * `war` is absent AND the cause was proven at sync time.
+   */
+  warMissing?: IdentityMissingReason;
 }
 
 /**
@@ -229,19 +257,41 @@ export async function loadManifest(
  * Tolerantly read the optional `identity` block (OPP-1). Manifests written
  * before version capture have none; a hand-edited or malformed block must not
  * crash the load — drift downgrades absence to an advisory. Only string fields
- * survive; anything else reads as absent.
+ * survive; anything else reads as absent. A `*Missing` reason (part (b)) is
+ * kept only when it is one of the two known literals AND its value is truly
+ * missing — anything else fails safe to unknown (field dropped).
  */
 function sanitizeIdentity(raw: unknown): InstanceIdentity | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  const o = raw as { buildName?: unknown; war?: unknown };
+  const o = raw as {
+    buildName?: unknown;
+    buildNameMissing?: unknown;
+    war?: unknown;
+    warMissing?: unknown;
+  };
   const identity: InstanceIdentity = {};
   if (typeof o.buildName === "string" && o.buildName !== "") {
     identity.buildName = o.buildName;
   }
   if (typeof o.war === "string" && o.war !== "") identity.war = o.war;
+  if (identity.buildName === undefined) {
+    const reason = sanitizeMissingReason(o.buildNameMissing);
+    if (reason) identity.buildNameMissing = reason;
+  }
+  if (identity.war === undefined) {
+    const reason = sanitizeMissingReason(o.warMissing);
+    if (reason) identity.warMissing = reason;
+  }
   return identity.buildName !== undefined || identity.war !== undefined
     ? identity
     : undefined;
+}
+
+/** Accept only the two {@link IdentityMissingReason} literals; else unknown. */
+function sanitizeMissingReason(
+  raw: unknown,
+): IdentityMissingReason | undefined {
+  return raw === "absent" || raw === "trimmed" ? raw : undefined;
 }
 
 /**
@@ -316,7 +366,9 @@ function serialize(m: StateManifest): string {
     }));
   // Identity is omitted entirely when absent or empty — the omit-when-absent
   // discipline IS the schema-compat mechanism, so a manifest without version
-  // capture (OPP-1) serializes byte-identically to the pre-capture format.
+  // capture (OPP-1) serializes byte-identically to the pre-capture format. A
+  // `*Missing` reason (part (b)) is emitted only for a value that is genuinely
+  // missing, mirroring the loader, so a contradictory pair cannot round-trip.
   const identity =
     m.identity && (m.identity.buildName ?? m.identity.war) !== undefined
       ? {
@@ -324,7 +376,13 @@ function serialize(m: StateManifest): string {
             ...(m.identity.buildName
               ? { buildName: m.identity.buildName }
               : {}),
+            ...(!m.identity.buildName && m.identity.buildNameMissing
+              ? { buildNameMissing: m.identity.buildNameMissing }
+              : {}),
             ...(m.identity.war ? { war: m.identity.war } : {}),
+            ...(!m.identity.war && m.identity.warMissing
+              ? { warMissing: m.identity.warMissing }
+              : {}),
           },
         }
       : {};

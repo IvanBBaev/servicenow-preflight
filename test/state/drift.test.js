@@ -512,6 +512,282 @@ test("a glide.buildname mismatch still FAILS even when one war is identical (fai
   assert.equal(instance[0].status, "fail");
 });
 
+// --- OPP-1 part (b): missing-reason wording. Statuses never change with the
+// reason; only the message follows the sync-time classification, and every
+// unknown-reason message stays byte-identical to the pre-(b) wording.
+
+test("a proven-absent buildname says not-set with no ACL hint (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: { war: "glide-a", buildNameMissing: "absent" },
+      apps: [],
+    }),
+    versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.equal(
+    instance[0].message,
+    'glide.buildname is not set on source "staging"; instance-version parity is unverified at the release-family level.',
+  );
+});
+
+test("a proven-trimmed buildname names the ACL cause and keeps the re-run hint (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: FULL_IDENTITY, apps: [] }),
+    versioned("prod", {
+      identity: { war: "glide-a", buildNameMissing: "trimmed" },
+      apps: [],
+    }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.equal(
+    instance[0].message,
+    'glide.buildname was ACL-hidden at sync time on target "prod"; instance-version parity is unverified — re-run sync with an account that can read sys_properties.',
+  );
+});
+
+test("an unclassified buildname miss keeps the pre-(b) wording byte-identical (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: { war: "glide-a" }, apps: [] }),
+    versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(
+    instance[0].message,
+    'glide.buildname was unreadable at sync time on source "staging"; instance-version parity is unverified — re-run sync with an account that can read sys_properties.',
+  );
+});
+
+test("a proven-absent war says not-set with no ACL hint (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: { buildName: "Xanadu", warMissing: "absent" },
+      apps: [],
+    }),
+    versioned("prod", {
+      identity: { buildName: "Xanadu", war: "glide-a" },
+      apps: [],
+    }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.equal(
+    instance[0].message,
+    'Build names match (Xanadu), but glide.war is not set on source "staging"; patch-level parity is unverified.',
+  );
+});
+
+test("a proven-trimmed war names the ACL cause and adds the re-run hint (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: { buildName: "Xanadu", war: "glide-a" },
+      apps: [],
+    }),
+    versioned("prod", {
+      identity: { buildName: "Xanadu", warMissing: "trimmed" },
+      apps: [],
+    }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.equal(
+    instance[0].message,
+    'Build names match (Xanadu), but glide.war was ACL-hidden at sync time on target "prod"; patch-level parity is unverified — re-run sync with an account that can read sys_properties.',
+  );
+});
+
+test("two unclassified war misses fold into one phrase, byte-identical to pre-(b) (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: { buildName: "Xanadu" }, apps: [] }),
+    versioned("prod", { identity: { buildName: "Xanadu" }, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(
+    instance[0].message,
+    'Build names match (Xanadu), but glide.war was unreadable at sync time on source "staging" and target "prod"; patch-level parity is unverified.',
+  );
+});
+
+test("mixed war reasons keep per-side phrases and the hint follows the trimmed side (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: { buildName: "Xanadu", warMissing: "absent" },
+      apps: [],
+    }),
+    versioned("prod", {
+      identity: { buildName: "Xanadu", warMissing: "trimmed" },
+      apps: [],
+    }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.equal(
+    instance[0].message,
+    'Build names match (Xanadu), but glide.war is not set on source "staging" and glide.war was ACL-hidden at sync time on target "prod"; patch-level parity is unverified — re-run sync with an account that can read sys_properties.',
+  );
+});
+
+test("war-only fallback: an unclassified miss keeps the pre-(b) wording byte-identical (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: {}, apps: [] }),
+    versioned("prod", { identity: { war: "glide-a" }, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(
+    instance[0].message,
+    'glide.buildname is not set on either instance and glide.war was unreadable at sync time on source "staging"; instance-version parity is unverified.',
+  );
+});
+
+test("war-only fallback: a proven-absent war says not-set with no ACL hint (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: { warMissing: "absent" }, apps: [] }),
+    versioned("prod", { identity: { war: "glide-a" }, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.equal(
+    instance[0].message,
+    'glide.buildname is not set on either instance and glide.war is not set on source "staging"; instance-version parity is unverified.',
+  );
+});
+
+test("war-only fallback: trimmed misses on both sides fold and add the re-run hint (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: { warMissing: "trimmed" }, apps: [] }),
+    versioned("prod", { identity: { warMissing: "trimmed" }, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.equal(
+    instance[0].message,
+    'glide.buildname is not set on either instance and glide.war was ACL-hidden at sync time on source "staging" and target "prod"; instance-version parity is unverified — re-run sync with an account that can read sys_properties.',
+  );
+});
+
+test("a proven-absent buildname on the TARGET side says not-set there (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", { identity: FULL_IDENTITY, apps: [] }),
+    versioned("prod", {
+      identity: { war: "glide-a", buildNameMissing: "absent" },
+      apps: [],
+    }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.equal(
+    instance[0].message,
+    'glide.buildname is not set on target "prod"; instance-version parity is unverified at the release-family level.',
+  );
+});
+
+// The war-only lead claims "not set on either instance" — provably false when
+// a side recorded buildNameMissing: "trimmed". A trimmed proof replaces the
+// lead with per-side wording in all three variants; absent/unknown sides keep
+// the shipped text byte-identical. Statuses never change.
+
+test("war-only fallback: a trimmed buildname replaces the lead in the missing-war warn (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: { buildNameMissing: "trimmed" },
+      apps: [],
+    }),
+    versioned("prod", {
+      identity: { war: "glide-a", buildNameMissing: "trimmed" },
+      apps: [],
+    }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  // The hint rides the buildname trimming even though the war miss is unknown.
+  assert.equal(
+    instance[0].message,
+    'glide.buildname was ACL-hidden at sync time on source "staging" and target "prod" and glide.war was unreadable at sync time on source "staging"; instance-version parity is unverified — re-run sync with an account that can read sys_properties.',
+  );
+});
+
+test("war-only fallback: a trimmed buildname replaces the lead in the differing-war warn (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: { war: "glide-a", buildNameMissing: "trimmed" },
+      apps: [],
+    }),
+    versioned("prod", { identity: { war: "glide-b" }, apps: [] }),
+  );
+  const { instance } = byCheck(results);
+  assert.equal(instance[0].status, "warn");
+  assert.equal(
+    instance[0].message,
+    'glide.buildname was ACL-hidden at sync time on source "staging" and glide.buildname was unreadable at sync time on target "prod"; patch levels differ: source glide.war is "glide-a" while target is "glide-b". Confirm both instances are on the same release before promoting — re-run sync with an account that can read sys_properties.',
+  );
+});
+
+test("war-only fallback: a trimmed buildname replaces the lead in the matching-war pass (OPP-1b)", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: { war: "glide-a", buildNameMissing: "trimmed" },
+      apps: [],
+    }),
+    versioned("prod", {
+      identity: { war: "glide-a", buildNameMissing: "trimmed" },
+      apps: [],
+    }),
+  );
+  const { instance } = byCheck(results);
+  // Still a pass — patch parity IS verified via glide.war — and no hint.
+  assert.equal(instance[0].status, "pass");
+  assert.equal(
+    instance[0].message,
+    'glide.buildname was ACL-hidden at sync time on source "staging" and target "prod"; platform patch levels match (verified via glide.war "glide-a").',
+  );
+});
+
+test("war-only fallback: absent/unknown buildname sides keep the differing-war text byte-identical (OPP-1b)", () => {
+  const expected =
+    'glide.buildname is not set on either instance; patch levels differ: source glide.war is "glide-a" while target is "glide-b". Confirm both instances are on the same release before promoting.';
+  const absent = versionParityResults(
+    versioned("staging", {
+      identity: { war: "glide-a", buildNameMissing: "absent" },
+      apps: [],
+    }),
+    versioned("prod", {
+      identity: { war: "glide-b", buildNameMissing: "absent" },
+      apps: [],
+    }),
+  );
+  assert.equal(byCheck(absent).instance[0].status, "warn");
+  assert.equal(byCheck(absent).instance[0].message, expected);
+  const unknown = versionParityResults(
+    versioned("staging", { identity: { war: "glide-a" }, apps: [] }),
+    versioned("prod", { identity: { war: "glide-b" }, apps: [] }),
+  );
+  assert.equal(byCheck(unknown).instance[0].message, expected);
+});
+
+test("war-only fallback: absent/unknown buildname sides keep the matching-war pass text byte-identical (OPP-1b)", () => {
+  const expected =
+    'glide.buildname is not set on either instance; platform patch levels match (verified via glide.war "glide-a").';
+  const absent = versionParityResults(
+    versioned("staging", {
+      identity: { war: "glide-a", buildNameMissing: "absent" },
+      apps: [],
+    }),
+    versioned("prod", {
+      identity: { war: "glide-a", buildNameMissing: "absent" },
+      apps: [],
+    }),
+  );
+  assert.equal(byCheck(absent).instance[0].status, "pass");
+  assert.equal(byCheck(absent).instance[0].message, expected);
+  const unknown = versionParityResults(
+    versioned("staging", { identity: { war: "glide-a" }, apps: [] }),
+    versioned("prod", { identity: { war: "glide-a" }, apps: [] }),
+  );
+  assert.equal(byCheck(unknown).instance[0].message, expected);
+});
+
 test("an app recorded on the source but missing on the target warns, not fails (OPP-5)", () => {
   // Absence alone is expected on a first-ever deploy or for in-development
   // apps — advisory, never a blocking fail (the OPP-5 false-fail fix).

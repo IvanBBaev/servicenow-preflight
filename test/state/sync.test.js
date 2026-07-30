@@ -1224,7 +1224,222 @@ test("blank property values are recorded as absent, never fabricated (OPP-1)", a
   const m = await pullManifest(client, "dev", undefined, {
     scope: "x_acme_app",
   });
+  // The blank value reads as an absent VALUE — never fabricated. Part (b)
+  // attaches no reason here: the fake carries no pre-trim count, and a blank
+  // visible row alone is not proof (a valued row could be hidden beside it).
   assert.deepEqual(m.identity, { war: "glide-only.war" });
+});
+
+// ---------------------------------------------------------------------------
+// OPP-1 part (b) — classifying WHY an identity property is missing.
+// The fake client's `totalCounts` is static per table, so per-query pre-trim
+// counts are scripted by routing sys_properties reads through a handler.
+// ---------------------------------------------------------------------------
+
+function withPropertyReads(client, handler) {
+  const calls = [];
+  const wrapped = {
+    ...client,
+    table(name) {
+      const t = client.table(name);
+      if (name !== "sys_properties") return t;
+      return {
+        ...t,
+        queryWithMeta: (params) => {
+          calls.push(params);
+          return Promise.resolve(handler(params));
+        },
+      };
+    },
+  };
+  return { client: wrapped, calls };
+}
+
+const IDENTITY_QUERY = "nameINglide.buildname,glide.war";
+
+const metaResult = (rows, totalCount) => ({
+  rows,
+  totalCount,
+  securityTrimmed: totalCount !== undefined && totalCount > rows.length,
+});
+
+test("an untrimmed pre-trim count proves a missing property absent without a re-read (OPP-1)", async () => {
+  const { client, calls } = withPropertyReads(versionSeededClient(), () =>
+    metaResult([{ name: "glide.war", value: "glide-war-x" }], 1),
+  );
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(m.identity, {
+    war: "glide-war-x",
+    buildNameMissing: "absent",
+  });
+  // The count proved every matching row was visible — no follow-up issued.
+  assert.deepEqual(
+    calls.map((c) => c.sysparm_query),
+    [IDENTITY_QUERY],
+  );
+});
+
+test("a trimmed combined read triggers a per-name re-read that proves ACL trimming (OPP-1)", async () => {
+  const { client, calls } = withPropertyReads(versionSeededClient(), (p) =>
+    p.sysparm_query === IDENTITY_QUERY
+      ? metaResult([{ name: "glide.war", value: "glide-war-x" }], 2)
+      : metaResult([], 1),
+  );
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(m.identity, {
+    war: "glide-war-x",
+    buildNameMissing: "trimmed",
+  });
+  assert.deepEqual(
+    calls.map((c) => c.sysparm_query),
+    [IDENTITY_QUERY, "name=glide.buildname"],
+  );
+  // The re-read goes through the validated builder and pins its fields (SR-1).
+  assert.equal(calls[1].sysparm_fields, "name,value");
+});
+
+test("a per-name re-read reporting zero matching rows proves absence (OPP-1)", async () => {
+  const { client } = withPropertyReads(versionSeededClient(), (p) =>
+    p.sysparm_query === IDENTITY_QUERY
+      ? metaResult([{ name: "glide.war", value: "glide-war-x" }], 2)
+      : metaResult([], 0),
+  );
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(m.identity, {
+    war: "glide-war-x",
+    buildNameMissing: "absent",
+  });
+});
+
+test("no pre-trim count anywhere leaves the miss unclassified (OPP-1)", async () => {
+  const { client } = withPropertyReads(versionSeededClient(), (p) =>
+    p.sysparm_query === IDENTITY_QUERY
+      ? metaResult([{ name: "glide.war", value: "glide-war-x" }], undefined)
+      : metaResult([], undefined),
+  );
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  // Never fabricate: without metadata the reason field must stay off.
+  assert.deepEqual(m.identity, { war: "glide-war-x" });
+});
+
+test("a throwing per-name re-read never fabricates a classification (OPP-1)", async () => {
+  const { client } = withPropertyReads(versionSeededClient(), (p) => {
+    if (p.sysparm_query === IDENTITY_QUERY) {
+      return metaResult([{ name: "glide.war", value: "glide-war-x" }], 2);
+    }
+    throw new Error("boom");
+  });
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(m.identity, { war: "glide-war-x" });
+});
+
+test("a per-name re-read that sees a live value is contradictory and stays unclassified (OPP-1)", async () => {
+  const { client } = withPropertyReads(versionSeededClient(), (p) =>
+    p.sysparm_query === IDENTITY_QUERY
+      ? metaResult([{ name: "glide.war", value: "glide-war-x" }], 2)
+      : metaResult([{ name: "glide.buildname", value: "Xanadu" }], 1),
+  );
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(m.identity, { war: "glide-war-x" });
+});
+
+test("a per-name re-read seeing only blank rows proves the property is not set (OPP-1)", async () => {
+  const { client } = withPropertyReads(versionSeededClient(), (p) =>
+    p.sysparm_query === IDENTITY_QUERY
+      ? metaResult([{ name: "glide.war", value: "glide-war-x" }], 2)
+      : // Count 1 with 1 visible blank row: nothing else is hidden — proof.
+        metaResult([{ name: "glide.buildname", value: "" }], 1),
+  );
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(m.identity, {
+    war: "glide-war-x",
+    buildNameMissing: "absent",
+  });
+});
+
+test("a blank visible row under a trimmed read is re-read, never trusted as proof (OPP-1)", async () => {
+  // Trap: one blank glide.buildname row is VISIBLE, but the combined read is
+  // security-trimmed — a second, valued row could be the hidden one. The
+  // narrowed re-read still shows hidden matching rows → "trimmed", so drift
+  // sends the user to fix ACLs (a privileged re-sync would capture the value).
+  const { client, calls } = withPropertyReads(versionSeededClient(), (p) =>
+    p.sysparm_query === IDENTITY_QUERY
+      ? metaResult(
+          [
+            { name: "glide.buildname", value: "" },
+            { name: "glide.war", value: "glide-war-x" },
+          ],
+          3,
+        )
+      : metaResult([{ name: "glide.buildname", value: "" }], 2),
+  );
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(m.identity, {
+    war: "glide-war-x",
+    buildNameMissing: "trimmed",
+  });
+  assert.deepEqual(
+    calls.map((c) => c.sysparm_query),
+    [IDENTITY_QUERY, "name=glide.buildname"],
+  );
+});
+
+test("all-blank re-read rows without a count prove nothing (OPP-1)", async () => {
+  const { client } = withPropertyReads(versionSeededClient(), (p) =>
+    p.sysparm_query === IDENTITY_QUERY
+      ? metaResult([{ name: "glide.war", value: "glide-war-x" }], 2)
+      : metaResult([{ name: "glide.buildname", value: "" }], undefined),
+  );
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  // A blank row with no pre-trim count cannot rule out a hidden valued row.
+  assert.deepEqual(m.identity, { war: "glide-war-x" });
+});
+
+test("war misses are classified symmetrically to buildName misses (OPP-1)", async () => {
+  const { client, calls } = withPropertyReads(versionSeededClient(), () =>
+    metaResult([{ name: "glide.buildname", value: "Xanadu" }], 1),
+  );
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(m.identity, {
+    buildName: "Xanadu",
+    warMissing: "absent",
+  });
+  assert.equal(calls.length, 1);
+});
+
+test("both values missing short-circuits before any classification read (OPP-1)", async () => {
+  const { client, calls } = withPropertyReads(versionSeededClient(), () =>
+    metaResult([], 2),
+  );
+  const m = await pullManifest(client, "dev", undefined, {
+    scope: "x_acme_app",
+  });
+  // Existing semantics kept: no identity block at all, and no wasted re-reads.
+  assert.equal(m.identity, undefined);
+  assert.deepEqual(
+    calls.map((c) => c.sysparm_query),
+    [IDENTITY_QUERY],
+  );
 });
 
 test("an all-empty, untrimmed inventory reads as never captured (OPP-1/OPP-5)", async () => {

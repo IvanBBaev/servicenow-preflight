@@ -1,5 +1,6 @@
 import type { CheckResult } from "../types.js";
 import type {
+  IdentityMissingReason,
   InstalledAppState,
   InstanceIdentity,
   StateManifest,
@@ -222,6 +223,63 @@ function describeApp(app: InstalledAppState): string {
   return app.name && app.name !== app.id ? `${app.id} (${app.name})` : app.id;
 }
 
+/** The re-run hint, appended only when re-syncing could actually fix the miss. */
+const RERUN_HINT =
+  " — re-run sync with an account that can read sys_properties.";
+
+/** One drift side whose identity property is missing, for message composition. */
+interface MissingSide {
+  /** e.g. `source "staging"`. */
+  label: string;
+  /** Sync-time classification; `undefined` = unknown (OPP-1 part (b)). */
+  reason?: IdentityMissingReason;
+}
+
+/**
+ * Reason-specific phrasing for a missing identity property (OPP-1 part (b)):
+ * `"absent"` is proven not-set (an ACL hint would mislead), `"trimmed"` is
+ * proven ACL-hiding (the hint IS the fix), and unknown keeps the pre-(b)
+ * wording so manifests without a recorded reason produce byte-identical
+ * messages.
+ */
+function missingPhrase(
+  property: string,
+  reason: IdentityMissingReason | undefined,
+): string {
+  if (reason === "absent") return `${property} is not set`;
+  if (reason === "trimmed") return `${property} was ACL-hidden at sync time`;
+  return `${property} was unreadable at sync time`;
+}
+
+/**
+ * Compose the clause naming each missing-property side with its
+ * reason-specific phrase, folding same-reason sides into one phrase (so the
+ * all-unknown case reads exactly as it did before part (b)). `trimmed` flags
+ * whether any side proved ACL-trimming, which is what warrants
+ * {@link RERUN_HINT}.
+ */
+function missingClause(
+  property: string,
+  sides: MissingSide[],
+): {
+  clause: string;
+  trimmed: boolean;
+} {
+  const groups: { phrase: string; labels: string[] }[] = [];
+  for (const side of sides) {
+    const phrase = missingPhrase(property, side.reason);
+    const last = groups[groups.length - 1];
+    if (last && last.phrase === phrase) last.labels.push(side.label);
+    else groups.push({ phrase, labels: [side.label] });
+  }
+  return {
+    clause: groups
+      .map((g) => `${g.phrase} on ${g.labels.join(" and ")}`)
+      .join(" and "),
+    trimmed: sides.some((s) => s.reason === "trimmed"),
+  };
+}
+
 /**
  * Compare the platform version identity of the two manifests (OPP-1).
  *
@@ -236,8 +294,12 @@ function describeApp(app: InstalledAppState): string {
  *   the property) → fall back to `glide.war` alone: identical → `pass` (verified
  *   at patch level), differing → `warn`. See {@link warOnlyParityResult}.
  * - `glide.buildname` present on one side but not the other, or any single
- *   property unreadable → `warn` with explicit "unverified" wording (fail-closed:
- *   no silent pass on unknown data).
+ *   property missing → `warn` with explicit "unverified" wording (fail-closed:
+ *   no silent pass on unknown data). Part (b): the wording follows the
+ *   sync-time classification of the miss ({@link IdentityMissingReason}) —
+ *   proven-absent says "not set" with no ACL hint, proven-trimmed names the
+ *   ACL cause and keeps the re-run-sync instruction, unknown keeps the
+ *   pre-(b) wording byte-identical. Statuses never change with the reason.
  */
 function instanceParityResult(
   source: StateManifest,
@@ -268,16 +330,33 @@ function instanceParityResult(
   }
 
   // Exactly one side is missing glide.buildname: the manifests are not
-  // comparable at the release-family level. Fail closed with explicit wording
-  // rather than guess from glide.war across an asymmetric pair.
+  // comparable at the release-family level. Fail closed, with wording driven
+  // by the sync-time classification (OPP-1 part (b)): a proven-absent property
+  // must not send the user chasing sys_properties ACLs, a proven-trimmed one
+  // must, and an unknown miss keeps the pre-(b) wording byte-identical.
   if (srcNoBuild || tgtNoBuild) {
     const which = srcNoBuild
       ? `source "${source.instance}"`
       : `target "${target.instance}"`;
+    const reason = srcNoBuild ? src.buildNameMissing : tgt.buildNameMissing;
+    if (reason === "absent") {
+      return {
+        name: INSTANCE_VERSION_CHECK,
+        status: "warn",
+        message: `glide.buildname is not set on ${which}; instance-version parity is unverified at the release-family level.`,
+      };
+    }
+    if (reason === "trimmed") {
+      return {
+        name: INSTANCE_VERSION_CHECK,
+        status: "warn",
+        message: `glide.buildname was ACL-hidden at sync time on ${which}; instance-version parity is unverified${RERUN_HINT}`,
+      };
+    }
     return {
       name: INSTANCE_VERSION_CHECK,
       status: "warn",
-      message: `glide.buildname was unreadable at sync time on ${which}; instance-version parity is unverified — re-run sync with an account that can read sys_properties.`,
+      message: `glide.buildname was unreadable at sync time on ${which}; instance-version parity is unverified${RERUN_HINT}`,
     };
   }
 
@@ -289,14 +368,25 @@ function instanceParityResult(
     };
   }
 
-  const noWar: string[] = [];
-  if (src.war === undefined) noWar.push(`source "${source.instance}"`);
-  if (tgt.war === undefined) noWar.push(`target "${target.instance}"`);
+  const noWar: MissingSide[] = [];
+  if (src.war === undefined) {
+    noWar.push({
+      label: `source "${source.instance}"`,
+      reason: src.warMissing,
+    });
+  }
+  if (tgt.war === undefined) {
+    noWar.push({
+      label: `target "${target.instance}"`,
+      reason: tgt.warMissing,
+    });
+  }
   if (noWar.length > 0) {
+    const { clause, trimmed } = missingClause("glide.war", noWar);
     return {
       name: INSTANCE_VERSION_CHECK,
       status: "warn",
-      message: `Build names match (${src.buildName}), but glide.war was unreadable at sync time on ${noWar.join(" and ")}; patch-level parity is unverified.`,
+      message: `Build names match (${src.buildName}), but ${clause}; patch-level parity is unverified${trimmed ? RERUN_HINT : "."}`,
     };
   }
 
@@ -319,9 +409,18 @@ function instanceParityResult(
  * Parity fallback when NEITHER manifest recorded `glide.buildname`. Some
  * instances genuinely do not set the property, so `glide.war` — which still
  * pins the exact build/patch — is the only version signal available: identical
- * → `pass` (verified at patch level), differing → `warn`, unreadable on either
- * side → `warn` (fail-closed). Never a `fail`: with no build family to compare,
- * a differing patch is an eyeball, not a proven cross-release promote.
+ * → `pass` (verified at patch level), differing → `warn`, missing on either
+ * side → `warn` (fail-closed), worded per the sync-time classification of the
+ * miss (OPP-1 part (b), see {@link missingClause}). Never a `fail`: with no
+ * build family to compare, a differing patch is an eyeball, not a proven
+ * cross-release promote.
+ *
+ * Part (b) lead clause: the shipped "not set on either instance" claim is
+ * provably false when a side recorded `buildNameMissing: "trimmed"`, so a
+ * trimmed proof on ANY side replaces the lead with per-side reason wording
+ * (and justifies {@link RERUN_HINT} on the warn variants — the pass variant
+ * stays a pass with no hint). With no trimmed proof the shipped wording is
+ * kept byte-identical, statuses never change either way.
  */
 function warOnlyParityResult(
   source: StateManifest,
@@ -329,14 +428,34 @@ function warOnlyParityResult(
   src: InstanceIdentity,
   tgt: InstanceIdentity,
 ): CheckResult {
-  const noWar: string[] = [];
-  if (src.war === undefined) noWar.push(`source "${source.instance}"`);
-  if (tgt.war === undefined) noWar.push(`target "${target.instance}"`);
+  const buildSides: MissingSide[] = [
+    { label: `source "${source.instance}"`, reason: src.buildNameMissing },
+    { label: `target "${target.instance}"`, reason: tgt.buildNameMissing },
+  ];
+  const buildTrimmed = buildSides.some((s) => s.reason === "trimmed");
+  const lead = buildTrimmed
+    ? missingClause("glide.buildname", buildSides).clause
+    : "glide.buildname is not set on either instance";
+
+  const noWar: MissingSide[] = [];
+  if (src.war === undefined) {
+    noWar.push({
+      label: `source "${source.instance}"`,
+      reason: src.warMissing,
+    });
+  }
+  if (tgt.war === undefined) {
+    noWar.push({
+      label: `target "${target.instance}"`,
+      reason: tgt.warMissing,
+    });
+  }
   if (noWar.length > 0) {
+    const { clause, trimmed } = missingClause("glide.war", noWar);
     return {
       name: INSTANCE_VERSION_CHECK,
       status: "warn",
-      message: `glide.buildname is not set on either instance and glide.war was unreadable at sync time on ${noWar.join(" and ")}; instance-version parity is unverified.`,
+      message: `${lead} and ${clause}; instance-version parity is unverified${trimmed || buildTrimmed ? RERUN_HINT : "."}`,
     };
   }
 
@@ -344,14 +463,14 @@ function warOnlyParityResult(
     return {
       name: INSTANCE_VERSION_CHECK,
       status: "warn",
-      message: `glide.buildname is not set on either instance; patch levels differ: source glide.war is "${src.war}" while target is "${tgt.war}". Confirm both instances are on the same release before promoting.`,
+      message: `${lead}; patch levels differ: source glide.war is "${src.war}" while target is "${tgt.war}". Confirm both instances are on the same release before promoting${buildTrimmed ? RERUN_HINT : "."}`,
     };
   }
 
   return {
     name: INSTANCE_VERSION_CHECK,
     status: "pass",
-    message: `glide.buildname is not set on either instance; platform patch levels match (verified via glide.war "${src.war}").`,
+    message: `${lead}; platform patch levels match (verified via glide.war "${src.war}").`,
   };
 }
 
