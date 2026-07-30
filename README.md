@@ -58,8 +58,13 @@ npx servicenow-preflight        # run the default suite (short alias: snpf)
 ! scoped-app-deps: No required apps declared (set options.requiredApps); skipping.
 ! i18n-completeness: No target scope set; skipping.
 ! acl-role-sanity: No scope set; skipping.
+! client-callable-acl: No scope set — skipping the client-callable Script Include ACL gate (pass a scope to enable it).
+! rest-endpoint-security: No scope set — skipping the scripted REST security gate (pass a scope to enable it).
+! script-field-exposure: No scope set — skipping the script-field write ACL gate (pass a scope to enable it).
+! scheduled-job-run-as: No scope set — skipping the Scheduled Job 'Run as' gate (pass a scope to enable it).
+! mobile-menu-hygiene: No scope set — skipping the mobile menu/module gate (pass a scope to enable it).
 
-4 passed, 6 warnings, 0 failed
+4 passed, 11 warnings, 0 failed
 ```
 
 Two identical binaries ship — `servicenow-preflight` and the alias `snpf`. Out
@@ -72,8 +77,8 @@ promote/deploy step.
 ## What it checks
 
 `runPreflight(ctx, checks?)` runs each check against the target instance and
-aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Ten checks
-ship in the default suite; the CLI is a thin wrapper over that function.
+aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Fifteen
+checks ship in the default suite; the CLI is a thin wrapper over that function.
 
 | Check                     | Needs                        | Verifies                                                                                                                                                   |
 | ------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -87,6 +92,11 @@ ship in the default suite; the CLI is a thin wrapper over that function.
 | `scoped-app-deps`         | `options.requiredApps`       | Required scoped apps / plugins are installed, active, and meet any `minVersion`.                                                                           |
 | `i18n-completeness`       | `scope`, `options.languages` | Every configured language has full translation coverage for the scope.                                                                                     |
 | `acl-role-sanity`         | `scope`                      | No wide-open mutating ACLs, and no ACLs referencing non-existent roles.                                                                                    |
+| `client-callable-acl`     | `scope`                      | Every active client-callable Script Include is gated by an active `execute` ACL (Store certification rule 1.2).                                            |
+| `rest-endpoint-security`  | `scope`                      | Scripted REST resources require authentication and enforce ACL authorization backed by a `REST_Endpoint` ACL (rule 1.3).                                   |
+| `script-field-exposure`   | `scope`                      | Every script-typed column ships with an active field write ACL — `table.element` or `table.*` (rule 1.4).                                                  |
+| `scheduled-job-run-as`    | `scope`                      | Scheduled Jobs leave "Run as" empty so they run as `system` (rule 6.2; advisory — never fails).                                                            |
+| `mobile-menu-hygiene`     | `scope`                      | No mobile Application Menus/Modules ship in a non-mobile app (rule 5.1; advisory — never fails).                                                           |
 
 Checks whose only need is credentials always run once credentials are present;
 the rest `warn` (and explain what's missing) until you supply their inputs —
@@ -222,13 +232,13 @@ checks to run, and per-check options — but **never credentials**.
 }
 ```
 
-| Field         | Type                                   | Used by                                                                             |
-| ------------- | -------------------------------------- | ----------------------------------------------------------------------------------- |
-| `instanceUrl` | `string`                               | Target instance (CLI `--instance` overrides).                                       |
-| `scope`       | `string`                               | `default-set-leakage`, `i18n-completeness`, `acl-role-sanity`.                      |
-| `updateSetId` | `string` (sys_id)                      | `update-set-state`; also focuses `remote-set-preview` on that set's retrieved copy. |
-| `select`      | `{ only?: string[]; skip?: string[] }` | Check selection (CLI flags override).                                               |
-| `options`     | `object`                               | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).    |
+| Field         | Type                                   | Used by                                                                                                                                                                                                                     |
+| ------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instanceUrl` | `string`                               | Target instance (CLI `--instance` overrides).                                                                                                                                                                               |
+| `scope`       | `string`                               | `default-set-leakage`, `i18n-completeness`, `acl-role-sanity`, and the five certification checks (`client-callable-acl`, `rest-endpoint-security`, `script-field-exposure`, `scheduled-job-run-as`, `mobile-menu-hygiene`). |
+| `updateSetId` | `string` (sys_id)                      | `update-set-state`; also focuses `remote-set-preview` on that set's retrieved copy.                                                                                                                                         |
+| `select`      | `{ only?: string[]; skip?: string[] }` | Check selection (CLI flags override).                                                                                                                                                                                       |
+| `options`     | `object`                               | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).                                                                                                                                            |
 
 ## Multi-instance: registry, sync & drift
 

@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the ten checks ----------------------------------- */
+  /* ---- Content model: the fifteen checks -------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -121,6 +121,51 @@
       warn: "No scope, a public-read ACL, inactive shipped ACLs, or unreadable tables.",
       pass: "Every ACL is gated and every referenced role resolves.",
     },
+    {
+      code: "11",
+      name: "client-callable-acl",
+      tag: "scope",
+      desc: "Every client-callable Script Include is gated by an active execute ACL.",
+      fail: "A Script Include lacks an active execute ACL, or the ACL read was security-trimmed.",
+      warn: "No scope set, an unverifiable include name, or an ambiguous zero-row read.",
+      pass: "Every client-callable Script Include is gated, or the scope ships none.",
+    },
+    {
+      code: "12",
+      name: "rest-endpoint-security",
+      tag: "scope",
+      desc: "Scripted REST resources require authentication and enforce ACL authorization.",
+      fail: "A resource does not require authentication, or the read was security-trimmed.",
+      warn: "ACL authorization opted out, no backing REST_Endpoint ACL, or no scope set.",
+      pass: "Every resource authenticates and enforces ACL authorization, or the scope ships none.",
+    },
+    {
+      code: "13",
+      name: "script-field-exposure",
+      tag: "scope",
+      desc: "Every script-typed column ships with an active field write ACL.",
+      fail: "A script column has no active field write ACL, or a read was security-trimmed.",
+      warn: "No scope set, or an ambiguous zero-row read.",
+      pass: "Every script column carries an active field write ACL, or the scope ships none.",
+    },
+    {
+      code: "14",
+      name: "scheduled-job-run-as",
+      tag: "scope",
+      desc: "Scheduled Jobs leave 'Run as' empty so they run as system. Advisory — never fails.",
+      fail: "Never — install hygiene stays advisory.",
+      warn: "A job pins 'Run as' to a named user, no scope set, or an unreadable table.",
+      pass: "Every scheduled job in scope runs as system, or the scope ships none.",
+    },
+    {
+      code: "15",
+      name: "mobile-menu-hygiene",
+      tag: "scope",
+      desc: "No mobile Application Menus or Modules ship in a non-mobile app. Advisory — never fails.",
+      fail: "Never — packaging hygiene stays advisory.",
+      warn: "Mobile menus or modules found in scope, no scope set, or an unreadable table.",
+      pass: "The instance reports the scope ships no mobile menus or modules.",
+    },
   ];
 
   var SCENARIOS = {
@@ -135,8 +180,18 @@
       "warn",
       "warn",
       "warn",
+      "warn",
+      "warn",
+      "warn",
+      "warn",
+      "warn",
     ],
     configured: [
+      "pass",
+      "pass",
+      "pass",
+      "pass",
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -159,6 +214,11 @@
       "warn",
       "warn",
       "fail",
+      "fail",
+      "warn",
+      "pass",
+      "warn",
+      "warn",
     ],
   };
 

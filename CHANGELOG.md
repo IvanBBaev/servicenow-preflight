@@ -16,12 +16,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `atf-enablement` (ATF test execution is enabled instance-wide, optionally
   requiring an online scheduled client test runner) — the default suite grows
   from seven to ten checks.
+- Five Store-certification checks, live-instance versions of the recurring
+  reviewer findings: `client-callable-acl` (every active client-callable
+  Script Include is gated by an active `execute` ACL), `rest-endpoint-security`
+  (scripted REST resources require authentication and enforce ACL
+  authorization), `script-field-exposure` (every script-typed column ships
+  with an active field write ACL) — all three fail closed on security-trimmed
+  reads — plus the advisory `scheduled-job-run-as` (no pinned "Run as") and
+  `mobile-menu-hygiene` (no leftover mobile menus/modules) — the default suite
+  grows from ten to fifteen checks.
+- CLI `-v` / `--version` flag.
 - Version parity in the promote gate: `sync` now captures the instance's
   platform identity (`glide.buildname`/`glide.war`) and installed apps/plugins
   with versions; `drift` adds `instance-version-parity` (release-family
   mismatch fails, patch skew warns) and `app-version-parity` (missing or
   downgraded apps on the target fail). Manifests from older versions degrade
-  to an advisory warning.
+  to an advisory warning. When `glide.buildname` is absent on both sides the
+  parity gate falls back to comparing `glide.war`, and `sync` proves _why_ the
+  property is missing (genuinely absent vs security-trimmed) so the drift
+  advisory names the actual cause instead of guessing.
 - HTTP(S) forward-proxy support via `CONNECT` tunneling on both transports —
   still zero runtime dependencies. Configured with the `proxy`/`noProxy` config
   fields or `SNPF_PROXY`/`SNPF_NO_PROXY` (falling back to standard
@@ -53,6 +66,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicitly instead of failing open.
 - State layer: manifest writes are atomic, slug and scope collisions are
   guarded, and an all-empty snapshot is refused unless `--allow-empty` is given.
+- CLI: an extra positional instance name (`run dev prod`, `run --env dev prod`,
+  `sync a b`, `drift a b c`) is a usage error instead of a silent drop.
+- Config: non-string `proxy` / `noProxy` values are rejected with a usage error
+  instead of silently bypassing the configured proxy; an unreadable `.env`
+  file is a usage error instead of a green run that verified nothing.
+- Fail-closed sweep: a partially security-trimmed read fails
+  `acl-role-sanity` instead of reporting on the visible subset; a malformed
+  `requiredApps` container is its own warning; a check returning a malformed
+  result fails that check (not the whole run); JUnit output strips
+  XML-invalid characters.
 
 ### Security
 
