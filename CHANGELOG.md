@@ -40,10 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Requires role" entry in `sys_ui_action_role`; an empty, whitespace or bare
   `true` condition counts as none, and a security-trimmed role read fails
   closed — the default suite grows from seventeen to eighteen checks.
-- The eight certification checks (`clientCallableAcl`, `restEndpointSecurity`,
+- `table-namespace` certification check (rule 6.1, raised in 8 of 19
+  releases): every table in scope is prefixed with the app namespace
+  (`<scope>_`), resolved from `sys_scope` so a scope given by sys_id works
+  too; the global scope and an unresolvable sys_id only warn, and a
+  security-trimmed read fails closed — the default suite grows from eighteen
+  to nineteen checks.
+- The nine certification checks (`clientCallableAcl`, `restEndpointSecurity`,
   `scriptFieldExposure`, `scheduledJobRunAs`, `mobileMenuHygiene`,
-  `tableCrudAcl`, `uiPageAcl`, `uiActionGating`) are now exported from the package entry point, like the
-  other built-in checks.
+  `tableCrudAcl`, `uiPageAcl`, `uiActionGating`, `tableNamespace`) are now
+  exported from the package entry point, like the other built-in checks.
 - CLI `-v` / `--version` flag.
 - Promotion-order gate: `drift <src> <dst>` now enforces the registry's
   `promotesTo` pipeline with a `promotion-order` result — the declared next
