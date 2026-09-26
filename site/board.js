@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the seventeen checks -------------------------------- */
+  /* ---- Content model: the eighteen checks -------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -184,6 +184,15 @@
       warn: "No scope set, or an ambiguous zero-row read.",
       pass: "Every UI Page in scope has an active read ACL, or the scope ships none.",
     },
+    {
+      code: "18",
+      name: "ui-action-gating",
+      tag: "scope",
+      desc: "Every active UI Action is gated by a condition or a Requires-role entry.",
+      fail: "A UI Action has no condition and no role, or a read was security-trimmed.",
+      warn: "No scope set, or an ambiguous zero-row read.",
+      pass: "Every active UI Action in scope is gated, or the scope ships none.",
+    },
   ];
 
   var SCENARIOS = {
@@ -205,8 +214,10 @@
       "warn",
       "warn",
       "warn",
+      "warn",
     ],
     configured: [
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -241,6 +252,7 @@
       "pass",
       "warn",
       "warn",
+      "fail",
       "fail",
       "fail",
     ],

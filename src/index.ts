@@ -155,6 +155,7 @@ export {
   mobileMenuHygiene,
   tableCrudAcl,
   uiPageAcl,
+  uiActionGating,
   testDrift,
 } from "./checks/index.js";
 
