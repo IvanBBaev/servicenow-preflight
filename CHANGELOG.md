@@ -46,10 +46,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   too; the global scope and an unresolvable sys_id only warn, and a
   security-trimmed read fails closed — the default suite grows from eighteen
   to nineteen checks.
-- The nine certification checks (`clientCallableAcl`, `restEndpointSecurity`,
+- `portal-roles` certification check (rule 2.6, raised in 7 of 19 releases):
+  every Service Portal widget and page in scope carries at least one role;
+  role-less ones marked `public` are listed separately as reachable without
+  login. Advisory — the rule allows deliberate exceptions, so it never fails —
+  the default suite grows from nineteen to twenty checks.
+- The ten certification checks (`clientCallableAcl`, `restEndpointSecurity`,
   `scriptFieldExposure`, `scheduledJobRunAs`, `mobileMenuHygiene`,
-  `tableCrudAcl`, `uiPageAcl`, `uiActionGating`, `tableNamespace`) are now
-  exported from the package entry point, like the other built-in checks.
+  `tableCrudAcl`, `uiPageAcl`, `uiActionGating`, `tableNamespace`,
+  `portalRoles`) are now exported from the package entry point, like the other
+  built-in checks.
 - CLI `-v` / `--version` flag.
 - Promotion-order gate: `drift <src> <dst>` now enforces the registry's
   `promotesTo` pipeline with a `promotion-order` result — the declared next
