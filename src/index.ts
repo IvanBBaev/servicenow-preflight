@@ -154,6 +154,7 @@ export {
   scheduledJobRunAs,
   mobileMenuHygiene,
   tableCrudAcl,
+  uiPageAcl,
   testDrift,
 } from "./checks/index.js";
 

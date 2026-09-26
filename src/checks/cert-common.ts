@@ -12,8 +12,10 @@ import {
   SnAuthError,
   SnHttpError,
   SnNetworkError,
+  type SnClient,
   type TableQueryResult,
 } from "../http/client.js";
+import { and, chunk, eq, inClause } from "../http/query.js";
 
 /** Read a string-ish field from an arbitrary record, trimmed; "" when absent. */
 export function str(row: Record<string, unknown>, field: string): string {
@@ -99,4 +101,48 @@ export function errorResult(
     "fail",
     `Unexpected error while checking ${subject}: ${message}`,
   );
+}
+
+/**
+ * The ACLs of one `type` gating one `operation` whose `name` is among
+ * `candidateNames`, fetched in batches. `names` holds every matching ACTIVE
+ * ACL's lowercased name; `inactiveNames` the ones that exist but are switched
+ * off (an off gate is no gate); `trimmed` is true when any batch was
+ * security-trimmed (`sys_security_acl` is admin-read out-of-box, so a
+ * partially readable ACL table must never clear a gate). Names are matched
+ * exactly (case-insensitive); every one is charset-validated by `inClause`.
+ */
+export async function fetchNamedAcls(
+  http: SnClient,
+  type: string,
+  operation: string,
+  candidateNames: readonly string[],
+): Promise<{
+  names: Set<string>;
+  inactiveNames: Set<string>;
+  trimmed: boolean;
+}> {
+  const names = new Set<string>();
+  const inactiveNames = new Set<string>();
+  let trimmed = false;
+  for (const batch of chunk(candidateNames)) {
+    // No `sysparm_limit`: the client auto-paginates, so every matching ACL in
+    // the batch is seen (a cap could hide the one ACL that gates an artifact).
+    const { rows, securityTrimmed } = await http
+      .table("sys_security_acl")
+      .queryWithMeta({
+        sysparm_query: and(eq("type", type), inClause("name", batch)),
+        sysparm_fields: "sys_id,name,operation,active",
+      });
+    trimmed = trimmed || securityTrimmed;
+    for (const row of rows) {
+      const name = str(row, "name").toLowerCase();
+      if (name === "" || str(row, "operation").toLowerCase() !== operation) {
+        continue;
+      }
+      if (isTruthy(row, "active")) names.add(name);
+      else inactiveNames.add(name);
+    }
+  }
+  return { names, inactiveNames, trimmed };
 }

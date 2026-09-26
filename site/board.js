@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the sixteen checks -------------------------------- */
+  /* ---- Content model: the seventeen checks -------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -175,6 +175,15 @@
       warn: "Only extended tables have gaps, no scope set, or an ambiguous zero-row read.",
       pass: "Every table in scope has all four active ACLs, or the scope ships none.",
     },
+    {
+      code: "17",
+      name: "ui-page-acl",
+      tag: "scope",
+      desc: "Every custom UI Page is protected by an active read ACL named for its endpoint.",
+      fail: "A UI Page has no active read ACL, or a read was security-trimmed.",
+      warn: "No scope set, or an ambiguous zero-row read.",
+      pass: "Every UI Page in scope has an active read ACL, or the scope ships none.",
+    },
   ];
 
   var SCENARIOS = {
@@ -195,8 +204,10 @@
       "warn",
       "warn",
       "warn",
+      "warn",
     ],
     configured: [
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -230,6 +241,7 @@
       "pass",
       "warn",
       "warn",
+      "fail",
       "fail",
     ],
   };
