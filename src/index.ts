@@ -158,6 +158,7 @@ export {
   uiActionGating,
   tableNamespace,
   portalRoles,
+  aclOutOfScope,
   testDrift,
 } from "./checks/index.js";
 
