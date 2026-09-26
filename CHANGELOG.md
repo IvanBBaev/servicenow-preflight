@@ -31,9 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that extends another only warns (it inherits the parent's ACLs at
   runtime); security-trimmed reads fail closed — the default suite grows from
   fifteen to sixteen checks.
-- The six certification checks (`clientCallableAcl`, `restEndpointSecurity`,
+- `ui-page-acl` certification check (rule 2.2, raised in 13 of 19 releases):
+  every custom UI Page in scope is protected by an active `ui_page` read ACL
+  named for its endpoint (the URI without `.do`); security-trimmed reads fail
+  closed — the default suite grows from sixteen to seventeen checks.
+- The seven certification checks (`clientCallableAcl`, `restEndpointSecurity`,
   `scriptFieldExposure`, `scheduledJobRunAs`, `mobileMenuHygiene`,
-  `tableCrudAcl`) are now exported from the package entry point, like the
+  `tableCrudAcl`, `uiPageAcl`) are now exported from the package entry point, like the
   other built-in checks.
 - CLI `-v` / `--version` flag.
 - Promotion-order gate: `drift <src> <dst>` now enforces the registry's
