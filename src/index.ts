@@ -156,6 +156,7 @@ export {
   tableCrudAcl,
   uiPageAcl,
   uiActionGating,
+  tableNamespace,
   testDrift,
 } from "./checks/index.js";
 

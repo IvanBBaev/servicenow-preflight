@@ -67,7 +67,9 @@ npx servicenow-preflight        # run the default suite (short alias: snpf)
 ! ui-page-acl: No scope set — skipping the UI Page read ACL gate (pass a scope to enable it).
 ! ui-action-gating: No scope set — skipping the UI Action gating check (pass a scope to enable it).
 
-4 passed, 14 warnings, 0 failed
+! table-namespace: No scope set — skipping the table namespace check (pass a scope to enable it).
+
+4 passed, 15 warnings, 0 failed
 ```
 
 Two identical binaries ship — `servicenow-preflight` and the alias `snpf`. Out
@@ -80,7 +82,7 @@ promote/deploy step.
 ## What it checks
 
 `runPreflight(ctx, checks?)` runs each check against the target instance and
-aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Eighteen
+aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Nineteen
 checks ship in the default suite; the CLI is a thin wrapper over that function.
 
 | Check                     | Needs                        | Verifies                                                                                                                                                   |
@@ -103,6 +105,7 @@ checks ship in the default suite; the CLI is a thin wrapper over that function.
 | `table-crud-acl`          | `scope`                      | Every custom table has active table-level create/read/write/delete ACLs (rule 1.1; a gap on an extended table only warns).                                 |
 | `ui-page-acl`             | `scope`                      | Every custom UI Page is protected by an active `ui_page` read ACL named for its endpoint (rule 2.2).                                                       |
 | `ui-action-gating`        | `scope`                      | Every active UI Action has a condition or a "Requires role" entry (`sys_ui_action_role`) — none is runnable by every user (rule 2.1).                      |
+| `table-namespace`         | `scope`                      | Every custom table is prefixed with the app namespace (`<scope>_`), taken from the resolved scope name (rule 6.1).                                         |
 
 Checks whose only need is credentials always run once credentials are present;
 the rest `warn` (and explain what's missing) until you supply their inputs —
@@ -239,13 +242,13 @@ checks to run, and per-check options — but **never credentials**.
 }
 ```
 
-| Field         | Type                                   | Used by                                                                                                                                                                                                                                                                           |
-| ------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `instanceUrl` | `string`                               | Target instance (CLI `--instance` overrides).                                                                                                                                                                                                                                     |
-| `scope`       | `string`                               | `default-set-leakage`, `i18n-completeness`, `acl-role-sanity`, and the eight certification checks (`client-callable-acl`, `rest-endpoint-security`, `script-field-exposure`, `scheduled-job-run-as`, `mobile-menu-hygiene`, `table-crud-acl`, `ui-page-acl`, `ui-action-gating`). |
-| `updateSetId` | `string` (sys_id)                      | `update-set-state`; also focuses `remote-set-preview` on that set's retrieved copy.                                                                                                                                                                                               |
-| `select`      | `{ only?: string[]; skip?: string[] }` | Check selection (CLI flags override).                                                                                                                                                                                                                                             |
-| `options`     | `object`                               | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).                                                                                                                                                                                                  |
+| Field         | Type                                   | Used by                                                                                                                                                                                                                                                                                             |
+| ------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instanceUrl` | `string`                               | Target instance (CLI `--instance` overrides).                                                                                                                                                                                                                                                       |
+| `scope`       | `string`                               | `default-set-leakage`, `i18n-completeness`, `acl-role-sanity`, and the nine certification checks (`client-callable-acl`, `rest-endpoint-security`, `script-field-exposure`, `scheduled-job-run-as`, `mobile-menu-hygiene`, `table-crud-acl`, `ui-page-acl`, `ui-action-gating`, `table-namespace`). |
+| `updateSetId` | `string` (sys_id)                      | `update-set-state`; also focuses `remote-set-preview` on that set's retrieved copy.                                                                                                                                                                                                                 |
+| `select`      | `{ only?: string[]; skip?: string[] }` | Check selection (CLI flags override).                                                                                                                                                                                                                                                               |
+| `options`     | `object`                               | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).                                                                                                                                                                                                                    |
 
 ## Multi-instance: registry, sync & drift
 

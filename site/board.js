@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the eighteen checks -------------------------------- */
+  /* ---- Content model: the nineteen checks -------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -193,6 +193,15 @@
       warn: "No scope set, or an ambiguous zero-row read.",
       pass: "Every active UI Action in scope is gated, or the scope ships none.",
     },
+    {
+      code: "19",
+      name: "table-namespace",
+      tag: "scope",
+      desc: "Every custom table is prefixed with the app scope namespace.",
+      fail: "A table in scope lacks the namespace prefix, or the read was security-trimmed.",
+      warn: "No scope, the global scope, an unresolved sys_id, or an ambiguous zero-row read.",
+      pass: "Every table in scope is namespaced, or the scope ships none.",
+    },
   ];
 
   var SCENARIOS = {
@@ -215,8 +224,10 @@
       "warn",
       "warn",
       "warn",
+      "warn",
     ],
     configured: [
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -252,6 +263,7 @@
       "pass",
       "warn",
       "warn",
+      "fail",
       "fail",
       "fail",
       "fail",

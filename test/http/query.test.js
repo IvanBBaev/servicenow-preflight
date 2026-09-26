@@ -341,3 +341,17 @@ test("resolveScope fails closed on an operator-bearing scope before any query (S
   // The guard trips before the sys_scope read is issued.
   assert.equal(calls.filter((c) => c.table === "sys_scope").length, 0);
 });
+
+test("resolveScope carries the scope NAME of the resolved row, whichever form was given", async () => {
+  const http = scopeClient([{ sys_id: SCOPE_SYS_ID, scope: SCOPE_NAME }]);
+  const ctx = { instanceUrl: INSTANCE, http };
+  assert.equal((await resolveScope(ctx, SCOPE_NAME)).name, SCOPE_NAME);
+  assert.equal((await resolveScope(ctx, SCOPE_SYS_ID)).name, SCOPE_NAME);
+});
+
+test("resolveScope leaves name unset when the scope does not resolve", async () => {
+  const ctx = { instanceUrl: INSTANCE, http: scopeClient([]) };
+  const resolved = await resolveScope(ctx, "x_unknown_app");
+  assert.equal(resolved.name, undefined);
+  assert.equal("name" in resolved, false);
+});

@@ -11,6 +11,7 @@ import { aclRoleSanity } from "./acl-role-sanity.js";
 import { tableCrudAcl } from "./table-crud-acl.js";
 import { uiPageAcl } from "./ui-page-acl.js";
 import { uiActionGating } from "./ui-action-gating.js";
+import { tableNamespace } from "./table-namespace.js";
 import { clientCallableAcl } from "./client-callable-acl.js";
 import { restEndpointSecurity } from "./rest-endpoint-security.js";
 import { scriptFieldExposure } from "./script-field-exposure.js";
@@ -29,6 +30,7 @@ export { aclRoleSanity } from "./acl-role-sanity.js";
 export { tableCrudAcl } from "./table-crud-acl.js";
 export { uiPageAcl } from "./ui-page-acl.js";
 export { uiActionGating } from "./ui-action-gating.js";
+export { tableNamespace } from "./table-namespace.js";
 export { clientCallableAcl } from "./client-callable-acl.js";
 export { restEndpointSecurity } from "./rest-endpoint-security.js";
 export { scriptFieldExposure } from "./script-field-exposure.js";
@@ -120,4 +122,5 @@ export const defaultChecks: Check[] = [
   tableCrudAcl,
   uiPageAcl,
   uiActionGating,
+  tableNamespace,
 ];
