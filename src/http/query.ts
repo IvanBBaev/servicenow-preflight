@@ -167,6 +167,12 @@ export interface ResolvedScope {
   /** The resolved scoped-app sys_id, when the `sys_scope` lookup found a row. */
   sysId?: string;
   /**
+   * The scope NAME (`x_acme_app`) of that same `sys_scope` row, when it was
+   * found and carried one — lets a check reason about the app namespace even
+   * when the caller configured the scope by sys_id.
+   */
+  name?: string;
+  /**
    * The single-term scope filter clause. `sys_scope=<sysId>` when resolved (the
    * canonical form that filters identically on every table); otherwise the
    * fail-closed fallback from {@link scopeFilterClause} (`sys_scope=<sysId>` for a
@@ -213,9 +219,16 @@ async function lookupScope(
     sysparm_query: or(eq("sys_id", input), eq("scope", input)),
     sysparm_fields: "sys_id,scope",
   });
-  const sysId = rows.map((r) => cell(r, "sys_id")).find((id) => isSysId(id));
-  if (sysId) {
-    return { input, sysId, clause: eq("sys_scope", sysId) };
+  const row = rows.find((r) => isSysId(cell(r, "sys_id")));
+  if (row) {
+    const sysId = cell(row, "sys_id");
+    const name = cell(row, "scope");
+    return {
+      input,
+      sysId,
+      ...(name ? { name } : {}),
+      clause: eq("sys_scope", sysId),
+    };
   }
   return { input, clause: fallback };
 }
