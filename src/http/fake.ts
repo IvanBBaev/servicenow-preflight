@@ -164,6 +164,7 @@ const REFERENCE_FIELDS: Record<string, ReadonlySet<string>> = {
   sys_atf_test_suite_result: new Set(["parent", "test_suite"]),
   sys_security_acl_role: new Set(["sys_user_role", "sys_security_acl"]),
   sys_db_object: new Set(["super_class"]),
+  sys_ui_action_role: new Set(["sys_ui_action", "sys_user_role"]),
 };
 
 /** Origin used to synthesise reference `link` URLs — never contacted. */
