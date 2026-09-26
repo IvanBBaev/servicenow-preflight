@@ -8,6 +8,7 @@ import { atfRun } from "./atf-run.js";
 import { scopedAppDeps } from "./scoped-app-deps.js";
 import { i18nCompleteness } from "./i18n-completeness.js";
 import { aclRoleSanity } from "./acl-role-sanity.js";
+import { tableCrudAcl } from "./table-crud-acl.js";
 import { clientCallableAcl } from "./client-callable-acl.js";
 import { restEndpointSecurity } from "./rest-endpoint-security.js";
 import { scriptFieldExposure } from "./script-field-exposure.js";
@@ -23,6 +24,7 @@ export { atfRun } from "./atf-run.js";
 export { scopedAppDeps } from "./scoped-app-deps.js";
 export { i18nCompleteness } from "./i18n-completeness.js";
 export { aclRoleSanity } from "./acl-role-sanity.js";
+export { tableCrudAcl } from "./table-crud-acl.js";
 export { clientCallableAcl } from "./client-callable-acl.js";
 export { restEndpointSecurity } from "./rest-endpoint-security.js";
 export { scriptFieldExposure } from "./script-field-exposure.js";
@@ -111,4 +113,5 @@ export const defaultChecks: Check[] = [
   scriptFieldExposure,
   scheduledJobRunAs,
   mobileMenuHygiene,
+  tableCrudAcl,
 ];
