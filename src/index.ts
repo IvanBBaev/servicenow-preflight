@@ -157,6 +157,7 @@ export {
   uiPageAcl,
   uiActionGating,
   tableNamespace,
+  portalRoles,
   testDrift,
 } from "./checks/index.js";
 
