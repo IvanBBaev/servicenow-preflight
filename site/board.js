@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the nineteen checks -------------------------------- */
+  /* ---- Content model: the twenty checks -------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -202,6 +202,15 @@
       warn: "No scope, the global scope, an unresolved sys_id, or an ambiguous zero-row read.",
       pass: "Every table in scope is namespaced, or the scope ships none.",
     },
+    {
+      code: "20",
+      name: "portal-roles",
+      tag: "scope",
+      desc: "Service Portal widgets and pages carry roles unless deliberately public. Advisory \u2014 never fails.",
+      fail: "Never \u2014 deliberate exceptions are a reviewer call.",
+      warn: "A role-less widget or page, public ones called out, no scope, or a trimmed read.",
+      pass: "Every widget and page in scope carries a role, or the scope ships none.",
+    },
   ];
 
   var SCENARIOS = {
@@ -225,8 +234,10 @@
       "warn",
       "warn",
       "warn",
+      "warn",
     ],
     configured: [
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -267,6 +278,7 @@
       "fail",
       "fail",
       "fail",
+      "warn",
     ],
   };
 
