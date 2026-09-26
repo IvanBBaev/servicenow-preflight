@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the fifteen checks -------------------------------- */
+  /* ---- Content model: the sixteen checks -------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -166,6 +166,15 @@
       warn: "Mobile menus or modules found in scope, no scope set, or an unreadable table.",
       pass: "The instance reports the scope ships no mobile menus or modules.",
     },
+    {
+      code: "16",
+      name: "table-crud-acl",
+      tag: "scope",
+      desc: "Every custom table has active table-level create, read, write and delete ACLs.",
+      fail: "A base table lacks an active CRUD ACL, or a read was security-trimmed.",
+      warn: "Only extended tables have gaps, no scope set, or an ambiguous zero-row read.",
+      pass: "Every table in scope has all four active ACLs, or the scope ships none.",
+    },
   ];
 
   var SCENARIOS = {
@@ -185,8 +194,10 @@
       "warn",
       "warn",
       "warn",
+      "warn",
     ],
     configured: [
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -219,6 +230,7 @@
       "pass",
       "warn",
       "warn",
+      "fail",
     ],
   };
 

@@ -148,6 +148,12 @@ export {
   scopedAppDeps,
   i18nCompleteness,
   aclRoleSanity,
+  clientCallableAcl,
+  restEndpointSecurity,
+  scriptFieldExposure,
+  scheduledJobRunAs,
+  mobileMenuHygiene,
+  tableCrudAcl,
   testDrift,
 } from "./checks/index.js";
 
