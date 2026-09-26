@@ -35,9 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every custom UI Page in scope is protected by an active `ui_page` read ACL
   named for its endpoint (the URI without `.do`); security-trimmed reads fail
   closed — the default suite grows from sixteen to seventeen checks.
-- The seven certification checks (`clientCallableAcl`, `restEndpointSecurity`,
+- `ui-action-gating` certification check (rule 2.1, raised in 10 of 19
+  releases): every active UI Action in scope has a non-trivial condition or a
+  "Requires role" entry in `sys_ui_action_role`; an empty, whitespace or bare
+  `true` condition counts as none, and a security-trimmed role read fails
+  closed — the default suite grows from seventeen to eighteen checks.
+- The eight certification checks (`clientCallableAcl`, `restEndpointSecurity`,
   `scriptFieldExposure`, `scheduledJobRunAs`, `mobileMenuHygiene`,
-  `tableCrudAcl`, `uiPageAcl`) are now exported from the package entry point, like the
+  `tableCrudAcl`, `uiPageAcl`, `uiActionGating`) are now exported from the package entry point, like the
   other built-in checks.
 - CLI `-v` / `--version` flag.
 - Promotion-order gate: `drift <src> <dst>` now enforces the registry's
