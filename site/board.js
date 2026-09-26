@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the twenty checks -------------------------------- */
+  /* ---- Content model: the twenty-one checks -------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -211,6 +211,15 @@
       warn: "A role-less widget or page, public ones called out, no scope, or a trimmed read.",
       pass: "Every widget and page in scope carries a role, or the scope ships none.",
     },
+    {
+      code: "21",
+      name: "acl-out-of-scope",
+      tag: "scope",
+      desc: "The app ships no ACLs onto tables outside its own scope.",
+      fail: "A table-level or wildcard ACL targets a foreign table, or the ACL read was trimmed.",
+      warn: "Only field ACLs for the app's own fields on foreign tables, no scope, or global.",
+      pass: "Every record ACL in scope targets the app's own tables, or it ships none.",
+    },
   ];
 
   var SCENARIOS = {
@@ -235,8 +244,10 @@
       "warn",
       "warn",
       "warn",
+      "warn",
     ],
     configured: [
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -279,6 +290,7 @@
       "fail",
       "fail",
       "warn",
+      "fail",
     ],
   };
 
