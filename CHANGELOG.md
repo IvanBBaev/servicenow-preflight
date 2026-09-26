@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mobile-menu-hygiene` (no leftover mobile menus/modules) — the default suite
   grows from ten to fifteen checks.
 - CLI `-v` / `--version` flag.
+- Promotion-order gate: `drift <src> <dst>` now enforces the registry's
+  `promotesTo` pipeline with a `promotion-order` result — the declared next
+  stage passes; skipping a stage fails (warns under the new
+  `--allow-stage-skip` flag); a reverse or unrelated pair always fails; no
+  registry or no declared pipeline is an advisory warn. `promotionChain` and
+  `promotionOrderResult` are exported for programmatic gates.
 - Version parity in the promote gate: `sync` now captures the instance's
   platform identity (`glide.buildname`/`glide.war`) and installed apps/plugins
   with versions; `drift` adds `instance-version-parity` (release-family
@@ -50,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The registry now validates `promotesTo` at load time: an undeclared target,
+  a self-reference, a non-string value or a cycle is a usage error (exit 2)
+  for every command, since `drift` now relies on those edges.
 - README restructured quickstart-first; documentation site data refreshed.
 - The published package now ships source maps and an `exports`-map default plus
   a `./package.json` subpath.

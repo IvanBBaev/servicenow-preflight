@@ -18,6 +18,7 @@ import {
   DEFAULT_STALE_WARN_MS,
   stalenessResults,
   versionParityResults,
+  promotionOrderResult,
   type DriftManifestRef,
 } from "./state/drift.js";
 import { testDrift } from "./checks/index.js";
@@ -58,6 +59,8 @@ interface ParsedArgs {
   format: OutputFormat;
   /** `drift`: max manifest age before the compare hard-fails (milliseconds). */
   maxAgeMs?: number;
+  /** `drift`: downgrade a skipped pipeline stage from fail to warn. */
+  allowStageSkip: boolean;
   help: boolean;
   /** Print the package version and exit. */
   version: boolean;
@@ -118,6 +121,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     all: false,
     withLastRun: false,
     allowEmpty: false,
+    allowStageSkip: false,
     format: "pretty",
     help: false,
     version: false,
@@ -181,6 +185,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--allow-empty":
         args.allowEmpty = true;
+        break;
+      case "--allow-stage-skip":
+        args.allowStageSkip = true;
         break;
       case "-i":
       case "--instance":
@@ -282,6 +289,8 @@ Options:
       --max-age <dur>    drift: fail if a compared manifest is older than <dur>.
                          Duration is <number><unit>, unit s|m|h|d|w (e.g. 7d,
                          24h). Without it, a manifest older than 30d only warns.
+      --allow-stage-skip drift: warn instead of fail when <dst> is further down
+                         the registry's promotesTo pipeline than the next stage
   -h, --help             Show this help
   -v, --version          Print the version and exit
 
@@ -728,12 +737,20 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
     warnAfterMs: DEFAULT_STALE_WARN_MS,
     maxAgeMs: args.maxAgeMs,
   });
+  // Fold in promotion order from the registry's promotesTo edges: a pair that
+  // skips a declared stage, runs upstream, or sits on no shared chain fails the
+  // gate (a skip only warns under --allow-stage-skip); a missing registry or
+  // pipeline yields an advisory warn, since the pipeline is opt-in.
+  const registry = await loadRegistry(cwd, args.registryPath);
+  const order = promotionOrderResult(registry, src, dst, {
+    allowStageSkip: args.allowStageSkip,
+  });
   // Fold in version parity: platform identity (OPP-1) and installed app/plugin
   // versions (OPP-5) recorded at sync time. A build-name mismatch or an app
   // missing/downgraded on the target fails the promote gate; manifests written
   // before version capture yield an advisory warn instead.
   const parity = versionParityResults(source, target);
-  const extra = [...stale, ...parity];
+  const extra = [order, ...stale, ...parity];
   const finalReport = extra.length > 0 ? mergeResults(report, extra) : report;
 
   process.stdout.write(render(finalReport, args.format));

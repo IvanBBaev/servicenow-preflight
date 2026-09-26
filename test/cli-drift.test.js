@@ -111,9 +111,10 @@ test("drift --format json reports ok:false and a failing test-drift result", () 
     assert.equal(res.status, 1);
     const report = JSON.parse(res.stdout);
     assert.equal(report.ok, false);
-    // test-drift plus the two version-parity results (OPP-1 / OPP-5), which
-    // are advisory warns here because the manifests predate version capture.
-    assert.equal(report.results.length, 3);
+    // test-drift, promotion-order, and the two version-parity results
+    // (OPP-1 / OPP-5) — all three advisory warns here: there is no registry and
+    // the manifests predate version capture.
+    assert.equal(report.results.length, 4);
     assert.equal(report.results[0].name, "test-drift");
     assert.equal(report.results[0].status, "fail");
     assert.match(report.results[0].message, /missing on "prod"/);
@@ -363,12 +364,26 @@ test("an unknown bare token is treated as a run env and errors without a registr
   }
 });
 
-test("--registry <path> points drift at a custom registry location (parsing accepted)", () => {
-  // The flag is accepted for every subcommand; drift itself does not consult the
-  // registry (it only loads manifests), so the run still reaches the manifest
-  // stage and reports the offline drift result rather than a parse error.
+test("--registry <path> points drift at a custom registry location", () => {
+  // drift reads the registry for the promotion-order gate, so a --registry
+  // path must be honoured: the custom file declares staging → prod, and the
+  // default location holds nothing.
   const dir = tempProject();
   try {
+    mkdirSync(join(dir, "custom"), { recursive: true });
+    writeFileSync(
+      join(dir, "custom", "reg.json"),
+      JSON.stringify({
+        version: 1,
+        instances: {
+          staging: {
+            url: "https://staging.service-now.com",
+            promotesTo: "prod",
+          },
+          prod: { url: "https://prod.service-now.com", promotesTo: null },
+        },
+      }),
+    );
     writeStateManifest(dir, "staging", {
       instance: "staging",
       tests: [{ id: "x/a", name: "A", active: true }],
@@ -395,6 +410,8 @@ test("--registry <path> points drift at a custom registry location (parsing acce
     const report = JSON.parse(res.stdout);
     assert.equal(report.results[0].name, "test-drift");
     assert.equal(report.results[0].status, "pass");
+    const order = report.results.find((r) => r.name === "promotion-order");
+    assert.equal(order.status, "pass", order.message);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -688,6 +705,10 @@ test("drift passes cleanly (exit 0) when identity and apps match on both sides",
       { id: "x_acme_app", name: "Acme App", version: "1.2.3" },
       { id: "com.snc.incident", version: "10.0.1" },
     ];
+    writeRegistry(dir, {
+      staging: { url: "https://staging.service-now.com", promotesTo: "prod" },
+      prod: { url: "https://prod.service-now.com", promotesTo: null },
+    });
     writeStateManifest(dir, "staging", {
       instance: "staging",
       identity,
@@ -720,7 +741,123 @@ test("drift passes cleanly (exit 0) when identity and apps match on both sides",
       report.results.find((r) => r.name === "app-version-parity").status,
       "pass",
     );
+    assert.equal(
+      report.results.find((r) => r.name === "promotion-order").status,
+      "pass",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- drift: promotion order (registry promotesTo) ---------------------------
+
+/** Seed dev → staging → prod plus identical one-test manifests for each. */
+function seedPipeline(dir) {
+  writeRegistry(dir, {
+    dev: { url: "https://dev.service-now.com", promotesTo: "staging" },
+    staging: { url: "https://staging.service-now.com", promotesTo: "prod" },
+    prod: { url: "https://prod.service-now.com", promotesTo: null },
+  });
+  for (const name of ["dev", "staging", "prod"]) {
+    writeStateManifest(dir, name, {
+      instance: name,
+      tests: [{ id: "x/a", name: "A", active: true }],
+      suites: [],
+    });
+  }
+}
+
+/** Run `drift` as JSON and return `{ res, order }` (the promotion-order row). */
+function driftOrder(dir, args) {
+  const res = runCli(["drift", ...args, "--format", "json"], { cwd: dir });
+  const report = JSON.parse(res.stdout);
+  return {
+    res,
+    report,
+    order: report.results.find((r) => r.name === "promotion-order"),
+  };
+}
+
+test("drift passes promotion-order for a declared next stage", () => {
+  const dir = tempProject();
+  try {
+    seedPipeline(dir);
+    const { res, order } = driftOrder(dir, ["dev", "staging"]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(order.status, "pass");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift blocks (exit 1) a promote that skips a declared stage", () => {
+  const dir = tempProject();
+  try {
+    seedPipeline(dir);
+    const { res, report, order } = driftOrder(dir, ["dev", "prod"]);
+    assert.equal(res.status, 1);
+    assert.equal(report.ok, false);
+    // Test coverage itself is identical — only the order blocks.
+    assert.equal(report.results[0].status, "pass");
+    assert.equal(order.status, "fail");
+    assert.match(order.message, /skips "staging"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift --allow-stage-skip turns a skipped stage into a warn (exit 0)", () => {
+  const dir = tempProject();
+  try {
+    seedPipeline(dir);
+    const { res, order } = driftOrder(dir, [
+      "dev",
+      "prod",
+      "--allow-stage-skip",
+    ]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(order.status, "warn");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift blocks (exit 1) a reverse promote even with --allow-stage-skip", () => {
+  const dir = tempProject();
+  try {
+    seedPipeline(dir);
+    const { res, order } = driftOrder(dir, [
+      "prod",
+      "staging",
+      "--allow-stage-skip",
+    ]);
+    assert.equal(res.status, 1);
+    assert.equal(order.status, "fail");
+    assert.match(order.message, /runs against the declared pipeline/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift exits 2 on a registry whose promotesTo is dangling", () => {
+  const dir = tempProject();
+  try {
+    seedPipeline(dir);
+    writeRegistry(dir, {
+      staging: { url: "https://staging.service-now.com", promotesTo: "prdo" },
+      prod: { url: "https://prod.service-now.com" },
+    });
+    const res = runCli(["drift", "staging", "prod"], { cwd: dir });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /promotes to "prdo", which is not declared/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--help documents --allow-stage-skip", () => {
+  const res = runCli(["--help"]);
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /--allow-stage-skip/);
 });
