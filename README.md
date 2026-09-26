@@ -75,7 +75,9 @@ npx servicenow-preflight        # run the default suite (short alias: snpf)
 
 ! module-roles: No scope set — skipping the navigator module roles check (pass a scope to enable it).
 
-4 passed, 18 warnings, 0 failed
+! script-hygiene: No scope set — skipping the Fix Script / Script Include hygiene check (pass a scope to enable it).
+
+4 passed, 19 warnings, 0 failed
 ```
 
 Two identical binaries ship — `servicenow-preflight` and the alias `snpf`. Out
@@ -88,33 +90,34 @@ promote/deploy step.
 ## What it checks
 
 `runPreflight(ctx, checks?)` runs each check against the target instance and
-aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Twenty-two
+aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Twenty-three
 checks ship in the default suite; the CLI is a thin wrapper over that function.
 
-| Check                     | Needs                        | Verifies                                                                                                                                                   |
-| ------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `instance-url-configured` | —                            | An instance URL is present and well-formed (prefers `https`).                                                                                              |
-| `connectivity-auth`       | credentials                  | The instance is reachable and the credentials authenticate.                                                                                                |
-| `update-set-state`        | `updateSetId`                | The target update set, and any batched child sets, are `complete` and non-empty (not in-progress or `ignore`d).                                            |
-| `default-set-leakage`     | `scope`                      | No captured work is stranded in a "Default"-flagged update set for the scope — changes that would never ship.                                              |
-| `remote-set-preview`      | credentials                  | Every pending retrieved update set on the target is previewed with all preview problems resolved (`updateSetId`, when set, focuses the gate on one set).   |
-| `atf-enablement`          | credentials                  | ATF test execution is enabled instance-wide (optionally also an online scheduled client test runner, via `options.atfEnablement.requireClientTestRunner`). |
-| `atf-run`                 | `options.atfSuites`          | Configured ATF test suites run green (no failing or errored tests).                                                                                        |
-| `scoped-app-deps`         | `options.requiredApps`       | Required scoped apps / plugins are installed, active, and meet any `minVersion`.                                                                           |
-| `i18n-completeness`       | `scope`, `options.languages` | Every configured language has full translation coverage for the scope.                                                                                     |
-| `acl-role-sanity`         | `scope`                      | No wide-open mutating ACLs, and no ACLs referencing non-existent roles.                                                                                    |
-| `client-callable-acl`     | `scope`                      | Every active client-callable Script Include is gated by an active `execute` ACL (Store certification rule 1.2).                                            |
-| `rest-endpoint-security`  | `scope`                      | Scripted REST resources require authentication and enforce ACL authorization backed by a `REST_Endpoint` ACL (rule 1.3).                                   |
-| `script-field-exposure`   | `scope`                      | Every script-typed column ships with an active field write ACL — `table.element` or `table.*` (rule 1.4).                                                  |
-| `scheduled-job-run-as`    | `scope`                      | Scheduled Jobs leave "Run as" empty so they run as `system` (rule 6.2; advisory — never fails).                                                            |
-| `mobile-menu-hygiene`     | `scope`                      | No mobile Application Menus/Modules ship in a non-mobile app (rule 5.1; advisory — never fails).                                                           |
-| `table-crud-acl`          | `scope`                      | Every custom table has active table-level create/read/write/delete ACLs (rule 1.1; a gap on an extended table only warns).                                 |
-| `ui-page-acl`             | `scope`                      | Every custom UI Page is protected by an active `ui_page` read ACL named for its endpoint (rule 2.2).                                                       |
-| `ui-action-gating`        | `scope`                      | Every active UI Action has a condition or a "Requires role" entry (`sys_ui_action_role`) — none is runnable by every user (rule 2.1).                      |
-| `table-namespace`         | `scope`                      | Every custom table is prefixed with the app namespace (`<scope>_`), taken from the resolved scope name (rule 6.1).                                         |
-| `portal-roles`            | `scope`                      | Service Portal widgets and pages carry roles unless deliberately public; public ones are called out (rule 2.6; advisory — never fails).                    |
-| `acl-out-of-scope`        | `scope`                      | The app ships no ACLs onto tables outside its scope — table-level/wildcard ones fail; a field ACL for the app's own field only warns (rule 1.6).           |
-| `module-roles`            | `scope`                      | Active navigator modules are gated by their own or their application menu's roles, honouring `override_menu_roles` (rule 5.5; advisory — never fails).     |
+| Check                     | Needs                        | Verifies                                                                                                                                                              |
+| ------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instance-url-configured` | —                            | An instance URL is present and well-formed (prefers `https`).                                                                                                         |
+| `connectivity-auth`       | credentials                  | The instance is reachable and the credentials authenticate.                                                                                                           |
+| `update-set-state`        | `updateSetId`                | The target update set, and any batched child sets, are `complete` and non-empty (not in-progress or `ignore`d).                                                       |
+| `default-set-leakage`     | `scope`                      | No captured work is stranded in a "Default"-flagged update set for the scope — changes that would never ship.                                                         |
+| `remote-set-preview`      | credentials                  | Every pending retrieved update set on the target is previewed with all preview problems resolved (`updateSetId`, when set, focuses the gate on one set).              |
+| `atf-enablement`          | credentials                  | ATF test execution is enabled instance-wide (optionally also an online scheduled client test runner, via `options.atfEnablement.requireClientTestRunner`).            |
+| `atf-run`                 | `options.atfSuites`          | Configured ATF test suites run green (no failing or errored tests).                                                                                                   |
+| `scoped-app-deps`         | `options.requiredApps`       | Required scoped apps / plugins are installed, active, and meet any `minVersion`.                                                                                      |
+| `i18n-completeness`       | `scope`, `options.languages` | Every configured language has full translation coverage for the scope.                                                                                                |
+| `acl-role-sanity`         | `scope`                      | No wide-open mutating ACLs, and no ACLs referencing non-existent roles.                                                                                               |
+| `client-callable-acl`     | `scope`                      | Every active client-callable Script Include is gated by an active `execute` ACL (Store certification rule 1.2).                                                       |
+| `rest-endpoint-security`  | `scope`                      | Scripted REST resources require authentication and enforce ACL authorization backed by a `REST_Endpoint` ACL (rule 1.3).                                              |
+| `script-field-exposure`   | `scope`                      | Every script-typed column ships with an active field write ACL — `table.element` or `table.*` (rule 1.4).                                                             |
+| `scheduled-job-run-as`    | `scope`                      | Scheduled Jobs leave "Run as" empty so they run as `system` (rule 6.2; advisory — never fails).                                                                       |
+| `mobile-menu-hygiene`     | `scope`                      | No mobile Application Menus/Modules ship in a non-mobile app (rule 5.1; advisory — never fails).                                                                      |
+| `table-crud-acl`          | `scope`                      | Every custom table has active table-level create/read/write/delete ACLs (rule 1.1; a gap on an extended table only warns).                                            |
+| `ui-page-acl`             | `scope`                      | Every custom UI Page is protected by an active `ui_page` read ACL named for its endpoint (rule 2.2).                                                                  |
+| `ui-action-gating`        | `scope`                      | Every active UI Action has a condition or a "Requires role" entry (`sys_ui_action_role`) — none is runnable by every user (rule 2.1).                                 |
+| `table-namespace`         | `scope`                      | Every custom table is prefixed with the app namespace (`<scope>_`), taken from the resolved scope name (rule 6.1).                                                    |
+| `portal-roles`            | `scope`                      | Service Portal widgets and pages carry roles unless deliberately public; public ones are called out (rule 2.6; advisory — never fails).                               |
+| `acl-out-of-scope`        | `scope`                      | The app ships no ACLs onto tables outside its scope — table-level/wildcard ones fail; a field ACL for the app's own field only warns (rule 1.6).                      |
+| `module-roles`            | `scope`                      | Active navigator modules are gated by their own or their application menu's roles, honouring `override_menu_roles` (rule 5.5; advisory — never fails).                |
+| `script-hygiene`          | `scope`                      | No Fix Scripts that are empty or comments only, and no Script Include names duplicated in the scope or shared with another scope (rule 4.10; advisory — never fails). |
 
 Checks whose only need is credentials always run once credentials are present;
 the rest `warn` (and explain what's missing) until you supply their inputs —
@@ -251,13 +254,13 @@ checks to run, and per-check options — but **never credentials**.
 }
 ```
 
-| Field         | Type                                   | Used by                                                                                                                                                                                                                                                                                                                                                   |
-| ------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `instanceUrl` | `string`                               | Target instance (CLI `--instance` overrides).                                                                                                                                                                                                                                                                                                             |
-| `scope`       | `string`                               | `default-set-leakage`, `i18n-completeness`, `acl-role-sanity`, and the twelve certification checks (`client-callable-acl`, `rest-endpoint-security`, `script-field-exposure`, `scheduled-job-run-as`, `mobile-menu-hygiene`, `table-crud-acl`, `ui-page-acl`, `ui-action-gating`, `table-namespace`, `portal-roles`, `acl-out-of-scope`, `module-roles`). |
-| `updateSetId` | `string` (sys_id)                      | `update-set-state`; also focuses `remote-set-preview` on that set's retrieved copy.                                                                                                                                                                                                                                                                       |
-| `select`      | `{ only?: string[]; skip?: string[] }` | Check selection (CLI flags override).                                                                                                                                                                                                                                                                                                                     |
-| `options`     | `object`                               | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).                                                                                                                                                                                                                                                                          |
+| Field         | Type                                   | Used by                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instanceUrl` | `string`                               | Target instance (CLI `--instance` overrides).                                                                                                                                                                                                                                                                                                                                 |
+| `scope`       | `string`                               | `default-set-leakage`, `i18n-completeness`, `acl-role-sanity`, and the thirteen certification checks (`client-callable-acl`, `rest-endpoint-security`, `script-field-exposure`, `scheduled-job-run-as`, `mobile-menu-hygiene`, `table-crud-acl`, `ui-page-acl`, `ui-action-gating`, `table-namespace`, `portal-roles`, `acl-out-of-scope`, `module-roles`, `script-hygiene`). |
+| `updateSetId` | `string` (sys_id)                      | `update-set-state`; also focuses `remote-set-preview` on that set's retrieved copy.                                                                                                                                                                                                                                                                                           |
+| `select`      | `{ only?: string[]; skip?: string[] }` | Check selection (CLI flags override).                                                                                                                                                                                                                                                                                                                                         |
+| `options`     | `object`                               | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).                                                                                                                                                                                                                                                                                              |
 
 ## Multi-instance: registry, sync & drift
 

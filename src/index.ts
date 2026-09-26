@@ -160,6 +160,7 @@ export {
   portalRoles,
   aclOutOfScope,
   moduleRoles,
+  scriptHygiene,
   testDrift,
 } from "./checks/index.js";
 
