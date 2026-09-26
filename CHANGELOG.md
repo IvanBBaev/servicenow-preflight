@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Test suite is hermetic against the host's proxy environment: every test
+  process preloads `test/setup/hermetic-env.js`, which scrubs `SNPF_PROXY`,
+  `HTTPS_PROXY`, `NO_PROXY` and their variants, so a machine exporting them no
+  longer routes fetch stubs through a real proxy or bypasses a test's own mock
+  proxy.
 - Checks no longer report a false pass on zero-visible-rows (ACL trimming),
   reference-object field values, update-set batch child trees, or partial i18n
   coverage.
