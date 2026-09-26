@@ -63,11 +63,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for the app's own namespaced field on an out-of-scope table only warns;
   a security-trimmed ACL read fails closed — the default suite grows from
   twenty to twenty-one checks.
-- The twelve certification checks (`clientCallableAcl`, `restEndpointSecurity`,
-  `scriptFieldExposure`, `scheduledJobRunAs`, `mobileMenuHygiene`,
-  `tableCrudAcl`, `uiPageAcl`, `uiActionGating`, `tableNamespace`,
-  `portalRoles`, `aclOutOfScope`, `moduleRoles`) are now exported from the
-  package entry point, like the other built-in checks.
+- `script-hygiene` certification check (rule 4.10, raised in 5–8 of 19
+  releases): flags Fix Scripts that do nothing (empty, comments only, or an
+  empty IIFE) and Script Include names used twice in the scope or shared with
+  another scope, where an unqualified call can resolve to the wrong one.
+  Advisory — it never fails — the default suite grows from twenty-two to
+  twenty-three checks.
+- The thirteen certification checks (`clientCallableAcl`,
+  `restEndpointSecurity`, `scriptFieldExposure`, `scheduledJobRunAs`,
+  `mobileMenuHygiene`, `tableCrudAcl`, `uiPageAcl`, `uiActionGating`,
+  `tableNamespace`, `portalRoles`, `aclOutOfScope`, `moduleRoles`,
+  `scriptHygiene`) are now exported from the package entry point, like the other
+  built-in checks.
 - CLI `-v` / `--version` flag.
 - Promotion-order gate: `drift <src> <dst>` now enforces the registry's
   `promotesTo` pipeline with a `promotion-order` result — the declared next

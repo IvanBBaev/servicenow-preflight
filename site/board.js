@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the twenty-two checks -------------------------------- */
+  /* ---- Content model: the twenty-three checks -------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -229,6 +229,15 @@
       warn: "A module shown to every user, an unreadable menu, no scope, or a trimmed read.",
       pass: "Every active module in scope is gated, or the scope ships none.",
     },
+    {
+      code: "23",
+      name: "script-hygiene",
+      tag: "scope",
+      desc: "No comment-only Fix Scripts and no duplicate-named Script Includes. Advisory \u2014 never fails.",
+      fail: "Never \u2014 dead metadata is a best-practice finding.",
+      warn: "An empty Fix Script, a duplicated or shadowed Script Include name, or a trimmed read.",
+      pass: "No empty Fix Scripts and unique Script Include names, or the scope ships none.",
+    },
   ];
 
   var SCENARIOS = {
@@ -255,8 +264,10 @@
       "warn",
       "warn",
       "warn",
+      "warn",
     ],
     configured: [
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -302,6 +313,7 @@
       "fail",
       "warn",
       "fail",
+      "warn",
       "warn",
     ],
   };

@@ -15,6 +15,7 @@ import { tableNamespace } from "./table-namespace.js";
 import { portalRoles } from "./portal-roles.js";
 import { aclOutOfScope } from "./acl-out-of-scope.js";
 import { moduleRoles } from "./module-roles.js";
+import { scriptHygiene } from "./script-hygiene.js";
 import { clientCallableAcl } from "./client-callable-acl.js";
 import { restEndpointSecurity } from "./rest-endpoint-security.js";
 import { scriptFieldExposure } from "./script-field-exposure.js";
@@ -37,6 +38,7 @@ export { tableNamespace } from "./table-namespace.js";
 export { portalRoles } from "./portal-roles.js";
 export { aclOutOfScope } from "./acl-out-of-scope.js";
 export { moduleRoles } from "./module-roles.js";
+export { scriptHygiene } from "./script-hygiene.js";
 export { clientCallableAcl } from "./client-callable-acl.js";
 export { restEndpointSecurity } from "./rest-endpoint-security.js";
 export { scriptFieldExposure } from "./script-field-exposure.js";
@@ -132,4 +134,5 @@ export const defaultChecks: Check[] = [
   portalRoles,
   aclOutOfScope,
   moduleRoles,
+  scriptHygiene,
 ];
