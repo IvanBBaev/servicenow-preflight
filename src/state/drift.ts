@@ -7,6 +7,7 @@ import type {
   AtfTestState,
 } from "./manifest.js";
 import { compareVersions } from "../versions.js";
+import { promotionChain, type InstanceRegistry } from "../registry.js";
 
 /**
  * Test drift between two instances — the payoff of committing manifests. Two
@@ -626,4 +627,106 @@ export function versionParityResults(
     instanceParityResult(source, target),
     ...appParityResults(source, target),
   ];
+}
+
+/** Check name for the promotion-order result a drift run emits. */
+export const PROMOTION_ORDER_CHECK = "promotion-order";
+
+/** Options for {@link promotionOrderResult}. */
+export interface PromotionOrderOptions {
+  /**
+   * Downgrade a skipped stage from `fail` to `warn` (the CLI's
+   * `--allow-stage-skip`), e.g. for an emergency fix. Never softens a reverse
+   * or unrelated pair.
+   */
+  allowStageSkip?: boolean;
+}
+
+/**
+ * Promotion order between the two instances a drift run compares, enforced
+ * from the registry's `promotesTo` edges. Direction follows
+ * {@link computeDrift}: `source` is the validated upstream, `target` the
+ * promote destination.
+ *
+ * - `target` is `source`'s declared next stage → `pass`.
+ * - `target` is further downstream, skipping stages → `fail` naming them
+ *   (`warn` under `allowStageSkip`): the skipped stage never validated what is
+ *   being promoted.
+ * - `target` is upstream of `source`, or on no shared chain → `fail`: that is
+ *   not a promote the pipeline declares.
+ * - No registry, an instance missing from it, or a registry that declares no
+ *   `promotesTo` at all → advisory `warn`: the order cannot be verified, and
+ *   the pipeline is opt-in.
+ */
+export function promotionOrderResult(
+  registry: InstanceRegistry | undefined,
+  source: string,
+  target: string,
+  opts: PromotionOrderOptions = {},
+): CheckResult {
+  const pair = `"${source}" → "${target}"`;
+  const unverified = (why: string): CheckResult => ({
+    name: PROMOTION_ORDER_CHECK,
+    status: "warn",
+    message: `Promotion order of ${pair} not verified: ${why}.`,
+  });
+  if (!registry) {
+    return unverified("no instance registry was found");
+  }
+  const missing = [source, target].filter(
+    (n) => !Object.hasOwn(registry.instances, n),
+  );
+  if (missing.length > 0) {
+    return unverified(
+      `${missing.map((n) => `"${n}"`).join(" and ")} ${
+        missing.length === 1 ? "is" : "are"
+      } not declared in the registry`,
+    );
+  }
+  const declaresPipeline = Object.values(registry.instances).some(
+    (d) => typeof d.promotesTo === "string",
+  );
+  if (!declaresPipeline) {
+    return unverified(
+      "the registry declares no promotesTo pipeline (set promotesTo on each stage to enforce it)",
+    );
+  }
+  const chain = promotionChain(registry, source, target);
+  if (chain && chain.length === 2) {
+    return {
+      name: PROMOTION_ORDER_CHECK,
+      status: "pass",
+      message: `${pair} is a declared promotion step.`,
+    };
+  }
+  if (chain) {
+    const skipped = chain.slice(1, -1).map((n) => `"${n}"`);
+    const hops = chain
+      .slice(0, -1)
+      .map((n, i) => `drift ${n} ${chain[i + 1]}`)
+      .join(", ");
+    return opts.allowStageSkip
+      ? {
+          name: PROMOTION_ORDER_CHECK,
+          status: "warn",
+          message: `${pair} skips ${skipped.join(", ")} (allowed by --allow-stage-skip); the skipped stage(s) never validated this promote.`,
+        }
+      : {
+          name: PROMOTION_ORDER_CHECK,
+          status: "fail",
+          message: `${pair} skips ${skipped.join(", ")} in the declared pipeline (${chain.join(" → ")}). Gate each hop instead (${hops}), or pass --allow-stage-skip for a deliberate skip.`,
+        };
+  }
+  if (promotionChain(registry, target, source)) {
+    return {
+      name: PROMOTION_ORDER_CHECK,
+      status: "fail",
+      message: `${pair} runs against the declared pipeline: "${target}" promotes toward "${source}", not the other way round. Swap the arguments if you meant to gate "${target}" → "${source}".`,
+    };
+  }
+  return {
+    name: PROMOTION_ORDER_CHECK,
+    status: "fail",
+    message: `${pair} is not a declared promotion: "${target}" is not downstream of "${source}" in the registry's promotesTo pipeline.`,
+  };
 }

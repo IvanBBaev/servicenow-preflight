@@ -9,6 +9,8 @@ import {
   DEFAULT_STALE_WARN_MS,
   INSTANCE_VERSION_CHECK,
   APP_VERSION_CHECK,
+  PROMOTION_ORDER_CHECK,
+  promotionOrderResult,
 } from "../../build/state/drift.js";
 
 /**
@@ -1015,4 +1017,104 @@ test("versionParityResults always emits at least one result per dimension", () =
     clean.map((r) => r.status),
     ["pass", "pass"],
   );
+});
+
+// --- promotionOrderResult ---------------------------------------------------
+
+/** A registry with a `dev → staging → test → prod` chain plus a fan-in dev. */
+function pipelineRegistry() {
+  const url = "https://x.service-now.com";
+  return {
+    version: 1,
+    instances: {
+      dev: { url, promotesTo: "staging" },
+      hotfix: { url, promotesTo: "staging" },
+      staging: { url, promotesTo: "test" },
+      test: { url, promotesTo: "prod" },
+      prod: { url, promotesTo: null },
+      sandbox: { url },
+    },
+  };
+}
+
+test("promotionOrderResult passes a declared next-stage promote", () => {
+  const r = promotionOrderResult(pipelineRegistry(), "staging", "test");
+  assert.equal(r.name, PROMOTION_ORDER_CHECK);
+  assert.equal(r.name, "promotion-order");
+  assert.equal(r.status, "pass");
+  assert.match(r.message, /"staging" → "test" is a declared promotion step/);
+});
+
+test("promotionOrderResult fails a promote that skips stages, naming each one", () => {
+  const r = promotionOrderResult(pipelineRegistry(), "dev", "prod");
+  assert.equal(r.status, "fail");
+  assert.match(r.message, /skips "staging", "test"/);
+  assert.match(r.message, /dev → staging → test → prod/);
+  assert.match(
+    r.message,
+    /drift dev staging, drift staging test, drift test prod/,
+  );
+  assert.match(r.message, /--allow-stage-skip/);
+});
+
+test("promotionOrderResult downgrades a skip to warn under allowStageSkip", () => {
+  const r = promotionOrderResult(pipelineRegistry(), "staging", "prod", {
+    allowStageSkip: true,
+  });
+  assert.equal(r.status, "warn");
+  assert.match(r.message, /skips "test" \(allowed by --allow-stage-skip\)/);
+});
+
+test("promotionOrderResult fails a reverse promote even under allowStageSkip", () => {
+  for (const allowStageSkip of [false, true]) {
+    const r = promotionOrderResult(pipelineRegistry(), "prod", "staging", {
+      allowStageSkip,
+    });
+    assert.equal(r.status, "fail");
+    assert.match(r.message, /runs against the declared pipeline/);
+    assert.match(r.message, /gate "staging" → "prod"/);
+  }
+});
+
+test("promotionOrderResult fails a pair on no shared chain", () => {
+  // Two fan-in siblings: neither is downstream of the other.
+  const siblings = promotionOrderResult(pipelineRegistry(), "dev", "hotfix", {
+    allowStageSkip: true,
+  });
+  assert.equal(siblings.status, "fail");
+  assert.match(siblings.message, /is not a declared promotion/);
+  // An instance outside the pipeline entirely.
+  const loose = promotionOrderResult(pipelineRegistry(), "sandbox", "prod");
+  assert.equal(loose.status, "fail");
+});
+
+test("promotionOrderResult warns (unverified) without a registry", () => {
+  const r = promotionOrderResult(undefined, "staging", "prod");
+  assert.equal(r.status, "warn");
+  assert.match(r.message, /not verified: no instance registry was found/);
+});
+
+test("promotionOrderResult warns (unverified) when an instance is undeclared", () => {
+  const one = promotionOrderResult(pipelineRegistry(), "staging", "qa");
+  assert.equal(one.status, "warn");
+  assert.match(one.message, /"qa" is not declared in the registry/);
+  const both = promotionOrderResult(pipelineRegistry(), "uat", "qa");
+  assert.match(both.message, /"uat" and "qa" are not declared/);
+  // A name that only exists on Object.prototype is not an instance.
+  const proto = promotionOrderResult(pipelineRegistry(), "staging", "toString");
+  assert.equal(proto.status, "warn");
+});
+
+test("promotionOrderResult warns (unverified) when no promotesTo is declared", () => {
+  const url = "https://x.service-now.com";
+  const r = promotionOrderResult(
+    {
+      version: 1,
+      instances: { staging: { url }, prod: { url, promotesTo: null } },
+    },
+    "staging",
+    "prod",
+  );
+  assert.equal(r.status, "warn");
+  assert.match(r.message, /declares no promotesTo pipeline/);
 });

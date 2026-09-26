@@ -133,6 +133,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--with-last-run`         | `sync`: also pull each test's most recent result.                              |
 | `--allow-empty`           | `sync`: commit an empty snapshot over a non-empty manifest.                    |
 | `--max-age <dur>`         | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`). |
+| `--allow-stage-skip`      | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.    |
 | `--format <fmt>`          | `pretty` (default), `json`, `junit`, `sarif`.                                  |
 | `--json` / `-h`           | Shorthand for `--format json` / show help.                                     |
 
@@ -251,8 +252,10 @@ guarantee is that a promote never drops validated coverage. That is what the
 The **registry** (`.preflight/instances.json`) is a committed description of the
 instances a project targets and the order they promote in — it holds **no
 credentials**. Each instance needs a `url`; `promotesTo` chains the pipeline (or
-`null` for the terminal stage); the optional `scope`, `stage` and `envPrefix`
-refine per-instance behaviour.
+`null` for the terminal stage) and is enforced by `drift`; the optional `scope`,
+`stage` and `envPrefix` refine per-instance behaviour. A `promotesTo` that names
+an undeclared instance, the instance itself, or closes a cycle is rejected when
+the registry loads (exit `2`).
 
 ```json
 {
@@ -303,7 +306,12 @@ except each instance looks up a **namespaced** variable first: an instance whose
   skew (`glide.war`); `app-version-parity` fails when an app or plugin installed
   on the source is missing or older on the target. Manifests written by older
   versions of the tool (no identity/app data) degrade to an advisory `warn`,
-  never a crash.
+  never a crash. A **`promotion-order`** result checks the pair against the
+  registry's `promotesTo` chain: the declared next stage `pass`es; a target
+  further down that **skips a stage** fails (a `warn` under
+  `--allow-stage-skip`, for a deliberate hotfix); a target **upstream** of the
+  source or on **no shared chain** always fails. With no registry, an
+  undeclared instance, or no `promotesTo` anywhere, it is an advisory `warn`.
 
 ```bash
 snpf sync staging                 # commit the two manifests, then gate the promote

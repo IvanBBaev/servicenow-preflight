@@ -11,6 +11,7 @@ import {
   loadRegistry,
   instanceNames,
   resolveInstance,
+  promotionChain,
 } from "../build/registry.js";
 import { UsageError } from "../build/config.js";
 
@@ -544,4 +545,135 @@ test("loadRegistry accepts clean registry and per-instance scopes (SR-1 no false
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- promotesTo validation + promotionChain -------------------------------
+
+/** Load a registry built from `instances` in a fresh temp dir. */
+async function loadInstances(instances) {
+  const dir = tempDir();
+  try {
+    writeRegistry(dir, { version: 1, instances });
+    return await loadRegistry(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const URL_ = "https://x.service-now.com";
+
+test("loadRegistry accepts a fan-in pipeline with absent and null promotesTo", async () => {
+  const reg = await loadInstances({
+    devA: { url: URL_, promotesTo: "staging" },
+    devB: { url: URL_, promotesTo: "staging" },
+    staging: { url: URL_, promotesTo: "prod" },
+    prod: { url: URL_, promotesTo: null },
+    sandbox: { url: URL_ },
+  });
+  assert.deepEqual(instanceNames(reg), [
+    "devA",
+    "devB",
+    "staging",
+    "prod",
+    "sandbox",
+  ]);
+});
+
+test("loadRegistry rejects promotesTo naming an undeclared instance", async () => {
+  await assert.rejects(
+    loadInstances({
+      dev: { url: URL_, promotesTo: "stagign" },
+      staging: { url: URL_ },
+    }),
+    (err) =>
+      err instanceof UsageError &&
+      /"dev" promotes to "stagign", which is not declared/.test(err.message) &&
+      /Known instances: dev, staging/.test(err.message),
+  );
+});
+
+test("loadRegistry rejects promotesTo that only matches an inherited key", async () => {
+  await assert.rejects(
+    loadInstances({ dev: { url: URL_, promotesTo: "toString" } }),
+    /promotes to "toString", which is not declared/,
+  );
+});
+
+test("loadRegistry rejects a non-string promotesTo", async () => {
+  for (const bad of [42, true, ["prod"], { name: "prod" }]) {
+    await assert.rejects(
+      loadInstances({
+        dev: { url: URL_, promotesTo: bad },
+        prod: { url: URL_ },
+      }),
+      (err) =>
+        err instanceof UsageError && /non-string promotesTo/.test(err.message),
+      JSON.stringify(bad),
+    );
+  }
+});
+
+test("loadRegistry rejects an instance that promotes to itself", async () => {
+  await assert.rejects(
+    loadInstances({ dev: { url: URL_, promotesTo: "dev" } }),
+    /"dev" promotes to itself/,
+  );
+});
+
+test("loadRegistry rejects a two-node promotesTo cycle", async () => {
+  await assert.rejects(
+    loadInstances({
+      dev: { url: URL_, promotesTo: "prod" },
+      prod: { url: URL_, promotesTo: "dev" },
+    }),
+    (err) =>
+      err instanceof UsageError &&
+      /cycle \(dev → prod → dev\)/.test(err.message),
+  );
+});
+
+test("loadRegistry rejects a cycle that the first instance only leads into", async () => {
+  // entry → a → b → c → a: walking from "entry" never returns to "entry", so
+  // the cycle must be reported from one of its own members.
+  await assert.rejects(
+    loadInstances({
+      entry: { url: URL_, promotesTo: "a" },
+      a: { url: URL_, promotesTo: "b" },
+      b: { url: URL_, promotesTo: "c" },
+      c: { url: URL_, promotesTo: "a" },
+    }),
+    /cycle \(a → b → c → a\)/,
+  );
+});
+
+test("promotionChain returns the declared path, both ends included", async () => {
+  const reg = await loadInstances({
+    dev: { url: URL_, promotesTo: "staging" },
+    staging: { url: URL_, promotesTo: "test" },
+    test: { url: URL_, promotesTo: "prod" },
+    prod: { url: URL_, promotesTo: null },
+  });
+  assert.deepEqual(promotionChain(reg, "dev", "staging"), ["dev", "staging"]);
+  assert.deepEqual(promotionChain(reg, "dev", "prod"), [
+    "dev",
+    "staging",
+    "test",
+    "prod",
+  ]);
+  assert.equal(promotionChain(reg, "prod", "dev"), undefined);
+  assert.equal(promotionChain(reg, "staging", "dev"), undefined);
+  assert.equal(promotionChain(reg, "ghost", "prod"), undefined);
+});
+
+test("promotionChain stays bounded on a hand-built cyclic registry", () => {
+  // Bypasses loadRegistry validation on purpose: the walk must still end.
+  const reg = {
+    version: 1,
+    instances: {
+      a: { url: URL_, promotesTo: "b" },
+      b: { url: URL_, promotesTo: "a" },
+      c: { url: URL_ },
+    },
+  };
+  assert.equal(promotionChain(reg, "a", "c"), undefined);
 });

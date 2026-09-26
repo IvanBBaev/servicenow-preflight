@@ -218,6 +218,59 @@ function assertNoDuplicateJsonKeys(text: string, path: string): void {
   }
 }
 
+/**
+ * Validate the `promotesTo` edges once every name is known. The drift gate
+ * enforces promotion order from these edges, so a dangling, self-referencing,
+ * mistyped or cyclic edge would make it verify the wrong pipeline — reject it
+ * at load time instead. Each instance has at most one successor, so walking
+ * forward from every node finds any cycle.
+ */
+function assertPromotionGraph(
+  instances: Record<string, InstanceDef>,
+  path: string,
+): void {
+  for (const [name, def] of Object.entries(instances)) {
+    const next: unknown = def.promotesTo;
+    if (next === undefined || next === null) continue;
+    if (typeof next !== "string") {
+      throw new UsageError(
+        `Registry ${path}: instance "${name}" has a non-string promotesTo; ` +
+          `it must name another instance, or be null for the terminal stage.`,
+      );
+    }
+    if (next === name) {
+      throw new UsageError(
+        `Registry ${path}: instance "${name}" promotes to itself.`,
+      );
+    }
+    if (!Object.hasOwn(instances, next)) {
+      const known = Object.keys(instances).join(", ");
+      throw new UsageError(
+        `Registry ${path}: instance "${name}" promotes to "${next}", which is ` +
+          `not declared. Known instances: ${known}.`,
+      );
+    }
+  }
+  for (const start of Object.keys(instances)) {
+    const seen = [start];
+    let cur = instances[start]?.promotesTo;
+    while (typeof cur === "string") {
+      if (cur === start) {
+        throw new UsageError(
+          `Registry ${path}: promotesTo forms a cycle (${[...seen, cur].join(
+            " → ",
+          )}); a pipeline must end in a terminal stage.`,
+        );
+      }
+      // A cycle that does not pass back through `start` is reported when the
+      // walk starts from one of its own members.
+      if (seen.includes(cur)) break;
+      seen.push(cur);
+      cur = instances[cur]?.promotesTo;
+    }
+  }
+}
+
 /** Minimal structural validation; throws a clear error on a malformed file. */
 function assertRegistry(value: unknown, path: string): InstanceRegistry {
   const reg = value as Partial<InstanceRegistry> | null;
@@ -274,6 +327,7 @@ function assertRegistry(value: unknown, path: string): InstanceRegistry {
     // (SR-1) — reject operator characters at load time.
     assertSafeScope(def.scope, `Registry ${path}: instance "${name}"`);
   }
+  assertPromotionGraph(reg.instances, path);
   return {
     version: reg.version ?? 1,
     scope: reg.scope,
@@ -338,4 +392,27 @@ export function resolveInstance(
     scope: def.scope ?? registry.scope,
     envPrefix: def.envPrefix?.trim() || defaultEnvPrefix(name),
   };
+}
+
+/**
+ * The declared promotion chain from `source` down to `target`, both ends
+ * included (`["dev", "staging", "prod"]`), or `undefined` when `target` is not
+ * downstream of `source`. Assumes a registry that passed {@link loadRegistry}
+ * (no dangling edges, no cycles); the walk is still bounded by the instance
+ * count so a hand-built registry cannot loop it.
+ */
+export function promotionChain(
+  registry: InstanceRegistry,
+  source: string,
+  target: string,
+): string[] | undefined {
+  const chain = [source];
+  let cur = registry.instances[source]?.promotesTo;
+  const limit = Object.keys(registry.instances).length;
+  while (typeof cur === "string" && chain.length <= limit) {
+    chain.push(cur);
+    if (cur === target) return chain;
+    cur = registry.instances[cur]?.promotesTo;
+  }
+  return undefined;
 }
