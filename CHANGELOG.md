@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads — plus the advisory `scheduled-job-run-as` (no pinned "Run as") and
   `mobile-menu-hygiene` (no leftover mobile menus/modules) — the default suite
   grows from ten to fifteen checks.
+- `table-crud-acl` certification check (rule 1.1, raised in 16 of 19
+  releases): every custom table in scope carries active table-level
+  create/read/write/delete ACLs. A base-table gap fails; a gap on a table
+  that extends another only warns (it inherits the parent's ACLs at
+  runtime); security-trimmed reads fail closed — the default suite grows from
+  fifteen to sixteen checks.
+- The six certification checks (`clientCallableAcl`, `restEndpointSecurity`,
+  `scriptFieldExposure`, `scheduledJobRunAs`, `mobileMenuHygiene`,
+  `tableCrudAcl`) are now exported from the package entry point, like the
+  other built-in checks.
 - CLI `-v` / `--version` flag.
 - Promotion-order gate: `drift <src> <dst>` now enforces the registry's
   `promotesTo` pipeline with a `promotion-order` result — the declared next
