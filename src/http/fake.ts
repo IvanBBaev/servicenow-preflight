@@ -163,6 +163,9 @@ const REFERENCE_FIELDS: Record<string, ReadonlySet<string>> = {
   sys_atf_test_result: new Set(["test", "test_suite_result"]),
   sys_atf_test_suite_result: new Set(["parent", "test_suite"]),
   sys_security_acl_role: new Set(["sys_user_role", "sys_security_acl"]),
+  // `type` / `operation` reference sys_security_type / sys_security_operation,
+  // whose out-of-box records carry readable sys_ids ("record", "read", …).
+  sys_security_acl: new Set(["type", "operation"]),
   sys_db_object: new Set(["super_class"]),
   sys_ui_action_role: new Set(["sys_ui_action", "sys_user_role"]),
 };
