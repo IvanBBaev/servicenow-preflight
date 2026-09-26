@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the twenty-one checks -------------------------------- */
+  /* ---- Content model: the twenty-two checks -------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -220,6 +220,15 @@
       warn: "Only field ACLs for the app's own fields on foreign tables, no scope, or global.",
       pass: "Every record ACL in scope targets the app's own tables, or it ships none.",
     },
+    {
+      code: "22",
+      name: "module-roles",
+      tag: "scope",
+      desc: "Navigator modules are gated by their own or their menu's roles. Advisory \u2014 never fails.",
+      fail: "Never \u2014 module visibility is a usability finding.",
+      warn: "A module shown to every user, an unreadable menu, no scope, or a trimmed read.",
+      pass: "Every active module in scope is gated, or the scope ships none.",
+    },
   ];
 
   var SCENARIOS = {
@@ -245,8 +254,10 @@
       "warn",
       "warn",
       "warn",
+      "warn",
     ],
     configured: [
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -291,6 +302,7 @@
       "fail",
       "warn",
       "fail",
+      "warn",
     ],
   };
 
