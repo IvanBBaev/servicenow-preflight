@@ -51,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   role-less ones marked `public` are listed separately as reachable without
   login. Advisory — the rule allows deliberate exceptions, so it never fails —
   the default suite grows from nineteen to twenty checks.
+- `module-roles` certification check (rule 5.5, raised in 6 of 19 releases):
+  every active navigator module in scope is gated by its own roles or, unless
+  it sets `override_menu_roles`, by its application menu's roles — the way
+  the platform decides visibility; separators are skipped. Advisory — it never
+  fails — the default suite grows from twenty-one to twenty-two checks.
 - `acl-out-of-scope` certification check (rule 1.6, raised in 7 of 19
   releases): no `record` ACL the scope ships targets a table outside the app
   (its own `sys_db_object` tables or the `<scope>_` namespace). A
@@ -58,11 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for the app's own namespaced field on an out-of-scope table only warns;
   a security-trimmed ACL read fails closed — the default suite grows from
   twenty to twenty-one checks.
-- The eleven certification checks (`clientCallableAcl`, `restEndpointSecurity`,
+- The twelve certification checks (`clientCallableAcl`, `restEndpointSecurity`,
   `scriptFieldExposure`, `scheduledJobRunAs`, `mobileMenuHygiene`,
   `tableCrudAcl`, `uiPageAcl`, `uiActionGating`, `tableNamespace`,
-  `portalRoles`, `aclOutOfScope`) are now exported from the package entry point,
-  like the other built-in checks.
+  `portalRoles`, `aclOutOfScope`, `moduleRoles`) are now exported from the
+  package entry point, like the other built-in checks.
 - CLI `-v` / `--version` flag.
 - Promotion-order gate: `drift <src> <dst>` now enforces the registry's
   `promotesTo` pipeline with a `promotion-order` result — the declared next
