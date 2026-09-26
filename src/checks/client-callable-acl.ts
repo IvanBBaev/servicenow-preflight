@@ -1,14 +1,11 @@
 import type { Check, CheckResult, CheckStatus } from "../types.js";
-import type { SnClient } from "../http/client.js";
+import { and, eq, isSafeIdentifier, resolveScope } from "../http/query.js";
 import {
-  and,
-  chunk,
-  eq,
-  inClause,
-  isSafeIdentifier,
-  resolveScope,
-} from "../http/query.js";
-import { errorResult, isTruthy, str, triageZeroRead } from "./cert-common.js";
+  errorResult,
+  fetchNamedAcls,
+  str,
+  triageZeroRead,
+} from "./cert-common.js";
 
 const NAME = "client-callable-acl";
 
@@ -26,49 +23,6 @@ interface ClientCallableSi {
    * Empty when neither survives validation — that SI cannot be verified.
    */
   candidates: string[];
-}
-
-/**
- * The execute ACLs matching the candidate names, fetched in batches. `names`
- * holds every active execute ACL's lowercased name; `inactiveNames` the ones
- * that exist but are switched off (an off gate is no gate); `trimmed` is true
- * when any batch was security-trimmed (`sys_security_acl` is admin-read
- * out-of-box, so a partially-readable ACL table must never clear the gate).
- */
-async function fetchExecuteAcls(
-  http: SnClient,
-  candidateNames: readonly string[],
-): Promise<{
-  names: Set<string>;
-  inactiveNames: Set<string>;
-  trimmed: boolean;
-}> {
-  const names = new Set<string>();
-  const inactiveNames = new Set<string>();
-  let trimmed = false;
-  for (const batch of chunk(candidateNames)) {
-    // No `sysparm_limit`: the client auto-paginates, so every matching ACL in
-    // the batch is seen (a cap could hide the one ACL that gates an SI).
-    const { rows, securityTrimmed } = await http
-      .table("sys_security_acl")
-      .queryWithMeta({
-        sysparm_query: and(
-          eq("type", "client_callable_script_include"),
-          inClause("name", batch),
-        ),
-        sysparm_fields: "sys_id,name,operation,active",
-      });
-    trimmed = trimmed || securityTrimmed;
-    for (const row of rows) {
-      const name = str(row, "name").toLowerCase();
-      if (name === "" || str(row, "operation").toLowerCase() !== "execute") {
-        continue;
-      }
-      if (isTruthy(row, "active")) names.add(name);
-      else inactiveNames.add(name);
-    }
-  }
-  return { names, inactiveNames, trimmed };
 }
 
 /**
@@ -155,7 +109,12 @@ export const clientCallableAcl: Check = {
 
       const unverifiable = sis.filter((si) => si.candidates.length === 0);
       const allCandidates = [...new Set(sis.flatMap((si) => si.candidates))];
-      const acls = await fetchExecuteAcls(ctx.http, allCandidates);
+      const acls = await fetchNamedAcls(
+        ctx.http,
+        "client_callable_script_include",
+        "execute",
+        allCandidates,
+      );
 
       const covered = (si: ClientCallableSi): boolean =>
         si.candidates.some((n) => acls.names.has(n.toLowerCase()));
