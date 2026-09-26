@@ -159,6 +159,7 @@ export {
   tableNamespace,
   portalRoles,
   aclOutOfScope,
+  moduleRoles,
   testDrift,
 } from "./checks/index.js";
 
