@@ -31,6 +31,12 @@ jobs:
           node-version: 22
           registry-url: "https://registry.npmjs.org"
           cache: npm
+          # Delegated decision 2026-09-28 (wave 13): the job runs `npm ci` in
+          # both the root and tessera/, so the cache key covers both lockfiles
+          # (a tessera-only lockfile change must not restore a stale cache).
+          cache-dependency-path: |
+            package-lock.json
+            tessera/package-lock.json
       # OPS-1: refuse to publish a tag whose commit is not reachable from `main`.
       # Tag pushes bypass branch protection, so a tag on an unreviewed/never-CI'd
       # commit must never reach npm. `fetch-depth: 0` above makes the graph complete.
@@ -41,7 +47,38 @@ jobs:
             echo "::error::Tag commit $GITHUB_SHA is not reachable from origin/main — refusing to publish."
             exit 1
           fi
-      - run: npm ci
+      # Delegated decision 2026-09-26 (W6b review): every `npm ci` in this job
+      # runs with --ignore-scripts, because the job holds `id-token: write` (and
+      # NODE_AUTH_TOKEN at publish). Neither lockfile has a package with install
+      # scripts today (no `hasInstallScript`), and neither workspace declares
+      # preinstall/install/postinstall/prepare — so the flag costs nothing and
+      # keeps a future compromised dependency from running code at install time.
+      # It does NOT isolate the dev toolchain (tsc/eslint/prettier/tests still
+      # run below, as they must for the gate); full isolation would need a
+      # separate unprivileged job handing an artifact over. `npm publish` itself
+      # keeps lifecycle scripts: prepublishOnly (the gate) and prepack (staging).
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      # ADR-001 Option B: `prepack` (scripts/stage-tessera.mjs) stages the
+      # Tessera runtime closure into build/tessera and refuses an unbuilt or
+      # absent workspace, so tessera/ must be installed and built before publish.
+      # Delegated decision 2026-09-26 (W6b review): fail-closed — no
+      # hashFiles('tessera/package.json') skip. The published package ships the
+      # `tess`/`tessera-mcp` bins, so a release without tessera/ must fail here.
+      # `npm run check` is the full Tessera gate (build + lint + format:check +
+      # test, under scripts/build-lock.mjs), and it leaves every
+      # packages/*/build in place for staging.
+      - name: Tessera workspace gate
+        working-directory: tessera
+        run: |
+          npm ci --ignore-scripts
+          npm run check
+      # Delegated decision 2026-09-26 (W6b review): the SDIST smoke gates the
+      # release too — pack the root package exactly as publish would, install
+      # it offline into a fresh prefix and run all three bins from that copy.
+      # It never publishes, and it restores build/tessera as it found it.
+      - name: SDIST smoke (packed tarball, offline install)
+        run: npm run smoke:sdist
       # Guard against publishing a version that doesn't match the tag.
       - name: Verify tag matches package.json version
         run: |

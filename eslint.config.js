@@ -6,7 +6,18 @@ import globals from "globals";
 export default tseslint.config(
   // site/ is a standalone static docs site (browser JS, its own concerns) —
   // not part of the library/CLI source, so keep it off this Node/TS gate.
-  { ignores: ["build/", "node_modules/", "coverage/", "site/"] },
+  // tessera/ is a self-contained workspace with its own eslint gate; docs/ai/
+  // is local-only (git-excluded) and holds ES5 probe scripts for ServiceNow.
+  {
+    ignores: [
+      "build/",
+      "node_modules/",
+      "coverage/",
+      "site/",
+      "tessera/",
+      "docs/ai/",
+    ],
+  },
   js.configs.recommended,
   // Type-checked rules need a TS program; scope them to src/ so plain-JS
   // config and test files stay on the syntax-only ruleset.

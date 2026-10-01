@@ -114,6 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RegistryNotFoundError`, "is not a regular file (named by --registry)" — for
   `run`, `sync` and `drift`. It previously surfaced as a raw `EISDIR` read
   error with exit 1; scripts that keyed on exit 1 for this case must expect 2.
+- Packing (`prepack` / `npm run stage:tessera`): the Tessera staging marker now
+  lives inside `build/tessera/` as a digest of the staged tree (kept out of the
+  tarball by a nested `.npmignore`), so wiping `node_modules` no longer makes
+  the next pack refuse its own output. A non-empty `build/tessera/` whose
+  content does not match its marker — foreign or edited files, or a tampered,
+  partial or older marker — is still refused; `npm run build` clears it.
 - README restructured quickstart-first; documentation site data refreshed.
 - The published package now ships source maps and an `exports`-map default plus
   a `./package.json` subpath.
