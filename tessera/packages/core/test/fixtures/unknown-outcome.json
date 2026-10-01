@@ -1,0 +1,118 @@
+{
+  "name": "unknown-outcome",
+  "input": {
+    "planned": [
+      {
+        "spec": {
+          "id": "spec-01",
+          "path": "specs/spec-01.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        }
+      }
+    ],
+    "results": [
+      {
+        "runId": "run-0001",
+        "outcomes": [
+          {
+            "spec": {
+              "id": "spec-01",
+              "path": "specs/spec-01.yaml"
+            },
+            "raw": "exploded",
+            "evidence": {
+              "kind": "atf-result",
+              "ref": "atfres_01"
+            }
+          }
+        ]
+      }
+    ],
+    "impact": {
+      "nodes": [
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        }
+      ],
+      "edges": [],
+      "unanalyzable": [],
+      "demanded": [
+        {
+          "spec": {
+            "id": "spec-01",
+            "path": "specs/spec-01.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_01",
+            "name": "ScriptInclude1"
+          }
+        }
+      ]
+    },
+    "coverage": {
+      "confirmedArtifacts": 1,
+      "impactedArtifacts": 1
+    },
+    "coverageFloor": 0.8,
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "overrides": [],
+    "now": "2026-07-31T12:00:00.000Z",
+    "tokenTtlMs": 3600000
+  },
+  "expected": {
+    "status": "INCONCLUSIVE",
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "rows": [
+      {
+        "spec": {
+          "id": "spec-01",
+          "path": "specs/spec-01.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        },
+        "raw": "exploded",
+        "status": "inconclusive",
+        "blocking": true,
+        "overridden": false,
+        "evidence": {
+          "kind": "atf-result",
+          "ref": "atfres_01"
+        }
+      }
+    ],
+    "counts": {
+      "pass": 0,
+      "fail": 0,
+      "inconclusive": 1,
+      "blocking": 1,
+      "missing": 0
+    },
+    "overrides": [],
+    "warnings": [
+      "unknown outcome \"exploded\" for spec-01 (specs/spec-01.yaml) resolved as error (fail-closed default)"
+    ]
+  }
+}

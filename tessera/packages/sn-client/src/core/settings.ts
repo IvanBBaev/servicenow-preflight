@@ -1,0 +1,221 @@
+// Vendored from github.com/IvanBBaev/servicenow-mcp @ 5acdcc7 (src/core/settings.ts).
+// MIT upstream; vendored by the sole author/copyright owner (ADR-002).
+
+/**
+ * Numeric runtime settings, all overridable through environment variables.
+ * Kept in one place so the HTTP client, auth provider and tool layer read the
+ * same values without duplicating parsing/validation logic.
+ */
+
+import path from "node:path";
+
+export const DEFAULT_TIMEOUT_MS = 30_000;
+export const DEFAULT_MAX_RETRIES = 2;
+export const DEFAULT_MAX_RECORDS = 10_000;
+export const DEFAULT_MAX_RESULT_CHARS = 100_000;
+
+/** ServiceNow caps a single Table API page at 1000 rows. */
+export const MAX_PAGE_SIZE = 1000;
+
+/** Read a positive integer env var, falling back to `fallback` when unset/invalid. */
+function positiveInt(envVar: string, fallback: number): number {
+  const raw = Number(process.env[envVar]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
+/**
+ * Per-request timeout in milliseconds (SN_TIMEOUT_MS). Like the retry and
+ * concurrency knobs below, it governs every REST client in this server —
+ * ServiceNow and (upstream only; not vendored) Jira alike; the SN_ prefix is
+ * historical.
+ */
+export function getTimeoutMs(): number {
+  return positiveInt("SN_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+}
+
+/** Retries for transient failures (SN_MAX_RETRIES, all REST clients). Zero is allowed. */
+export function getMaxRetries(): number {
+  const raw = Number(process.env.SN_MAX_RETRIES);
+  return Number.isFinite(raw) && raw >= 0
+    ? Math.floor(raw)
+    : DEFAULT_MAX_RETRIES;
+}
+
+/** Hard cap on records returned by a fetchAll query (SN_MAX_RECORDS). */
+export function getMaxRecords(): number {
+  return positiveInt("SN_MAX_RECORDS", DEFAULT_MAX_RECORDS);
+}
+
+/** Maximum characters in a serialised result before it is truncated (SN_MAX_RESULT_CHARS). */
+export function getMaxResultChars(): number {
+  return positiveInt("SN_MAX_RESULT_CHARS", DEFAULT_MAX_RESULT_CHARS);
+}
+
+/**
+ * Reference fields normally come back as `{ value, link }`; the link URLs are
+ * token ballast for an LLM, so they are excluded by default. Set
+ * SN_INCLUDE_REF_LINKS=true to opt back in.
+ */
+export function includeReferenceLinks(): boolean {
+  return process.env.SN_INCLUDE_REF_LINKS?.trim().toLowerCase() === "true";
+}
+
+/**
+ * Results are compact JSON by default (pretty-printing roughly doubles the
+ * tokens of a large payload). Set SN_RESULT_PRETTY=true for readable output.
+ */
+export function resultPretty(): boolean {
+  return process.env.SN_RESULT_PRETTY?.trim().toLowerCase() === "true";
+}
+
+export const DEFAULT_MAX_CONCURRENT = 4;
+
+/** Maximum parallel requests per host (SN_MAX_CONCURRENT, all REST clients). */
+export function getMaxConcurrent(): number {
+  return positiveInt("SN_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
+}
+
+export const DEFAULT_SCHEMA_CACHE_TTL_SEC = 300;
+
+/**
+ * TTL for the near-static schema reads cache (SN_SCHEMA_CACHE_TTL_SEC, in
+ * seconds; 0 disables caching). Invalid values fall back to the default.
+ */
+export function getSchemaCacheTtlMs(): number {
+  const raw = Number(process.env.SN_SCHEMA_CACHE_TTL_SEC);
+  const sec =
+    Number.isFinite(raw) && raw >= 0
+      ? Math.floor(raw)
+      : DEFAULT_SCHEMA_CACHE_TTL_SEC;
+  return sec * 1000;
+}
+
+/**
+ * Opt-in to the Code Search API (`sn_codesearch`) for servicenow_search_code
+ * (FT-7). When enabled and the plugin is active, search_code uses the indexed
+ * Code Search instead of the LIKE iteration; it falls back to LIKE on any
+ * failure. Off by default — the LIKE path is the proven behaviour.
+ */
+export function useCodeSearch(): boolean {
+  return process.env.SN_CODESEARCH?.trim().toLowerCase() === "true";
+}
+
+/** Default tool package profile when SN_TOOL_PACKAGES is unset. */
+export const DEFAULT_TOOL_PACKAGES = "core";
+
+/** Parse a comma/space separated, case-insensitive name list from an env var. */
+function parseNameList(raw: string | undefined): string[] {
+  const trimmed = raw?.trim();
+  if (!trimmed) return [];
+  return trimmed
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Tool packages/profiles requested via SN_TOOL_PACKAGES (comma or space
+ * separated, case-insensitive). Defaults to "core". The registry resolves
+ * these names — including the "core" and "all" profiles — into concrete
+ * packages and ignores unknown entries.
+ */
+export function getRequestedPackages(): string[] {
+  const names = parseNameList(process.env.SN_TOOL_PACKAGES);
+  return names.length > 0 ? names : [DEFAULT_TOOL_PACKAGES];
+}
+
+/**
+ * Packages excluded outright via SN_PACKAGES_DENY, regardless of what
+ * SN_TOOL_PACKAGES enables. Unlike SN_TABLES_DENY (which only guards Table
+ * API paths), this removes a whole tool group — including plugin APIs the
+ * table policy cannot see (catalog, change, knowledge…).
+ */
+export function getDeniedPackages(): string[] {
+  return parseNameList(process.env.SN_PACKAGES_DENY);
+}
+
+/**
+ * Packages whose write tools are not registered (SN_PACKAGES_READONLY): the
+ * read tools stay, everything without readOnlyHint disappears from the tool
+ * list. Complements the global SN_READONLY, per package.
+ */
+export function getReadOnlyPackages(): string[] {
+  return parseNameList(process.env.SN_PACKAGES_READONLY);
+}
+
+/**
+ * Absolute directory where the self-documentation tools read and write Markdown
+ * files (SN_DOCS_DIR). Defaults to `docs/instance` under the current working
+ * directory. Relative SN_DOCS_DIR values are resolved against the cwd.
+ */
+export function getDocsDir(): string {
+  const raw = process.env.SN_DOCS_DIR?.trim();
+  return raw ? path.resolve(raw) : path.resolve(process.cwd(), "docs/instance");
+}
+
+/**
+ * Plan-and-apply write mode (DF-2). In "plan" (the default) a write tool returns
+ * a structured before/after preview **without** mutating the instance; "apply"
+ * executes the change. A tool's own `apply: true` argument forces execution for
+ * that one call regardless of the mode. Safe-by-default: an unconfigured server
+ * never mutates on the first call.
+ */
+export function getWriteMode(): "plan" | "apply" {
+  return process.env.SN_WRITE_MODE?.trim().toLowerCase() === "apply"
+    ? "apply"
+    : "plan";
+}
+
+/**
+ * DF-5 — field names whose values are masked before any record is serialised for
+ * the model (`SN_REDACT_FIELDS`, comma/space-separated). Opt-in: empty = off.
+ */
+export function getRedactFields(): string[] {
+  return (process.env.SN_REDACT_FIELDS ?? "")
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * DF-5 — when `SN_REDACT_PII` is truthy, also mask values that look like an
+ * email, a phone number or a long national-ID digit run, anywhere in a record.
+ */
+export function redactPII(): boolean {
+  return /^(1|true|yes|on)$/i.test(process.env.SN_REDACT_PII?.trim() ?? "");
+}
+
+/**
+ * DF-6 — transport selection. Default `stdio` (one local client); `http` listens
+ * over Streamable HTTP so the official ServiceNow MCP *Client* app and remote
+ * clients can consume it. Securing the endpoint is the operator's job.
+ */
+export function getTransport(): "stdio" | "http" {
+  return process.env.SN_TRANSPORT?.trim().toLowerCase() === "http"
+    ? "http"
+    : "stdio";
+}
+
+/** DF-6 — TCP port for the HTTP transport (`SN_PORT`, default 3000). */
+export function getHttpPort(): number {
+  const n = Number(process.env.SN_PORT);
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : 3000;
+}
+
+/**
+ * Bind address for the HTTP transport (`SN_HTTP_HOST`). Defaults to loopback
+ * (`127.0.0.1`) so the endpoint is not exposed to the network unless the
+ * operator opts in (e.g. `0.0.0.0`).
+ */
+export function getHttpHost(): string {
+  return process.env.SN_HTTP_HOST?.trim() || "127.0.0.1";
+}
+
+/**
+ * Optional bearer token for the HTTP transport (`SN_HTTP_TOKEN`). When set, every
+ * HTTP request must carry `Authorization: Bearer <token>`; unset = no auth (only
+ * safe behind loopback or an external gateway).
+ */
+export function getHttpToken(): string | undefined {
+  return process.env.SN_HTTP_TOKEN?.trim() || undefined;
+}

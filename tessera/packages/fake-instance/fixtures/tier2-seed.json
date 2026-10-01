@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "name": "tier2-seed",
+  "description": "Hand-written placeholder seed for the Tier-2 job (QA-18). No live capture exists yet: the PDI was unreachable when this package was written, so these rows are plausible-but-invented. Replace the whole file with a real capture (same schema) and the fake picks it up unchanged.",
+  "tables": {
+    "sys_atf_test_suite": [
+      {
+        "sys_id": "0000000000000000000000000000aaa1",
+        "name": "tessera persistent suite",
+        "active": "true",
+        "description": "Persistent-mode suite; carries NO run-id tag, which is the sweep discriminator (DESIGN 4b)."
+      }
+    ],
+    "sys_atf_test": [
+      {
+        "sys_id": "0000000000000000000000000000bbb1",
+        "name": "tessera persistent test",
+        "active": "true",
+        "description": "Manifest-keyed persistent test; never swept."
+      }
+    ],
+    "sys_user": [
+      {
+        "sys_id": "0000000000000000000000000000ccc1",
+        "user_name": "tessera.runner",
+        "name": "Tessera Runner",
+        "active": "true"
+      }
+    ]
+  },
+  "exchanges": [
+    {
+      "method": "GET",
+      "path": "/api/now/table/sys_properties",
+      "query": "sysparm_query=name%3Dsn_atf.runner.enabled&sysparm_fields=sys_id,name,value",
+      "status": 200,
+      "body": {
+        "result": [
+          {
+            "sys_id": "0000000000000000000000000000ddd1",
+            "name": "sn_atf.runner.enabled",
+            "value": "true"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/now/table/sys_atf_test_suite_test",
+      "query": "sysparm_query=test_suite%3D0000000000000000000000000000aaa1",
+      "status": 200,
+      "body": {
+        "result": [
+          {
+            "sys_id": "0000000000000000000000000000eee1",
+            "test_suite": "0000000000000000000000000000aaa1",
+            "test": "0000000000000000000000000000bbb1",
+            "order": "100"
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/now/table/sys_atf_test",
+      "status": 201,
+      "body": {
+        "result": {
+          "sys_id": "0000000000000000000000000000fff1",
+          "name": "tessera-RUN123 ephemeral test"
+        }
+      }
+    }
+  ]
+}

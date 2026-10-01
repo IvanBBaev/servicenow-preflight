@@ -1,0 +1,3 @@
+# Transient; created and removed by scripts/build-lock.mjs on every
+# build/test/check. Never offer it to git.
+.tessera-build.lock

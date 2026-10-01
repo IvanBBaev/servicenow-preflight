@@ -1,0 +1,32 @@
+{
+  "name": "@tessera/benchmark",
+  "private": true,
+  "version": "0.0.0",
+  "description": "DESIGN \u00a713.1 OutcomeGate / \u00a713.4 substrate harness \u2014 Wilson-bound scoring of a hand-authored mutant catalog (delegated decision 2026-09-23)",
+  "type": "module",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": "./build/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-lock.mjs npm run build:compile",
+    "build:compile": "node -e \"require('fs').rmSync('build',{recursive:true,force:true})\" && tsc",
+    "test": "node ../../scripts/build-lock.mjs npm run test:run",
+    "//test:run": "`find` narrows the run to `test/**/*.test.js`: given no arguments `node --test` applies its own discovery, which also executes every other `.js` under `test/` \u2014 support and helper files \u2014 as a test file. That is also the cost: zero matches expands to nothing, `node --test` falls back to exactly that discovery and exits 0 either way, so a suite that vanished is a silent pass rather than a gate failure.",
+    "test:run": "node --test $(find test -name '*.test.js')"
+  },
+  "dependencies": {
+    "@tessera/core": "*",
+    "@tessera/doctor": "*",
+    "@tessera/sn-client": "*",
+    "@tessera/types": "*"
+  },
+  "devDependencies": {
+    "@tessera/fake-instance": "*",
+    "@tessera/generate": "*"
+  }
+}

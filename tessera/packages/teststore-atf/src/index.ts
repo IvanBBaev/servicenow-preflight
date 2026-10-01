@@ -1,0 +1,82 @@
+// @tessera/teststore-atf — PLAN Phase 4 write side: core's `TestStore` port
+// over the ServiceNow Table API, authoring through the W2 channel (ADR-007;
+// delegated decision 2026-09-23).
+
+export {
+  assertPortRequest,
+  assertTableApiPath,
+  crossCheckRowCount,
+  STATS_API_PREFIX,
+  createSnTestStoreClient,
+  TestStoreInfrastructureError,
+  TestStoreRefusalError,
+  toInfrastructureError,
+  type TestStoreFaultOptions,
+  type TestStoreHttpClient,
+  type TestStoreRefusalCode,
+  type TestStoreRequest,
+  type StatsCrossCheck,
+  type TestStoreResponse,
+} from "./client.js";
+export {
+  AUTHORING_CHANNEL_ROLE,
+  AUTHORING_CHANNEL_VERSION,
+  AUTHORING_CHANNEL_VERSION_PROPERTY,
+  checkAuthoringChannel,
+  compareChannelVersion,
+  parseChannelVersion,
+  type ChannelVersionVerdict,
+  type ParsedChannelVersion,
+} from "./channel.js";
+export {
+  deleteLegacyAtfRows,
+  discoverLegacyAtfRows,
+  LEGACY_ATF_REPORT_KIND,
+  LEGACY_EXPLICIT_RUN_ID_PATTERN,
+  LEGACY_MINTED_RUN_ID_PATTERN,
+  LegacyCleanupRefusalError,
+  OWNERSHIP_MARKER_STEM,
+  type DeleteLegacyAtfOptions,
+  type DiscoverLegacyAtfOptions,
+  type LegacyAtfCandidate,
+  type LegacyAtfConflict,
+  type LegacyAtfDeleteResult,
+  type LegacyAtfDeletion,
+  type LegacyAtfLink,
+  type LegacyAtfReadOptions,
+  type LegacyAtfReport,
+  type LegacyAtfScope,
+  type LegacyAtfSuiteResult,
+  type LegacyAtfTable,
+  type LegacyCleanupRefusalReason,
+  type LegacyLinkedSuiteClass,
+} from "./legacy.js";
+export { acquireProjectionLock, type ProjectionLock } from "./lock.js";
+export {
+  ATF_STORE_TABLES,
+  countRecordedSuiteTriggers,
+  createAtfTestStore,
+  DEFAULT_SUITE_TRIGGER_TABLE,
+  DEFAULT_MAX_QUERY_PAGES,
+  isAtfScriptPayload,
+  RUN_SERVER_SIDE_SCRIPT_STEP_CONFIG,
+  runOwnershipMarker,
+  STEP_INPUT_DOCUMENT,
+  TERMINAL_SUITE_RESULT_STATUSES,
+  TEST_SCRIPT_INPUT_VARIABLE,
+  type AtfScriptPayload,
+  type AtfTeardownContext,
+  type AtfTestStore,
+  type AtfTestStoreOptions,
+  type RecordedLedgerEntry,
+} from "./store.js";
+export {
+  AUTHORING_CHANNEL_ACL_OPERATIONS,
+  AUTHORING_CHANNEL_ALLOWED_TABLES,
+  AUTHORING_CHANNEL_FORBIDDEN_TABLES,
+  AUTHORING_CHANNEL_UPDATE_SET_FILE,
+  AUTHORING_CHANNEL_UPDATE_SET_URL,
+  validateAuthoringChannelUpdateSet,
+  type UpdateSetRecord,
+  type UpdateSetValidation,
+} from "./updateSet.js";

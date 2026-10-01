@@ -1,0 +1,188 @@
+{
+  "name": "allow-skipped-go",
+  "input": {
+    "planned": [
+      {
+        "spec": {
+          "id": "spec-01",
+          "path": "specs/spec-01.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-02",
+          "path": "specs/spec-02.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_02",
+          "name": "ScriptInclude2"
+        }
+      }
+    ],
+    "results": [
+      {
+        "runId": "run-0001",
+        "outcomes": [
+          {
+            "spec": {
+              "id": "spec-01",
+              "path": "specs/spec-01.yaml"
+            },
+            "raw": "pass",
+            "evidence": {
+              "kind": "atf-result",
+              "ref": "atfres_01"
+            }
+          },
+          {
+            "spec": {
+              "id": "spec-02",
+              "path": "specs/spec-02.yaml"
+            },
+            "raw": "skipped"
+          }
+        ]
+      }
+    ],
+    "impact": {
+      "nodes": [
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        },
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_02",
+          "name": "ScriptInclude2"
+        }
+      ],
+      "edges": [],
+      "unanalyzable": [],
+      "demanded": [
+        {
+          "spec": {
+            "id": "spec-01",
+            "path": "specs/spec-01.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_01",
+            "name": "ScriptInclude1"
+          }
+        },
+        {
+          "spec": {
+            "id": "spec-02",
+            "path": "specs/spec-02.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_02",
+            "name": "ScriptInclude2"
+          }
+        }
+      ]
+    },
+    "coverage": {
+      "confirmedArtifacts": 1,
+      "impactedArtifacts": 1
+    },
+    "coverageFloor": 0.8,
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "overrides": [
+      {
+        "flag": "allow-skipped",
+        "affectedRows": 99,
+        "actor": "cli:ivan"
+      }
+    ],
+    "now": "2026-07-31T12:00:00.000Z",
+    "tokenTtlMs": 3600000
+  },
+  "expected": {
+    "status": "GO",
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "rows": [
+      {
+        "spec": {
+          "id": "spec-01",
+          "path": "specs/spec-01.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        },
+        "raw": "pass",
+        "status": "pass",
+        "blocking": false,
+        "overridden": false,
+        "evidence": {
+          "kind": "atf-result",
+          "ref": "atfres_01"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-02",
+          "path": "specs/spec-02.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_02",
+          "name": "ScriptInclude2"
+        },
+        "raw": "skipped",
+        "status": "inconclusive",
+        "blocking": false,
+        "overridden": true
+      }
+    ],
+    "counts": {
+      "pass": 1,
+      "fail": 0,
+      "inconclusive": 1,
+      "blocking": 0,
+      "missing": 0
+    },
+    "overrides": [
+      {
+        "flag": "allow-skipped",
+        "affectedRows": 1,
+        "actor": "cli:ivan"
+      }
+    ],
+    "warnings": [],
+    "confirmToken": {
+      "runId": "run-0001",
+      "verdictHash": "2568171b090b927ee051dbacfc206471e95e66a597e55378f2f74b7a1280b073",
+      "overridden": true,
+      "issuedAt": "2026-07-31T12:00:00.000Z",
+      "expiresAt": "2026-07-31T13:00:00.000Z",
+      "sig": ""
+    }
+  }
+}

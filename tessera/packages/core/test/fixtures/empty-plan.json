@@ -1,0 +1,48 @@
+{
+  "name": "empty-plan",
+  "input": {
+    "planned": [],
+    "results": [],
+    "impact": {
+      "nodes": [],
+      "edges": [],
+      "unanalyzable": [],
+      "demanded": []
+    },
+    "coverage": {
+      "confirmedArtifacts": 1,
+      "impactedArtifacts": 1
+    },
+    "coverageFloor": 0.8,
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "overrides": [],
+    "now": "2026-07-31T12:00:00.000Z",
+    "tokenTtlMs": 3600000
+  },
+  "expected": {
+    "status": "INCONCLUSIVE",
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "rows": [],
+    "counts": {
+      "pass": 0,
+      "fail": 0,
+      "inconclusive": 0,
+      "blocking": 0,
+      "missing": 0
+    },
+    "overrides": [],
+    "warnings": [
+      "empty checklist: nothing was planned — not evidence of safety"
+    ]
+  }
+}
