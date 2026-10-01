@@ -332,6 +332,7 @@ test("--help lists both the sync and drift subcommands and exits 0", () => {
   assert.match(res.stdout, /servicenow-preflight drift <src> <dst>/);
   assert.match(res.stdout, /--with-last-run/);
   assert.match(res.stdout, /--registry/);
+  assert.match(res.stdout, /a given path must exist/);
   // The SN-1 empty-snapshot override flag is documented.
   assert.match(res.stdout, /--allow-empty/);
   // The manifest-age gate is documented, with its duration syntax.
@@ -412,6 +413,105 @@ test("--registry <path> points drift at a custom registry location", () => {
     assert.equal(report.results[0].status, "pass");
     const order = report.results.find((r) => r.name === "promotion-order");
     assert.equal(order.status, "pass", order.message);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- --registry: an explicit path must exist --------------------------------
+// Delegated decision 2026-09-28 (wave 13): a mistyped --registry used to read
+// as "no registry"; it is now a usage error (exit 2) for every subcommand.
+
+test("drift refuses (exit 2) an explicit --registry path that does not exist", () => {
+  const dir = tempProject();
+  try {
+    seedPipeline(dir);
+    for (const flag of [
+      ["--registry", "typo.json"],
+      ["--registry=typo.json"],
+      ["--registry="],
+    ]) {
+      const res = runCli(["drift", "dev", "staging", ...flag], { cwd: dir });
+      assert.equal(res.status, 2, `${flag.join(" ")}: ${res.stderr}`);
+      assert.match(
+        res.stderr,
+        /not found \(named by --registry\)|Registry path is empty/,
+      );
+      assert.equal(res.stdout, "");
+      assert.doesNotMatch(res.stderr, /at .*\.js:\d+/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift refuses a missing explicit --registry before it looks for manifests", () => {
+  // No manifests at all: without the ordering, this would exit 1 on the
+  // missing manifest and mask the mistyped registry path.
+  const dir = tempProject();
+  try {
+    const res = runCli(["drift", "dev", "prod", "--registry", "typo.json"], {
+      cwd: dir,
+    });
+    assert.equal(res.status, 2, res.stderr);
+    assert.match(res.stderr, /typo\.json not found/);
+    assert.doesNotMatch(res.stderr, /No manifest/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("drift without --registry and without a default registry still runs (no manifests → exit 1)", () => {
+  // The DEFAULT registry location may be absent: drift falls through to the
+  // manifest lookup, whose absence is a runtime error (exit 1), not usage.
+  const dir = tempProject();
+  try {
+    const res = runCli(["drift", "dev", "prod"], { cwd: dir });
+    assert.equal(res.status, 1, res.stderr);
+    assert.match(res.stderr, /No manifest for "dev"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("run and sync refuse (exit 2) an explicit --registry path that does not exist", () => {
+  const dir = tempProject();
+  try {
+    for (const args of [
+      ["run", "--registry", "nope.json"],
+      ["run", "--all", "--registry", "nope.json"],
+      ["sync", "dev", "--registry", "nope.json"],
+    ]) {
+      const res = runCli(args, { cwd: dir });
+      assert.equal(res.status, 2, `${args.join(" ")}: ${res.stderr}`);
+      assert.match(res.stderr, /nope\.json not found \(named by --registry\)/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("run, sync and drift refuse (exit 2) a --registry path that is a directory", () => {
+  // Behaviour change (wave 13, confirmed wave 15): a directory used to surface
+  // as a raw EISDIR read error (exit 1); it is now a usage error (exit 2).
+  const dir = tempProject();
+  try {
+    mkdirSync(join(dir, "regdir"));
+    for (const args of [
+      ["run", "--registry", "regdir"],
+      ["run", "--all", "--registry", "regdir"],
+      ["sync", "dev", "--registry", "regdir"],
+      ["drift", "dev", "prod", "--registry", "regdir"],
+    ]) {
+      const res = runCli(args, { cwd: dir });
+      assert.equal(res.status, 2, `${args.join(" ")}: ${res.stderr}`);
+      assert.match(
+        res.stderr,
+        /regdir is not a regular file \(named by --registry\)/,
+      );
+      assert.doesNotMatch(res.stderr, /EISDIR/);
+      assert.equal(res.stdout, "");
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -109,6 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The registry now validates `promotesTo` at load time: an undeclared target,
   a self-reference, a non-string value or a cycle is a usage error (exit 2)
   for every command, since `drift` now relies on those edges.
+- **Behaviour change:** an explicit `--registry <path>` that names a directory
+  (or anything else that is not a regular file) is now a usage error — exit 2,
+  `RegistryNotFoundError`, "is not a regular file (named by --registry)" — for
+  `run`, `sync` and `drift`. It previously surfaced as a raw `EISDIR` read
+  error with exit 1; scripts that keyed on exit 1 for this case must expect 2.
 - README restructured quickstart-first; documentation site data refreshed.
 - The published package now ships source maps and an `exports`-map default plus
   a `./package.json` subpath.
@@ -132,6 +137,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guarded, and an all-empty snapshot is refused unless `--allow-empty` is given.
 - CLI: an extra positional instance name (`run dev prod`, `run --env dev prod`,
   `sync a b`, `drift a b c`) is a usage error instead of a silent drop.
+- CLI: an explicit `--registry <path>` that does not exist (or is empty,
+  blank or not a file) is a usage error (exit 2, `RegistryNotFoundError`)
+  instead of silently reading as "no registry" for `run`, `sync` and `drift`;
+  only the default `.preflight/instances.json` may be absent. `drift` resolves
+  the registry before the manifests, so a mistyped path is not masked by a
+  missing-manifest exit 1.
 - Config: non-string `proxy` / `noProxy` values are rejected with a usage error
   instead of silently bypassing the configured proxy; an unreadable `.env`
   file is a usage error instead of a green run that verified nothing.
