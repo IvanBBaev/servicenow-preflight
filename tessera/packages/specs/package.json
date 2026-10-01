@@ -1,0 +1,25 @@
+{
+  "name": "@tessera/specs",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Tests-as-code repo store — the READ side of the TestStore: spec inventory + declared targets (PLAN Phase 4, DESIGN §4)",
+  "type": "module",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": "./build/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-lock.mjs npm run build:compile",
+    "build:compile": "node -e \"require('fs').rmSync('build',{recursive:true,force:true})\" && tsc",
+    "test": "node ../../scripts/build-lock.mjs npm run test:run",
+    "//test:run": "`find` narrows the run to `test/**/*.test.js`: given no arguments `node --test` applies its own discovery, which also executes every other `.js` under `test/` — support and helper files — as a test file. That is also the cost: zero matches expands to nothing, `node --test` falls back to exactly that discovery and exits 0 either way, so a suite that vanished is a silent pass rather than a gate failure.",
+    "test:run": "node --test $(find test -name '*.test.js')"
+  },
+  "dependencies": {
+    "@tessera/types": "*"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "@tessera/workspace",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Tessera development workspace — self-contained; not part of the shipped servicenow-preflight package",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "//": "build, test and check are wrapped in scripts/build-lock.mjs, and so is every packages/*/build and packages/*/test. The wrapped paths nest, so the wrapper is re-entrant: it proceeds without acquiring only when the lock file on disk still names the token it inherited AND that holder is alive. Read the RE-ENTRANCY section of scripts/build-lock.mjs before touching any of these; the *:all / *:compile / *:run scripts below are the UNLOCKED halves and are named that way on purpose. A held lock refuses at once (exit 75) by default; set TESSERA_BUILD_LOCK_WAIT=<0..1800> seconds to opt in to a bounded wait for it instead (see the opt-in bounded wait section of scripts/build-lock.mjs).",
+    "build": "node scripts/build-lock.mjs npm run build:all",
+    "build:all": "npm run build -w @tessera/types && npm run build -w @tessera/store && npm run build -w @tessera/sn-client && npm run build -w @tessera/guard && npm run build -w @tessera/ledger && npm run build -w @tessera/core && npm run build -w @tessera/fake-instance && npm run build -w @tessera/config && npm run build -w @tessera/doctor && npm run build -w @tessera/parity && npm run build -w @tessera/provisioner && npm run build -w @tessera/resolvers && npm run build -w @tessera/specs && npm run build -w @tessera/impact && npm run build -w @tessera/reporter && npm run build -w @tessera/runner-atf && npm run build -w @tessera/teststore-atf && npm run build -w @tessera/benchmark && npm run build -w @tessera/generate && npm run build -w @tessera/phase05 && npm run build -w @tessera/cli && npm run build -w @tessera/mcp",
+    "test": "node scripts/build-lock.mjs npm run test:all",
+    "//test:all": "`&&` here would let one failing workspace suite silently skip test:scripts entirely, so the gate would report a smaller total with no sign that a whole tier never ran. Both halves always run; the worst exit code wins, which keeps the build-lock 75 ahead of an ordinary 1.",
+    "test:all": "npm run test --workspaces --if-present; w=$?; npm run test:scripts; s=$?; exit $(( w > s ? w : s ))",
+    "test:scripts": "node --test scripts/build-lock.test.js",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "node scripts/build-lock.mjs npm run check:all",
+    "check:all": "npm run build && npm run lint && npm run format:check && npm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.0.0",
+    "eslint": "^10.7.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^15.15.0",
+    "prettier": "^3.8.4",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.61.0"
+  }
+}

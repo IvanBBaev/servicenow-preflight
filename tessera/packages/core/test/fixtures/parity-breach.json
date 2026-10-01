@@ -1,0 +1,179 @@
+{
+  "name": "parity-breach",
+  "input": {
+    "planned": [
+      {
+        "spec": {
+          "id": "spec-01",
+          "path": "specs/spec-01.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-02",
+          "path": "specs/spec-02.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_02",
+          "name": "ScriptInclude2"
+        }
+      }
+    ],
+    "results": [
+      {
+        "runId": "run-0001",
+        "outcomes": [
+          {
+            "spec": {
+              "id": "spec-01",
+              "path": "specs/spec-01.yaml"
+            },
+            "raw": "pass",
+            "evidence": {
+              "kind": "atf-result",
+              "ref": "atfres_01"
+            }
+          },
+          {
+            "spec": {
+              "id": "spec-02",
+              "path": "specs/spec-02.yaml"
+            },
+            "raw": "pass",
+            "evidence": {
+              "kind": "atf-result",
+              "ref": "atfres_02"
+            }
+          }
+        ]
+      }
+    ],
+    "impact": {
+      "nodes": [
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        },
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_03",
+          "name": "ScriptInclude3"
+        }
+      ],
+      "edges": [],
+      "unanalyzable": [],
+      "demanded": [
+        {
+          "spec": {
+            "id": "spec-01",
+            "path": "specs/spec-01.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_01",
+            "name": "ScriptInclude1"
+          }
+        },
+        {
+          "spec": {
+            "id": "spec-03",
+            "path": "specs/spec-03.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_03",
+            "name": "ScriptInclude3"
+          }
+        }
+      ]
+    },
+    "coverage": {
+      "confirmedArtifacts": 1,
+      "impactedArtifacts": 1
+    },
+    "coverageFloor": 0.8,
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "overrides": [],
+    "now": "2026-07-31T12:00:00.000Z",
+    "tokenTtlMs": 3600000
+  },
+  "expected": {
+    "status": "INCONCLUSIVE",
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "rows": [
+      {
+        "spec": {
+          "id": "spec-01",
+          "path": "specs/spec-01.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        },
+        "raw": "pass",
+        "status": "pass",
+        "blocking": false,
+        "overridden": false,
+        "evidence": {
+          "kind": "atf-result",
+          "ref": "atfres_01"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-02",
+          "path": "specs/spec-02.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_02",
+          "name": "ScriptInclude2"
+        },
+        "raw": "pass",
+        "status": "pass",
+        "blocking": false,
+        "overridden": false,
+        "evidence": {
+          "kind": "atf-result",
+          "ref": "atfres_02"
+        }
+      }
+    ],
+    "counts": {
+      "pass": 2,
+      "fail": 0,
+      "inconclusive": 0,
+      "blocking": 0,
+      "missing": 0
+    },
+    "overrides": [],
+    "warnings": [
+      "parity breach: planned spec not demanded by impact analysis: spec-02 (specs/spec-02.yaml)",
+      "parity breach: impact-demanded spec not planned: spec-03 (specs/spec-03.yaml)"
+    ]
+  }
+}

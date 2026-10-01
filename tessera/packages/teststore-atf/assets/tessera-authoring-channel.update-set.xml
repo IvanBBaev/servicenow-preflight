@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tessera W2 authoring channel, version 1.0.0 (ADR-007).
+
+  An admin imports this update set ONCE (Retrieved Update Sets -> Import Update
+  Set from XML -> Preview -> Commit). It ships one role, the three ACLs that
+  role unlocks on ATF step inputs (sys_variable_value rows whose document is
+  sys_atf_step), and the version property the Tessera TestStore checks before
+  its first write. It contains no code and grants the role to nobody: an admin
+  grants x_tessera.author to the Tessera integration user by hand, as a
+  separate runbook step.
+
+  Validated offline by @tessera/teststore-atf (test/updateSet.test.js).
+-->
+<unload unload_date="2026-09-23 00:00:00">
+<sys_remote_update_set action="INSERT_OR_UPDATE">
+<application display_value="Global">global</application>
+<application_name>Global</application_name>
+<application_scope>global</application_scope>
+<application_version/>
+<collisions/>
+<commit_date/>
+<deleted/>
+<description>Tessera W2 authoring channel 1.0.0: role x_tessera.author, create/write/delete ACLs on ATF step inputs (sys_variable_value, document=sys_atf_step), and the x_tessera.channel.version property. No code. Does not grant the role to anyone.</description>
+<inserted/>
+<name>Tessera authoring channel 1.0.0</name>
+<origin_sys_id/>
+<parent display_value=""/>
+<release_date/>
+<remote_base_update_set display_value=""/>
+<remote_parent_id/>
+<remote_sys_id>7e55e0a0c0de4a5ea0000000000000f0</remote_sys_id>
+<state>loaded</state>
+<summary/>
+<sys_class_name>sys_remote_update_set</sys_class_name>
+<sys_id>7e55e0a0c0de4a5ea000000000000001</sys_id>
+<update_set display_value=""/>
+<update_source display_value=""/>
+<updated/>
+</sys_remote_update_set>
+<sys_update_xml action="INSERT_OR_UPDATE">
+<action>INSERT_OR_UPDATE</action>
+<application display_value="Global">global</application>
+<category>customer</category>
+<comments/>
+<name>sys_user_role_7e55e0a0c0de4a5ea000000000000010</name>
+<payload><![CDATA[<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_user_role"><sys_user_role action="INSERT_OR_UPDATE"><assignable_by/><can_delegate>true</can_delegate><description>Tessera: may author ATF step inputs (sys_variable_value rows of sys_atf_step) through the Table API. Granted by an admin by hand; never by Tessera.</description><elevated_privilege>false</elevated_privilege><grantable>true</grantable><includes_roles/><name>x_tessera.author</name><requires_subscription>0</requires_subscription><scoped_admin>false</scoped_admin><suffix>author</suffix><sys_class_name>sys_user_role</sys_class_name><sys_id>7e55e0a0c0de4a5ea000000000000010</sys_id><sys_name>x_tessera.author</sys_name><sys_scope display_value="Global">global</sys_scope></sys_user_role></record_update>]]></payload>
+<remote_update_set display_value="Tessera authoring channel 1.0.0">7e55e0a0c0de4a5ea000000000000001</remote_update_set>
+<replace_on_upgrade>false</replace_on_upgrade>
+<sys_id>7e55e0a0c0de4a5ea000000000000050</sys_id>
+<table/>
+<target_name>x_tessera.author</target_name>
+<type>Role</type>
+</sys_update_xml>
+<sys_update_xml action="INSERT_OR_UPDATE">
+<action>INSERT_OR_UPDATE</action>
+<application display_value="Global">global</application>
+<category>customer</category>
+<comments/>
+<name>sys_security_acl_7e55e0a0c0de4a5ea000000000000020</name>
+<payload><![CDATA[<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_security_acl"><sys_security_acl action="INSERT_OR_UPDATE"><active>true</active><admin_overrides>true</admin_overrides><advanced>false</advanced><condition>document=sys_atf_step^EQ</condition><decision_type>allow</decision_type><description>Tessera W2: create ATF step inputs (document=sys_atf_step) with x_tessera.author.</description><local_or_existing>Existing</local_or_existing><name>sys_variable_value</name><operation display_value="create">create</operation><script/><sys_class_name>sys_security_acl</sys_class_name><sys_id>7e55e0a0c0de4a5ea000000000000020</sys_id><sys_name>sys_variable_value</sys_name><sys_scope display_value="Global">global</sys_scope><type display_value="record">record</type></sys_security_acl><sys_security_acl_role action="INSERT_OR_UPDATE"><sys_id>7e55e0a0c0de4a5ea000000000000030</sys_id><sys_security_acl>7e55e0a0c0de4a5ea000000000000020</sys_security_acl><sys_user_role display_value="x_tessera.author">7e55e0a0c0de4a5ea000000000000010</sys_user_role></sys_security_acl_role></record_update>]]></payload>
+<remote_update_set display_value="Tessera authoring channel 1.0.0">7e55e0a0c0de4a5ea000000000000001</remote_update_set>
+<replace_on_upgrade>false</replace_on_upgrade>
+<sys_id>7e55e0a0c0de4a5ea000000000000051</sys_id>
+<table>sys_variable_value</table>
+<target_name>sys_variable_value</target_name>
+<type>Access Controls</type>
+</sys_update_xml>
+<sys_update_xml action="INSERT_OR_UPDATE">
+<action>INSERT_OR_UPDATE</action>
+<application display_value="Global">global</application>
+<category>customer</category>
+<comments/>
+<name>sys_security_acl_7e55e0a0c0de4a5ea000000000000021</name>
+<payload><![CDATA[<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_security_acl"><sys_security_acl action="INSERT_OR_UPDATE"><active>true</active><admin_overrides>true</admin_overrides><advanced>false</advanced><condition>document=sys_atf_step^EQ</condition><decision_type>allow</decision_type><description>Tessera W2: write ATF step inputs (document=sys_atf_step) with x_tessera.author.</description><local_or_existing>Existing</local_or_existing><name>sys_variable_value</name><operation display_value="write">write</operation><script/><sys_class_name>sys_security_acl</sys_class_name><sys_id>7e55e0a0c0de4a5ea000000000000021</sys_id><sys_name>sys_variable_value</sys_name><sys_scope display_value="Global">global</sys_scope><type display_value="record">record</type></sys_security_acl><sys_security_acl_role action="INSERT_OR_UPDATE"><sys_id>7e55e0a0c0de4a5ea000000000000031</sys_id><sys_security_acl>7e55e0a0c0de4a5ea000000000000021</sys_security_acl><sys_user_role display_value="x_tessera.author">7e55e0a0c0de4a5ea000000000000010</sys_user_role></sys_security_acl_role></record_update>]]></payload>
+<remote_update_set display_value="Tessera authoring channel 1.0.0">7e55e0a0c0de4a5ea000000000000001</remote_update_set>
+<replace_on_upgrade>false</replace_on_upgrade>
+<sys_id>7e55e0a0c0de4a5ea000000000000052</sys_id>
+<table>sys_variable_value</table>
+<target_name>sys_variable_value</target_name>
+<type>Access Controls</type>
+</sys_update_xml>
+<sys_update_xml action="INSERT_OR_UPDATE">
+<action>INSERT_OR_UPDATE</action>
+<application display_value="Global">global</application>
+<category>customer</category>
+<comments/>
+<name>sys_security_acl_7e55e0a0c0de4a5ea000000000000022</name>
+<payload><![CDATA[<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_security_acl"><sys_security_acl action="INSERT_OR_UPDATE"><active>true</active><admin_overrides>true</admin_overrides><advanced>false</advanced><condition>document=sys_atf_step^EQ</condition><decision_type>allow</decision_type><description>Tessera W2: delete ATF step inputs (document=sys_atf_step) with x_tessera.author.</description><local_or_existing>Existing</local_or_existing><name>sys_variable_value</name><operation display_value="delete">delete</operation><script/><sys_class_name>sys_security_acl</sys_class_name><sys_id>7e55e0a0c0de4a5ea000000000000022</sys_id><sys_name>sys_variable_value</sys_name><sys_scope display_value="Global">global</sys_scope><type display_value="record">record</type></sys_security_acl><sys_security_acl_role action="INSERT_OR_UPDATE"><sys_id>7e55e0a0c0de4a5ea000000000000032</sys_id><sys_security_acl>7e55e0a0c0de4a5ea000000000000022</sys_security_acl><sys_user_role display_value="x_tessera.author">7e55e0a0c0de4a5ea000000000000010</sys_user_role></sys_security_acl_role></record_update>]]></payload>
+<remote_update_set display_value="Tessera authoring channel 1.0.0">7e55e0a0c0de4a5ea000000000000001</remote_update_set>
+<replace_on_upgrade>false</replace_on_upgrade>
+<sys_id>7e55e0a0c0de4a5ea000000000000053</sys_id>
+<table>sys_variable_value</table>
+<target_name>sys_variable_value</target_name>
+<type>Access Controls</type>
+</sys_update_xml>
+<sys_update_xml action="INSERT_OR_UPDATE">
+<action>INSERT_OR_UPDATE</action>
+<application display_value="Global">global</application>
+<category>customer</category>
+<comments/>
+<name>sys_properties_7e55e0a0c0de4a5ea000000000000040</name>
+<payload><![CDATA[<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_properties"><sys_properties action="INSERT_OR_UPDATE"><choices/><description>Version of the Tessera W2 authoring channel installed on this instance. Read by Tessera before projecting ATF tests: an absent row or a different major refuses the run, a different minor warns. Tessera never writes it.</description><ignore_cache>false</ignore_cache><is_private>false</is_private><name>x_tessera.channel.version</name><read_roles/><suffix>channel.version</suffix><sys_class_name>sys_properties</sys_class_name><sys_id>7e55e0a0c0de4a5ea000000000000040</sys_id><sys_name>x_tessera.channel.version</sys_name><sys_scope display_value="Global">global</sys_scope><type>string</type><value>1.0.0</value><write_roles>admin</write_roles></sys_properties></record_update>]]></payload>
+<remote_update_set display_value="Tessera authoring channel 1.0.0">7e55e0a0c0de4a5ea000000000000001</remote_update_set>
+<replace_on_upgrade>false</replace_on_upgrade>
+<sys_id>7e55e0a0c0de4a5ea000000000000054</sys_id>
+<table/>
+<target_name>x_tessera.channel.version</target_name>
+<type>System Property</type>
+</sys_update_xml>
+</unload>

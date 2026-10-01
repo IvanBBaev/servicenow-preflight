@@ -1,0 +1,35 @@
+{
+  "name": "@tessera/mcp",
+  "private": true,
+  "version": "0.0.0",
+  "description": "MCP server over the one composition root — four read-only preflight tools and one §11-guarded apply (Phase 9)",
+  "type": "module",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": "./build/index.js"
+  },
+  "bin": {
+    "tessera-mcp": "bin/tessera-mcp.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-lock.mjs npm run build:compile",
+    "build:compile": "node -e \"require('fs').rmSync('build',{recursive:true,force:true})\" && tsc",
+    "test": "node ../../scripts/build-lock.mjs npm run test:run",
+    "//test:run": "`find` narrows the run to `test/**/*.test.js`: given no arguments `node --test` applies its own discovery, which also executes every other `.js` under `test/` — support and helper files — as a test file. That is also the cost: zero matches expands to nothing, `node --test` falls back to exactly that discovery and exits 0 either way, so a suite that vanished is a silent pass rather than a gate failure.",
+    "test:run": "node --test $(find test -name '*.test.js')"
+  },
+  "dependencies": {
+    "@tessera/cli": "*",
+    "@tessera/ledger": "*"
+  },
+  "devDependencies": {
+    "@tessera/fake-instance": "*",
+    "@tessera/phase05": "*",
+    "@tessera/sn-client": "*",
+    "@tessera/teststore-atf": "*"
+  }
+}

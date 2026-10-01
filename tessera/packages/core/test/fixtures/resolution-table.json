@@ -1,0 +1,453 @@
+{
+  "name": "resolution-table",
+  "input": {
+    "planned": [
+      {
+        "spec": {
+          "id": "spec-01",
+          "path": "specs/spec-01.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-02",
+          "path": "specs/spec-02.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_02",
+          "name": "ScriptInclude2"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-03",
+          "path": "specs/spec-03.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_03",
+          "name": "ScriptInclude3"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-04",
+          "path": "specs/spec-04.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_04",
+          "name": "ScriptInclude4"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-05",
+          "path": "specs/spec-05.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_05",
+          "name": "ScriptInclude5"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-06",
+          "path": "specs/spec-06.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_06",
+          "name": "ScriptInclude6"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-07",
+          "path": "specs/spec-07.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_07",
+          "name": "ScriptInclude7"
+        }
+      }
+    ],
+    "results": [
+      {
+        "runId": "run-0001",
+        "outcomes": [
+          {
+            "spec": {
+              "id": "spec-01",
+              "path": "specs/spec-01.yaml"
+            },
+            "raw": "pass",
+            "evidence": {
+              "kind": "atf-result",
+              "ref": "atfres_01"
+            }
+          },
+          {
+            "spec": {
+              "id": "spec-02",
+              "path": "specs/spec-02.yaml"
+            },
+            "raw": "fail",
+            "evidence": {
+              "kind": "atf-result",
+              "ref": "atfres_02"
+            }
+          },
+          {
+            "spec": {
+              "id": "spec-03",
+              "path": "specs/spec-03.yaml"
+            },
+            "raw": "error",
+            "evidence": {
+              "kind": "log",
+              "ref": "logs/run-0001/spec-03.log"
+            }
+          },
+          {
+            "spec": {
+              "id": "spec-04",
+              "path": "specs/spec-04.yaml"
+            },
+            "raw": "skipped"
+          },
+          {
+            "spec": {
+              "id": "spec-05",
+              "path": "specs/spec-05.yaml"
+            },
+            "raw": "waiting-timeout",
+            "evidence": {
+              "kind": "log",
+              "ref": "logs/run-0001/spec-05.log"
+            }
+          },
+          {
+            "spec": {
+              "id": "spec-06",
+              "path": "specs/spec-06.yaml"
+            },
+            "raw": "flaky",
+            "evidence": {
+              "kind": "atf-result",
+              "ref": "atfres_06"
+            }
+          }
+        ]
+      }
+    ],
+    "impact": {
+      "nodes": [
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        },
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_02",
+          "name": "ScriptInclude2"
+        },
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_03",
+          "name": "ScriptInclude3"
+        },
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_04",
+          "name": "ScriptInclude4"
+        },
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_05",
+          "name": "ScriptInclude5"
+        },
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_06",
+          "name": "ScriptInclude6"
+        },
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_07",
+          "name": "ScriptInclude7"
+        }
+      ],
+      "edges": [],
+      "unanalyzable": [],
+      "demanded": [
+        {
+          "spec": {
+            "id": "spec-01",
+            "path": "specs/spec-01.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_01",
+            "name": "ScriptInclude1"
+          }
+        },
+        {
+          "spec": {
+            "id": "spec-02",
+            "path": "specs/spec-02.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_02",
+            "name": "ScriptInclude2"
+          }
+        },
+        {
+          "spec": {
+            "id": "spec-03",
+            "path": "specs/spec-03.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_03",
+            "name": "ScriptInclude3"
+          }
+        },
+        {
+          "spec": {
+            "id": "spec-04",
+            "path": "specs/spec-04.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_04",
+            "name": "ScriptInclude4"
+          }
+        },
+        {
+          "spec": {
+            "id": "spec-05",
+            "path": "specs/spec-05.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_05",
+            "name": "ScriptInclude5"
+          }
+        },
+        {
+          "spec": {
+            "id": "spec-06",
+            "path": "specs/spec-06.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_06",
+            "name": "ScriptInclude6"
+          }
+        },
+        {
+          "spec": {
+            "id": "spec-07",
+            "path": "specs/spec-07.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_07",
+            "name": "ScriptInclude7"
+          }
+        }
+      ]
+    },
+    "coverage": {
+      "confirmedArtifacts": 1,
+      "impactedArtifacts": 1
+    },
+    "coverageFloor": 0.8,
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "overrides": [],
+    "now": "2026-07-31T12:00:00.000Z",
+    "tokenTtlMs": 3600000
+  },
+  "expected": {
+    "status": "NO_GO",
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "rows": [
+      {
+        "spec": {
+          "id": "spec-01",
+          "path": "specs/spec-01.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        },
+        "raw": "pass",
+        "status": "pass",
+        "blocking": false,
+        "overridden": false,
+        "evidence": {
+          "kind": "atf-result",
+          "ref": "atfres_01"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-02",
+          "path": "specs/spec-02.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_02",
+          "name": "ScriptInclude2"
+        },
+        "raw": "fail",
+        "status": "fail",
+        "blocking": true,
+        "overridden": false,
+        "evidence": {
+          "kind": "atf-result",
+          "ref": "atfres_02"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-03",
+          "path": "specs/spec-03.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_03",
+          "name": "ScriptInclude3"
+        },
+        "raw": "error",
+        "status": "inconclusive",
+        "blocking": true,
+        "overridden": false,
+        "evidence": {
+          "kind": "log",
+          "ref": "logs/run-0001/spec-03.log"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-04",
+          "path": "specs/spec-04.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_04",
+          "name": "ScriptInclude4"
+        },
+        "raw": "skipped",
+        "status": "inconclusive",
+        "blocking": true,
+        "overridden": false
+      },
+      {
+        "spec": {
+          "id": "spec-05",
+          "path": "specs/spec-05.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_05",
+          "name": "ScriptInclude5"
+        },
+        "raw": "waiting-timeout",
+        "status": "inconclusive",
+        "blocking": true,
+        "overridden": false,
+        "evidence": {
+          "kind": "log",
+          "ref": "logs/run-0001/spec-05.log"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-06",
+          "path": "specs/spec-06.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_06",
+          "name": "ScriptInclude6"
+        },
+        "raw": "flaky",
+        "status": "inconclusive",
+        "blocking": true,
+        "overridden": false,
+        "evidence": {
+          "kind": "atf-result",
+          "ref": "atfres_06"
+        }
+      },
+      {
+        "spec": {
+          "id": "spec-07",
+          "path": "specs/spec-07.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_07",
+          "name": "ScriptInclude7"
+        },
+        "raw": "missing",
+        "status": "fail",
+        "blocking": true,
+        "overridden": false
+      }
+    ],
+    "counts": {
+      "pass": 1,
+      "fail": 2,
+      "inconclusive": 4,
+      "blocking": 6,
+      "missing": 1
+    },
+    "overrides": [],
+    "warnings": []
+  }
+}

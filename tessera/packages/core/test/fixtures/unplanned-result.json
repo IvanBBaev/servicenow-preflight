@@ -1,0 +1,135 @@
+{
+  "name": "unplanned-result",
+  "input": {
+    "planned": [
+      {
+        "spec": {
+          "id": "spec-01",
+          "path": "specs/spec-01.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        }
+      }
+    ],
+    "results": [
+      {
+        "runId": "run-0001",
+        "outcomes": [
+          {
+            "spec": {
+              "id": "spec-01",
+              "path": "specs/spec-01.yaml"
+            },
+            "raw": "pass",
+            "evidence": {
+              "kind": "atf-result",
+              "ref": "atfres_01"
+            }
+          },
+          {
+            "spec": {
+              "id": "spec-08",
+              "path": "specs/spec-08.yaml"
+            },
+            "raw": "fail",
+            "evidence": {
+              "kind": "atf-result",
+              "ref": "atfres_08"
+            }
+          }
+        ]
+      }
+    ],
+    "impact": {
+      "nodes": [
+        {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        }
+      ],
+      "edges": [],
+      "unanalyzable": [],
+      "demanded": [
+        {
+          "spec": {
+            "id": "spec-01",
+            "path": "specs/spec-01.yaml"
+          },
+          "kind": "unit",
+          "target": {
+            "table": "sys_script_include",
+            "sysId": "sysid_01",
+            "name": "ScriptInclude1"
+          }
+        }
+      ]
+    },
+    "coverage": {
+      "confirmedArtifacts": 1,
+      "impactedArtifacts": 1
+    },
+    "coverageFloor": 0.8,
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "overrides": [],
+    "now": "2026-07-31T12:00:00.000Z",
+    "tokenTtlMs": 3600000
+  },
+  "expected": {
+    "status": "GO",
+    "runId": "run-0001",
+    "topology": {
+      "source": "repo",
+      "runner": "dev000000",
+      "target": "dev000000"
+    },
+    "rows": [
+      {
+        "spec": {
+          "id": "spec-01",
+          "path": "specs/spec-01.yaml"
+        },
+        "kind": "unit",
+        "target": {
+          "table": "sys_script_include",
+          "sysId": "sysid_01",
+          "name": "ScriptInclude1"
+        },
+        "raw": "pass",
+        "status": "pass",
+        "blocking": false,
+        "overridden": false,
+        "evidence": {
+          "kind": "atf-result",
+          "ref": "atfres_01"
+        }
+      }
+    ],
+    "counts": {
+      "pass": 1,
+      "fail": 0,
+      "inconclusive": 0,
+      "blocking": 0,
+      "missing": 0
+    },
+    "overrides": [],
+    "warnings": ["unplanned result ignored: spec-08 (specs/spec-08.yaml)"],
+    "confirmToken": {
+      "runId": "run-0001",
+      "verdictHash": "97e149892c7775a5cb14cd54c2158c926b6e3245946955f5e9bb623d03afc792",
+      "overridden": false,
+      "issuedAt": "2026-07-31T12:00:00.000Z",
+      "expiresAt": "2026-07-31T13:00:00.000Z",
+      "sig": ""
+    }
+  }
+}
