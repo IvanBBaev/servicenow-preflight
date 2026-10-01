@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { UsageError } from "./config.js";
 import { isSafeIdentifier } from "./http/query.js";
@@ -336,20 +336,64 @@ function assertRegistry(value: unknown, path: string): InstanceRegistry {
 }
 
 /**
+ * An explicitly named registry file (`--registry <path>`) that is empty, blank,
+ * missing, or not a regular file. A {@link UsageError} (CLI exit 2); a distinct
+ * class so callers and tests can tell a mistyped path from a malformed file.
+ */
+export class RegistryNotFoundError extends UsageError {
+  constructor(message: string) {
+    super(message);
+    this.name = "RegistryNotFoundError";
+  }
+}
+
+/**
  * Load the registry from `.preflight/instances.json` (or an explicit path).
- * Returns `undefined` when the file is absent — the single-instance path stays
- * fully usable. Throws on a present-but-malformed file.
+ * Returns `undefined` when the DEFAULT file is absent — the single-instance
+ * path stays fully usable. Throws on a present-but-malformed file, and throws
+ * {@link RegistryNotFoundError} when an explicit path is empty, blank, missing
+ * or not a regular file.
  */
 export async function loadRegistry(
   cwd: string = process.cwd(),
   explicitPath?: string,
 ): Promise<InstanceRegistry | undefined> {
-  const path = explicitPath
-    ? isAbsolute(explicitPath)
+  // Delegated decision 2026-09-28 (wave 13): an explicit path is a claim that a
+  // registry exists there. Reading a missing one as "no registry" let a typo
+  // silently drop the promotion-order gate (and turn `run` into a
+  // single-instance run), so a missing or empty explicit path is refused —
+  // fail-closed, exit 2. Only the default location may be absent.
+  if (explicitPath !== undefined) {
+    if (explicitPath.trim() === "") {
+      throw new RegistryNotFoundError(
+        "Registry path is empty; pass --registry <path> or omit it.",
+      );
+    }
+    const path = isAbsolute(explicitPath)
       ? explicitPath
-      : resolve(cwd, explicitPath)
-    : registryPath(cwd);
+      : resolve(cwd, explicitPath);
+    if (!existsSync(path)) {
+      throw new RegistryNotFoundError(
+        `Registry ${path} not found (named by --registry); a given path must exist.`,
+      );
+    }
+    // Delegated decision 2026-09-30 (wave 15): a directory (or any non-file)
+    // is the same usage error (exit 2) — it used to surface as a raw EISDIR
+    // read failure (exit 1) — but named for what it is, not "not found".
+    if (!statSync(path).isFile()) {
+      throw new RegistryNotFoundError(
+        `Registry ${path} is not a regular file (named by --registry); pass the path of the registry JSON file.`,
+      );
+    }
+    return readRegistryFile(path);
+  }
+  const path = registryPath(cwd);
   if (!existsSync(path)) return undefined;
+  return readRegistryFile(path);
+}
+
+/** Read, parse and validate one registry file that is known to exist. */
+async function readRegistryFile(path: string): Promise<InstanceRegistry> {
   const text = await readFile(path, "utf8");
   let parsed: unknown;
   try {

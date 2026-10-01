@@ -148,7 +148,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `-i`, `--instance <url>`  | Target instance URL (single-instance, no registry).                            |
 | `-e`, `--env <name>`      | Select a registry instance (same as positional).                               |
 | `--all`                   | `run`: sweep every instance in the registry.                                   |
-| `--registry <path>`       | Registry file (default `.preflight/instances.json`).                           |
+| `--registry <path>`       | Registry file (default `.preflight/instances.json`); see below.                |
 | `--config <path>`         | Config file (default: auto-discovered).                                        |
 | `--only` / `--skip <csv>` | Run only / skip these checks (comma-separated names).                          |
 | `--with-last-run`         | `sync`: also pull each test's most recent result.                              |
@@ -276,7 +276,10 @@ credentials**. Each instance needs a `url`; `promotesTo` chains the pipeline (or
 `null` for the terminal stage) and is enforced by `drift`; the optional `scope`,
 `stage` and `envPrefix` refine per-instance behaviour. A `promotesTo` that names
 an undeclared instance, the instance itself, or closes a cycle is rejected when
-the registry loads (exit `2`).
+the registry loads (exit `2`). Only the default location may be absent: an
+explicit `--registry <path>` that does not exist, is empty, or is not a regular
+file (a directory, say) is a usage error (exit `2`) for `run`, `sync` and
+`drift` — a directory used to fail with a raw `EISDIR` read error (exit `1`).
 
 ```json
 {

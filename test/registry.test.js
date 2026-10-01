@@ -12,6 +12,7 @@ import {
   instanceNames,
   resolveInstance,
   promotionChain,
+  RegistryNotFoundError,
 } from "../build/registry.js";
 import { UsageError } from "../build/config.js";
 
@@ -184,6 +185,88 @@ test("loadRegistry resolves an explicit relative path against cwd", async () => 
     const reg = await loadRegistry(dir, "custom-registry.json");
     assert.ok(reg);
     assert.deepEqual(instanceNames(reg), ["dev"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Delegated decision 2026-09-28 (wave 13): an explicit registry path must exist.
+test("loadRegistry refuses a missing explicit path with RegistryNotFoundError (a UsageError)", async () => {
+  const dir = tempDir();
+  try {
+    await assert.rejects(loadRegistry(dir, "typo.json"), (err) => {
+      assert.ok(err instanceof RegistryNotFoundError);
+      assert.ok(err instanceof UsageError);
+      assert.equal(err.name, "RegistryNotFoundError");
+      assert.match(err.message, /typo\.json not found \(named by --registry\)/);
+      return true;
+    });
+    // An absolute missing path is refused the same way.
+    await assert.rejects(
+      loadRegistry(dir, join(dir, "nope", "instances.json")),
+      RegistryNotFoundError,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry refuses an empty or blank explicit path", async () => {
+  const dir = tempDir();
+  try {
+    // Even with a default registry present, "" must not fall back to it.
+    writeRegistry(dir, fullRegistry());
+    for (const bad of ["", "   "]) {
+      await assert.rejects(
+        loadRegistry(dir, bad),
+        (err) =>
+          err instanceof RegistryNotFoundError &&
+          /Registry path is empty/.test(err.message),
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry refuses an explicit path that is a directory", async () => {
+  const dir = tempDir();
+  try {
+    mkdirSync(join(dir, "regdir"));
+    await assert.rejects(loadRegistry(dir, "regdir"), (err) => {
+      assert.ok(err instanceof RegistryNotFoundError);
+      assert.match(
+        err.message,
+        /regdir is not a regular file \(named by --registry\)/,
+      );
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry still returns undefined when the DEFAULT path is absent", async () => {
+  const dir = tempDir();
+  try {
+    assert.equal(await loadRegistry(dir), undefined);
+    assert.equal(await loadRegistry(dir, undefined), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry still rejects a malformed explicit file as a plain UsageError", async () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(join(dir, "bad.json"), "{ nope");
+    await assert.rejects(
+      loadRegistry(dir, "bad.json"),
+      (err) =>
+        err instanceof UsageError &&
+        !(err instanceof RegistryNotFoundError) &&
+        /is not valid JSON/.test(err.message),
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

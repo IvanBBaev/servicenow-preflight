@@ -273,7 +273,8 @@ Multi-instance (registry at .preflight/instances.json):
   <env>                  A registry instance name (dev | staging | test | prod)
   -e, --env <name>       Select the instance (same as the positional)
       --all              run: every instance in the registry
-      --registry <path>  Registry file (default .preflight/instances.json)
+      --registry <path>  Registry file (default .preflight/instances.json);
+                         a given path must exist (else exit 2)
       --with-last-run    sync: also pull each test's most recent result
       --allow-empty      sync: commit an empty snapshot over a non-empty manifest
                          (refused by default as likely ACL security-trimming;
@@ -299,8 +300,8 @@ Exit codes:
   1  a check failed (including a selection that matched zero checks, and a
      drift/promote or manifest-age gate that blocked)
   2  a usage or configuration error (unknown option, missing flag value,
-     bad --format / --max-age, a required registry absent, an invalid config
-     or registry file)
+     bad --format / --max-age, a required registry absent, a --registry path
+     that does not exist, an invalid config or registry file)
 
 Authentication (via environment / .env — never the config file, never logged):
   Per instance, prefix any SNPF_* var with the instance name, e.g.
@@ -702,6 +703,10 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
       `drift needs two different instances; got "${src}" for both source and target.`,
     );
   }
+  // Delegated decision 2026-09-28 (wave 13): resolve the registry BEFORE the
+  // manifests, so a mistyped explicit --registry is a usage error (exit 2)
+  // rather than masked by a missing-manifest runtime error (exit 1).
+  const registry = await loadRegistry(cwd, args.registryPath);
   const source = await loadManifest(src, cwd);
   const target = await loadManifest(dst, cwd);
   if (!source) {
@@ -741,7 +746,6 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
   // skips a declared stage, runs upstream, or sits on no shared chain fails the
   // gate (a skip only warns under --allow-stage-skip); a missing registry or
   // pipeline yields an advisory warn, since the pipeline is opt-in.
-  const registry = await loadRegistry(cwd, args.registryPath);
   const order = promotionOrderResult(registry, src, dst, {
     allowStageSkip: args.allowStageSkip,
   });

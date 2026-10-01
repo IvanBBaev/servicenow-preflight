@@ -85,6 +85,7 @@ export {
   instanceNames,
   registryPath,
   promotionChain,
+  RegistryNotFoundError,
   PREFLIGHT_DIR,
   REGISTRY_BASENAME,
   type InstanceDef,
