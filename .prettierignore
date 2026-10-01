@@ -5,6 +5,9 @@ node_modules/
 # Standalone static docs site — kept out of the library's format gate
 site/
 
+# Self-contained Tessera workspace — has its own format gate
+tessera/
+
 # Local-only AI-harness files (git-excluded; not part of the shared gate)
 CLAUDE.md
 CLAUDE.local.md

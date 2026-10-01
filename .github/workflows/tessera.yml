@@ -1,0 +1,159 @@
+name: Tessera
+
+# The Tessera workspace gate (tessera/, ADR-005). Delegated decision 2026-09-23:
+# the two surviving CI items — a Node 20/22 matrix running the full workspace
+# gate (which includes the Tier-2 suites against @tessera/fake-instance, QA-18),
+# and a Tier-2 run against a real PDI that is manual-only and inert without
+# credentials. Plus the SDIST smoke (scripts/sdist-smoke.mjs): pack the root
+# package, install the tarball offline into a fresh prefix, and run
+# `servicenow-preflight`, `tess doctor` (against @tessera/fake-instance) and
+# `tessera-mcp` from the installed copy.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tessera/**"
+      - ".github/workflows/tessera.yml"
+      # The SDIST smoke's inputs outside tessera/: the staging + smoke scripts,
+      # the shipped launchers and the manifest that lists the bins and files.
+      - "scripts/**"
+      - "bin/**"
+      - "package.json"
+      # Delegated decision 2026-09-26 (W6b review): the smoke packs and runs the
+      # root CLI too (build/ from src/), so root sources, the root lockfile and
+      # the compiler config are inputs as well.
+      - "src/**"
+      - "package-lock.json"
+      - "tsconfig.json"
+  pull_request:
+    branches: [main]
+    paths:
+      - "tessera/**"
+      - ".github/workflows/tessera.yml"
+      # The SDIST smoke's inputs outside tessera/: the staging + smoke scripts,
+      # the shipped launchers and the manifest that lists the bins and files.
+      - "scripts/**"
+      - "bin/**"
+      - "package.json"
+      # Delegated decision 2026-09-26 (W6b review): the smoke packs and runs the
+      # root CLI too (build/ from src/), so root sources, the root lockfile and
+      # the compiler config are inputs as well.
+      - "src/**"
+      - "package-lock.json"
+      - "tsconfig.json"
+  workflow_dispatch:
+
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: tessera-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: tessera
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      # Both legs always report, so a Node-20-only failure is never masked.
+      fail-fast: false
+      matrix:
+        # The engines floor (20) and the dev/CI baseline (22).
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: tessera/package-lock.json
+      - run: npm ci
+      # build + lint + format:check + test, under scripts/build-lock.mjs.
+      - run: npm run check
+
+  sdist-smoke:
+    # "Does the tool install and pass EnvironmentDoctor on a clean machine?" —
+    # the offline half: a fresh runner, a fresh npm prefix, an empty cache and
+    # HOME, `--offline`, and no instance but the fake. Never publishes.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            tessera/package-lock.json
+      # The smoke builds nothing itself (same convention as stage-tessera.mjs):
+      # the root build/ and every tessera/packages/*/build must exist first.
+      - run: npm ci
+      - run: npm run build
+      - run: npm ci
+        working-directory: tessera
+      - run: npm run build
+        working-directory: tessera
+      - run: npm run smoke:sdist
+
+  tier2-pdi:
+    # Manual only: a real instance is never touched by a push or a PR.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Delegated decision 2026-09-26 (W6b review): the PDI secrets are no longer
+    # job-level env (visible to checkout, setup-node, `npm ci` and every
+    # dependency's code). Only two steps see them: the gate below, which just
+    # tests that they are set, and the doctor step that needs them. The other
+    # steps key off the gate's output (step env is not visible to a step's own
+    # `if`, and `secrets` is not allowed there at all).
+    env:
+      # Belt and braces: the doctor never writes, and the transport refuses to.
+      SN_READONLY: "1"
+    steps:
+      - name: Check for PDI credentials
+        id: pdi
+        # Runs before any checkout, so tessera/ does not exist yet.
+        working-directory: .
+        env:
+          # The "default" profile triple (packages/cli/src/topology.ts). All
+          # three empty when the secrets are not configured: the job is inert.
+          SN_INSTANCE: ${{ secrets.TESSERA_PDI_INSTANCE }}
+          SN_USER: ${{ secrets.TESSERA_PDI_USER }}
+          SN_PASSWORD: ${{ secrets.TESSERA_PDI_PASSWORD }}
+        run: |
+          if [ -n "$SN_INSTANCE" ] && [ -n "$SN_USER" ] && [ -n "$SN_PASSWORD" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TESSERA_PDI_* secrets are not configured; Tier-2 against a PDI skipped."
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: steps.pdi.outputs.configured == 'true'
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        if: steps.pdi.outputs.configured == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tessera/package-lock.json
+      - if: steps.pdi.outputs.configured == 'true'
+        run: npm ci
+      - if: steps.pdi.outputs.configured == 'true'
+        run: npm run build
+      # Read-only readiness diagnosis of the PDI (EnvironmentDoctor, ARCH-8).
+      - name: tess doctor against the PDI
+        if: steps.pdi.outputs.configured == 'true'
+        env:
+          SN_INSTANCE: ${{ secrets.TESSERA_PDI_INSTANCE }}
+          SN_USER: ${{ secrets.TESSERA_PDI_USER }}
+          SN_PASSWORD: ${{ secrets.TESSERA_PDI_PASSWORD }}
+        run: node packages/cli/bin/tess.mjs doctor --instance default --json

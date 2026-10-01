@@ -22,3 +22,11 @@ Thumbs.db
 
 # Coverage output (c8)
 coverage/
+
+# Tessera build lock (tessera/scripts/build-lock.mjs): the lock file and the
+# temp files it writes before an atomic rename. The temp name is
+# `.<lock basename>.<pid>.<uuid>.tmp`, i.e. `..tessera-build.lock.….tmp`, hence
+# the leading `*`. Normally under tessera/ (whose own .gitignore covers the lock
+# file), but TESSERA_BUILD_LOCK can place it anywhere in the repo.
+.tessera-build.lock
+*.tessera-build.lock.*.tmp
