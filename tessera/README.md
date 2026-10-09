@@ -65,7 +65,7 @@ stage in this workspace, so a root-level description of `check` as
 
 ## Behaviour notes
 
-User-visible behaviour that changed in the wave 15 and wave 16 hardening
+User-visible behaviour that changed in the wave 15 to wave 18 hardening
 passes. Each note names where the rule lives, so check the code before you rely
 on a note.
 
@@ -78,11 +78,18 @@ complete is confirmed with one Aggregate (Stats) API count of the same filter
 - `@tessera/runner-atf` (suite-result tree and result reads) and
   `@tessera/teststore-atf` (store and legacy-sweep reads) always do this.
   There is no opt-out.
+- `@tessera/resolvers` (the scope read) and `@tessera/impact` (where-used,
+  table-logic, UI Action and standalone-script lookups) always do this too, so
+  an impact lookup on such an instance can cost a few extra Stats `GET`s.
+  A read the count flags is refused like any other truncated lookup.
 - `@tessera/sn-client` does it only when the caller passes
   `queryTable({ fetchAll: true, crossCheckCount: true })`, and only when no
   other truncation reason has already flagged the read. A count that disagrees
   marks the result `truncated` with `truncationReason: "count-mismatch"`. A
   count it cannot get marks it `"count-unavailable"`.
+- The count uses the caller's filter only. Every `ORDERBY` / `ORDERBYDESC`
+  term is dropped, including one the caller sent, because ordering cannot
+  change a count (`tableApi.stripOrderBy`).
 - Any disagreement counts as a mismatch, including a count lower than the rows
   read. An instance without the Stats API (`404`, `403`), a failed request or
   an unreadable count never counts as a complete read. In the ATF adapters it
@@ -120,6 +127,23 @@ opt-in. A lookup read that is refused, truncated or ACL-trimmed makes the
 subject unanalyzable (INCONCLUSIVE, exit `5`). It is recorded in
 `artifactTablesRefused` with `read: "lookup"` and printed as "impact lookup is
 incomplete — …". A transport fault exits `3`.
+
+A transform script is also traced to the table its import writes. Impact reads
+the script's transform map (`sys_transform_map`) for its `target_table`, then
+the Business Rules (`sys_script`) on that table, and adds a `table_logic` edge
+from the script to each rule with `medium` confidence (the same edge a UI
+Action gets to the rules on its table). This means:
+
+- A transform-script subject needs readable `sys_transform_map` and
+  `sys_script`. An unreadable `map` reference, a map the scope read did not
+  return, a `global` or non-table `target_table`, or a refused or truncated
+  map or rule read makes the script unanalyzable.
+- A custom `StandaloneScriptLookup` must return `rules`, and `targetTable` for
+  each transform row, or the subject is refused.
+- `tess run --live` classifies reads of `LIVE_LOOKUP_TABLES` (the enumerated
+  artifact tables plus the lookup-only `sys_transform_map`). A refused map
+  read is recorded in `artifactTablesRefused` with `read: "lookup"` like the
+  other lookup reads; before wave 17 it went unclassified.
 
 ### Completeness fields in `tess status --json` / `tess confirm --json`
 
