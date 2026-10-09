@@ -98,6 +98,32 @@ const readAll = (extra = {}) =>
     ...extra,
   });
 
+describe("stripOrderBy (wave 18)", () => {
+  const cases = [
+    [undefined, undefined],
+    ["", undefined],
+    ["active=true", "active=true"],
+    ["active=true^ORDERBYname", "active=true"],
+    ["ORDERBYname^active=true", "active=true"],
+    ["ORDERBYDESCsys_updated_on", undefined],
+    ["a=1^ORDERBYname^b=2^ORDERBYDESCc", "a=1^b=2"],
+    ["a=1^ORb=2^NQc=3^ORDERBYd", "a=1^ORb=2^NQc=3"],
+    // Separators left dangling at the ends by a dropped term are trimmed.
+    ["^ORDERBYname^a=1", "a=1"],
+    ["a=1^ORDERBYname^", "a=1"],
+    // A lowercase field starting "orderby" is a filter, not an ordering.
+    ["orderby_hint=x", "orderby_hint=x"],
+    // A bare "ORDERBY" names no field and is not an ordering term.
+    ["a=1^ORDERBY", "a=1^ORDERBY"],
+    ["name=ORDERBYx", "name=ORDERBYx"],
+  ];
+  for (const [input, expected] of cases) {
+    it(`${JSON.stringify(input)} → ${JSON.stringify(expected)}`, () => {
+      assert.equal(tableApi.stripOrderBy(input), expected);
+    });
+  }
+});
+
 describe("countRows / fetchAll crossCheckCount (wave 16)", () => {
   beforeEach(() => {
     originalFetch = globalThis.fetch;
@@ -250,6 +276,27 @@ describe("countRows / fetchAll crossCheckCount (wave 16)", () => {
       assert.equal(unfiltered.truncated, undefined);
       const last = statsCalls(calls).at(-1);
       assert.equal(last.searchParams.has("sysparm_query"), false);
+    });
+
+    it("a caller's ORDERBY/ORDERBYDESC is stripped from the count (wave 18)", async () => {
+      const { calls } = fakeInstance();
+      const res = await readAll({ query: "active=true^ORDERBYDESCname" });
+      assert.equal(res.records.length, 4);
+      assert.equal(res.truncated, undefined);
+      // Paging still sends the caller's ordering as given.
+      const table = calls.filter((url) => !isStats(url));
+      assert.equal(
+        table[0].searchParams.get("sysparm_query"),
+        "active=true^ORDERBYDESCname",
+      );
+      const [stats] = statsCalls(calls);
+      assert.equal(stats.searchParams.get("sysparm_query"), "active=true");
+      const onlyOrder = await readAll({ query: "ORDERBYname" });
+      assert.equal(onlyOrder.count, 6);
+      assert.equal(
+        statsCalls(calls).at(-1).searchParams.has("sysparm_query"),
+        false,
+      );
     });
 
     it("detects a MIDDLE window trimmed to zero rows: `count-mismatch`", async () => {

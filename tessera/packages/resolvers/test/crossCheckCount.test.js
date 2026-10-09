@@ -159,15 +159,13 @@ describe("a trimmed last window is detected by the count", () => {
       );
       assert.match(warnings(report), /partial list of scope `x_snc_demo`/);
       assert.equal(isIncomplete(report), true);
-      // One count for the table that was enumerated, with the caller's filter.
+      // One count for the table that was enumerated, with the caller's
+      // filter minus its ORDERBY (sn-client strips ordering, wave 18).
       const stats = h
         .statsCalls()
         .filter((r) => r.path.endsWith("/sys_script_include"));
       assert.equal(stats.length, 1);
-      assert.equal(
-        stats[0].params.sysparm_query,
-        `sys_scope=${SCOPE_SYS_ID}^ORDERBYname`,
-      );
+      assert.equal(stats[0].params.sysparm_query, `sys_scope=${SCOPE_SYS_ID}`);
       // ARCH-8 holds: the count is a GET like everything else.
       assert.deepEqual(
         [...new Set(h.fake.requests().map((r) => r.method))],

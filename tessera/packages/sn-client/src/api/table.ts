@@ -187,6 +187,26 @@ async function queryPage(
 }
 
 /**
+ * Drop every `ORDERBY<field>` / `ORDERBYDESC<field>` term from an encoded
+ * query, keeping the filter terms in order. Splitting on `^` mirrors how the
+ * instance itself tokenises an encoded query, so a term this drops is one the
+ * server would also have read as an ordering. Returns `undefined` when
+ * nothing but ordering was sent (a count over the whole table).
+ */
+export function stripOrderBy(query: string | undefined): string | undefined {
+  if (!query) return undefined;
+  const kept = query
+    .split("^")
+    .filter((term) => !/^ORDERBY(DESC)?\S/.test(term));
+  // Empty terms left by a leading/trailing/double `^` around a dropped
+  // ordering term carry no filter; drop them only at the ends so an
+  // unusual-but-sent middle term is never silently rewritten.
+  while (kept.length > 0 && kept[0] === "") kept.shift();
+  while (kept.length > 0 && kept[kept.length - 1] === "") kept.pop();
+  return kept.length > 0 ? kept.join("^") : undefined;
+}
+
+/**
  * Read records from a table. By default returns a single page of up to `limit`
  * records (default 10). When `fetchAll` is set, pages through every matching
  * record in batches, up to the SN_MAX_RECORDS safety cap. `total` reflects the
@@ -202,8 +222,11 @@ export async function queryTable(opts: QueryOptions): Promise<QueryResult> {
   // caller's own filter, without the ORDERBYsys_id appended below for
   // stable paging — ordering is meaningless to a count, and the Stats API
   // (GlideAggregate) is not promised to accept an ORDERBY on a field it
-  // does not group by. A caller-supplied ORDERBY is passed through as sent.
-  const countQuery = opts.query;
+  // does not group by. Delegated decision 2026-10-09 (wave 18): a
+  // caller-supplied ORDERBY/ORDERBYDESC term is stripped too, for the same
+  // reason — it cannot change a count, and passing it through risked a live
+  // rejection surfacing as a noisy `count-unavailable`.
+  const countQuery = stripOrderBy(opts.query);
 
   // Offset paging without ORDERBY is unstable: ServiceNow gives no ordering
   // guarantee, so concurrent writes can skip/duplicate rows across pages.
