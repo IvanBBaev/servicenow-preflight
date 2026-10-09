@@ -56,6 +56,12 @@ const TOTALS_ID = hex("bbb2");
 const RULE_ID = hex("ccc3");
 const ACTION_ID = hex("ddd4");
 const DYNAMIC_ID = hex("eee5");
+/** A transform script, its map, and a Business Rule on the map's target table. */
+const TRANSFORM_ID = hex("fff6");
+const MAP_ID = hex("f1a7");
+const TARGET_RULE_ID = hex("f2b8");
+const OTHER_RULE_ID = hex("f3c9");
+const TARGET_TABLE = "u_order";
 
 /**
  * A string that exists only inside a script body. TM-1 says a body is
@@ -141,6 +147,7 @@ function seed({
   dynamic = false,
   dynamicScript = DYNAMIC_SCRIPT,
   reverse = false,
+  transform = false,
 } = {}) {
   const include = (sysId, name, script) => ({
     sys_id: sysId,
@@ -213,6 +220,54 @@ function seed({
         ]
       : [],
   };
+
+  if (transform) {
+    // Wave 17: an import writes the map's TARGET table, so the transform
+    // script reaches that table's rules — and only that table's.
+    const rule = (sysId, name, collection) => ({
+      sys_id: sysId,
+      name,
+      sys_name: name,
+      sys_scope: SCOPE_ID,
+      collection,
+      script: "",
+    });
+    state.sys_update_xml.push({
+      sys_id: hex("e002"),
+      name: `sys_transform_script_${TRANSFORM_ID}`,
+      type: "Transform Script",
+      target_name: "Import orders onBefore",
+      action: "INSERT_OR_UPDATE",
+      update_set: UPDATE_SET_ID,
+    });
+    state.sys_transform_script = [
+      {
+        sys_id: TRANSFORM_ID,
+        name: "Import orders onBefore",
+        sys_name: "Import orders onBefore",
+        sys_scope: SCOPE_ID,
+        map: MAP_ID,
+        script: "target.total = new AmountCalculator().total(source.items);",
+      },
+    ];
+    state.sys_transform_map = [
+      {
+        sys_id: MAP_ID,
+        name: "Import orders",
+        sys_name: "Import orders",
+        sys_scope: SCOPE_ID,
+        target_table: TARGET_TABLE,
+      },
+    ];
+    // A rule with no readable trigger table may run on ANY target table, so
+    // the lookup refuses the whole hop (fail closed) — give the baseline rule
+    // the table every real Business Rule has.
+    state.sys_script[0].collection = "x_tessera_demo_invoice";
+    state.sys_script.push(
+      rule(TARGET_RULE_ID, "Validate order", TARGET_TABLE),
+      rule(OTHER_RULE_ID, "Validate incident", "incident"),
+    );
+  }
 
   if (!reverse) return state;
   // The same instance, described backwards. Every ordering in the report is
@@ -1080,4 +1135,65 @@ describe("tess impact — never exits 1", () => {
       assert.ok(CONTRACT.has(code), `unexpected exit code ${code} for ${what}`);
     });
   }
+});
+
+// ── transform scripts (wave 17) ─────────────────────────────────────────────
+
+describe("tess impact — a transform script reaches its target table's rules", () => {
+  // The composition-level test (`impactComposition.test.js`) proves the hop
+  // over a canned reader; this one proves it end to end — argv, the real
+  // transport, the fake instance — and on the JSON graph a consumer reads.
+  it("emits a medium-confidence table_logic edge to the rules on the map's target table only", async () => {
+    const { code, h } = await run(
+      ["impact", "--json", ...SOURCE, ...SCOPE, "--story", STORY_NUMBER],
+      { state: { transform: true } },
+    );
+
+    assert.equal(code, EXIT_CODES.ok, h.stderr());
+    const doc = h.json();
+    assert.equal(doc.incomplete, false, JSON.stringify(doc.notes));
+    assert.deepEqual(doc.unanalyzable, []);
+    const ref = (node) => `${node.table}/${node.sysId}`;
+    // Every edge out of the transform script: the rule on `u_order` and
+    // nothing else — the `incident` rule and the baseline rule on another
+    // table are in scope too, and must not be reached.
+    assert.deepEqual(
+      doc.edges
+        .filter((edge) => edge.from.sysId === TRANSFORM_ID)
+        .map((edge) => [
+          ref(edge.from),
+          ref(edge.to),
+          edge.via,
+          edge.confidence,
+        ]),
+      [
+        [
+          `sys_transform_script/${TRANSFORM_ID}`,
+          `sys_script/${TARGET_RULE_ID}`,
+          "table_logic",
+          "medium",
+        ],
+      ],
+      JSON.stringify(doc.edges),
+    );
+    assert.ok(
+      h.fake
+        .requests()
+        .some((entry) => entry.path === "/api/now/table/sys_transform_map"),
+    );
+    assert.deepEqual(methods(h.fake), ["GET"]);
+  });
+
+  it("is a fault (exit 3), not INCONCLUSIVE, when the map read breaks", async () => {
+    const { code } = await run(
+      ["impact", "--json", ...SOURCE, ...SCOPE, "--story", STORY_NUMBER],
+      {
+        state: { transform: true },
+        faults: [
+          faultOn("sys_transform_map", { kind: "http-error", status: 500 }),
+        ],
+      },
+    );
+    assert.equal(code, EXIT_CODES.fault);
+  });
 });
