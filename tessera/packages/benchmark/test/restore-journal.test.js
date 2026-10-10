@@ -23,6 +23,7 @@ import {
   createInstanceBenchmarkSubstrate,
   createMemoryRestoreJournal,
   findRestoreJournals,
+  journalWriterLiveness,
   loadCatalog,
   readRestoreJournal,
   restoreFromJournal,
@@ -243,6 +244,63 @@ describe("restore journal — durable file", () => {
     const root = path.join(await tmpRoot(), "absent");
     assert.deepEqual(await findRestoreJournals(root), []);
     await assert.rejects(() => fs.stat(root));
+  });
+
+  it("findRestoreJournals is empty when the ledger root is a file", async () => {
+    const root = path.join(await tmpRoot(), "ledger");
+    await fs.writeFile(root, "");
+    assert.deepEqual(await findRestoreJournals(root), []);
+  });
+});
+
+describe("restore journal — writer liveness fails closed", () => {
+  const doc = { pid: 4242, hostname: "here" };
+  const errno = (code) => Object.assign(new Error(code), { code });
+
+  it("a journal from another host cannot be checked", () => {
+    let probed = false;
+    const kill = () => {
+      probed = true;
+    };
+    assert.equal(
+      journalWriterLiveness(doc, { hostname: "elsewhere", kill }),
+      "foreign-host",
+    );
+    assert.equal(probed, false);
+  });
+
+  it("signal 0 succeeding means alive; ESRCH means dead", () => {
+    const seen = [];
+    const alive = (pid, signal) => seen.push([pid, signal]);
+    assert.equal(
+      journalWriterLiveness(doc, { hostname: "here", kill: alive }),
+      "alive",
+    );
+    assert.deepEqual(seen, [[4242, 0]]);
+    const gone = () => {
+      throw errno("ESRCH");
+    };
+    assert.equal(
+      journalWriterLiveness(doc, { hostname: "here", kill: gone }),
+      "dead",
+    );
+  });
+
+  it("EPERM or any other probe failure counts as alive", () => {
+    for (const failure of [errno("EPERM"), new Error("boom")]) {
+      const kill = () => {
+        throw failure;
+      };
+      assert.equal(
+        journalWriterLiveness(doc, { hostname: "here", kill }),
+        "alive",
+      );
+    }
+  });
+
+  it("defaults to this host and this process table", () => {
+    const self = { pid: process.pid, hostname: os.hostname() };
+    assert.equal(journalWriterLiveness(self), "alive");
   });
 });
 
