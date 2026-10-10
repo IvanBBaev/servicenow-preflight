@@ -308,6 +308,22 @@ describe("plan — what cannot be planned becomes a blocker", () => {
     assert.ok(plan.blockers[0].why.includes(ROW_2));
   });
 
+  it("blocks a found runner row that carries no sys_id: there is nothing to PATCH", async () => {
+    const writer = recordingWriter();
+    const withoutSysId = { ...FOUND_FALSE, sysId: undefined };
+    const provisioner = createPreflightProvisioner({
+      doctor: queuedDoctor(runnerDisabledReport()),
+      probe: stubProbe(withoutSysId),
+      writer,
+    });
+
+    const plan = await provisioner.plan(ctx());
+    assert.deepEqual(plan.steps, []);
+    assert.equal(plan.blockers.length, 1);
+    assert.match(plan.blockers[0].why, /without a sys_id/);
+    assert.deepEqual(writer.writes, []);
+  });
+
   it("blocks a finding no recipe covers, and says whether a remedy was even claimed", async () => {
     const provisioner = createPreflightProvisioner({
       doctor: queuedDoctor(
