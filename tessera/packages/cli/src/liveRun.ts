@@ -99,6 +99,8 @@ export interface LiveRunOptions {
   readonly ledgerRoot?: string;
   readonly docsDir?: string;
   readonly runTimeoutMs?: number;
+  /** First ATF progress-poll gap; the runner's backoff doubles it from there. */
+  readonly pollIntervalMs?: number;
   readonly json: boolean;
   /** §6a `allow-skipped` override, audited to the ledger when accepted. */
   readonly allowSkipped: boolean;
@@ -477,6 +479,9 @@ export async function runLive(
     const { ports, store } = composeRealPipeline({
       sourceProfile: source.profile,
       runnerProfile: runner.profile,
+      ...(options.pollIntervalMs === undefined
+        ? {}
+        : { pollIntervalMs: options.pollIntervalMs }),
       scope: options.scope,
       testsRoot: options.testsRoot,
       provider: createTemplateProvider(),

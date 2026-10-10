@@ -363,6 +363,8 @@ export interface RealRegistryOptions {
   readonly mode?: ProvisionMode;
   /** Seam for tests. Production uses the bound `createSnAtfClient()`. */
   readonly atfClient?: AtfHttpClient;
+  /** ATF runner's first poll gap. Absent: the runner's own default. */
+  readonly pollIntervalMs?: number;
   readonly generationDeadlineMs?: number;
   /** §6a ConfirmToken signing key. Absent → an unsigned token. */
   readonly hmacKey?: string;
@@ -509,6 +511,9 @@ function buildRealRegistries(options: RealRegistryOptions): {
         options.runnerProfile,
       ),
       ...(options.kinds === undefined ? {} : { kinds: options.kinds }),
+      ...(options.pollIntervalMs === undefined
+        ? {}
+        : { initialIntervalMs: options.pollIntervalMs }),
       now: () => options.now().getTime(),
     });
     registries.runners.register(name, {

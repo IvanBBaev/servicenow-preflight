@@ -280,6 +280,8 @@ async function liveRun({ escape, json }) {
         runId,
         "--run-timeout-ms",
         "30000",
+        "--poll-interval-ms",
+        "1",
         ...(json ? ["--json"] : []),
       ],
       {

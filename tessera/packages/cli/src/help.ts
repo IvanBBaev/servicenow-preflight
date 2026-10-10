@@ -531,7 +531,8 @@ RUN
   --ledger-root <dir>        §4b ledger root. Default: <cwd>/.tessera.
   --docs-dir <dir>           DEV-15 write-journal root (sets $SN_DOCS_DIR).
   --run-timeout-ms <n>       DEV-2 deadline for the whole run.
-  --poll-interval-ms <n>     Gap between CI/CD progress polls.
+  --poll-interval-ms <n>     Gap between CI/CD progress polls. With --live: the
+                             first ATF poll gap, doubling up to 15 s.
   --json                     Machine-readable report on stdout.
 
 TIER-2 FAKE (development only)

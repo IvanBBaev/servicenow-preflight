@@ -237,6 +237,8 @@ async function liveRun({ faults = [], json, tag }) {
         `live-tables-${tag}-${json ? "j" : "h"}`,
         "--run-timeout-ms",
         "30000",
+        "--poll-interval-ms",
+        "1",
         ...(json ? ["--json"] : []),
       ],
       {

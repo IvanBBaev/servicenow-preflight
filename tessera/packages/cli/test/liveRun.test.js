@@ -275,6 +275,8 @@ function liveArgv(h, extra = []) {
     RUN_ID,
     "--run-timeout-ms",
     "30000",
+    "--poll-interval-ms",
+    "1",
     ...extra,
   ];
 }
@@ -305,6 +307,34 @@ describe("tess run --live (against the fake runner)", () => {
     assert.match(h.stdout(), /GO/);
     assert.deepEqual(definitions(h.fake), []);
     assert.ok(h.fake.tables.all("sys_atf_test_result").length > 0);
+  });
+
+  // Delegated decision 2026-10-10: --poll-interval-ms is no longer
+  // skeleton-only; under --live it is the ATF runner's first poll gap. The
+  // runner's default first gap is 2 s, so polls spanning well under that
+  // prove the flag reached it.
+  it("--poll-interval-ms reaches the ATF runner's progress polling", async () => {
+    const h = await harness();
+    const polls = [];
+    const fakeFetch = globalThis.fetch;
+    globalThis.fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.includes("/api/sn_cicd/progress/")) polls.push(Date.now());
+      return fakeFetch(input, init);
+    };
+    let code;
+    try {
+      code = await main(liveArgv(h), h.context);
+    } finally {
+      h.restore();
+    }
+    assert.equal(code, EXIT_CODES.ok, `${h.stdout()}\n${h.stderr()}`);
+    assert.ok(
+      polls.length >= 2,
+      `expected repeated polls, saw ${polls.length}`,
+    );
+    const span = polls[polls.length - 1] - polls[0];
+    assert.ok(span < 1_000, `polls spanned ${span} ms`);
   });
 
   it("goes NO_GO (exit 1) when the source under test is the mutant", async () => {

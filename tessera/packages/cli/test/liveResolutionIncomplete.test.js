@@ -263,6 +263,8 @@ async function liveRun({ gap, json }) {
         runId,
         "--run-timeout-ms",
         "30000",
+        "--poll-interval-ms",
+        "1",
         ...(json ? ["--json"] : []),
       ],
       {

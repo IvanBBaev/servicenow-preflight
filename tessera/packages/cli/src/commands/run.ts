@@ -307,7 +307,8 @@ export function parseRunArgs(
         break;
       }
       case "--poll-interval-ms": {
-        skeletonOnly.push(flag);
+        // Delegated decision 2026-10-10: also honoured by --live, where it is
+        // the ATF runner's FIRST poll gap (backoff still doubles it to 15 s).
         const parsed = parseInteger(value() ?? "", flag);
         if (typeof parsed === "string")
           return { kind: "error", message: parsed };
@@ -418,6 +419,7 @@ export function parseRunArgs(
         ...(ledgerRoot === undefined ? {} : { ledgerRoot }),
         ...(docsDir === undefined ? {} : { docsDir }),
         ...(runTimeoutMs === undefined ? {} : { runTimeoutMs }),
+        ...(pollIntervalMs === undefined ? {} : { pollIntervalMs }),
         json,
         allowSkipped,
         ...(jsonOut === undefined
