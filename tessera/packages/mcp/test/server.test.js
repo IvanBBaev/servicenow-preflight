@@ -52,6 +52,7 @@ import { reloadCredentialsFromEnv } from "@tessera/sn-client";
 
 import {
   ERROR_CODES,
+  handleLine,
   LATEST_PROTOCOL_VERSION,
   SERVER_INFO,
   serve,
@@ -2017,5 +2018,64 @@ describe("@tessera/mcp — the session", () => {
     );
     assert.equal(responses[1].result.isError, false);
     assert.equal(responses[2].result.isError, false);
+  });
+});
+
+// A throw that escapes `handleMessage` is the server itself breaking. It must
+// come back as an `internal` ERROR, never a result a caller could read as an
+// empty answer — and an id-less notification still gets no reply at all.
+describe("@tessera/mcp — an internal fault is an error, never a result", () => {
+  function brokenSession() {
+    const session = { protocolVersion: undefined };
+    for (const field of ["initialized", "ready"]) {
+      Object.defineProperty(session, field, {
+        get: () => false,
+        set: () => {
+          throw new Error("session store broke");
+        },
+      });
+    }
+    return session;
+  }
+
+  function logContext() {
+    const logs = [];
+    return {
+      logs,
+      context: {
+        now: () => new Date(0),
+        actor: "test",
+        cwd: os.tmpdir(),
+        env: {},
+        log: (line) => logs.push(line),
+      },
+    };
+  }
+
+  it("answers a request with ERROR_CODES.internal naming the method", async () => {
+    const { logs, context } = logContext();
+    const response = await handleLine(
+      JSON.stringify(HELLO),
+      brokenSession(),
+      context,
+    );
+    assert.equal(response.id, HELLO.id);
+    assert.equal(response.result, undefined);
+    assert.equal(response.error.code, ERROR_CODES.internal);
+    assert.match(response.error.message, /`initialize`: session store broke/);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /internal error handling initialize/);
+  });
+
+  it("logs but does not answer the same fault on a notification", async () => {
+    const { logs, context } = logContext();
+    const response = await handleLine(
+      JSON.stringify(READY),
+      brokenSession(),
+      context,
+    );
+    assert.equal(response, undefined);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /internal error handling notifications\/initialized/);
   });
 });
