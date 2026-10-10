@@ -260,6 +260,8 @@ async function liveRun(root, testsRoot, runId, { mutant = false } = {}) {
       runId,
       "--run-timeout-ms",
       "30000",
+      "--poll-interval-ms",
+      "1",
       "--json",
     ],
     {
