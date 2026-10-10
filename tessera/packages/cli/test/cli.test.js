@@ -1538,3 +1538,28 @@ describe("run — millisecond flags are bounded decimal integers", () => {
     }
   }
 });
+
+// Fake-only flags on a real instance are usage errors, refused before any
+// instance is resolved: they would otherwise be silently meaningless.
+describe("run --skeleton — fake-only flags need --fake", () => {
+  for (const [flag, pattern] of [
+    ["--mutant", /--mutant only means something with --fake/],
+    [
+      "--fake-production-property",
+      /--fake-production-property only means something with --fake/,
+    ],
+  ]) {
+    it(`exits 2 on ${flag} without --fake`, async () => {
+      const cap = capture();
+      assert.equal(
+        await main(
+          ["run", "--skeleton", "--instance", "dev.example.com", flag],
+          cap.context,
+        ),
+        EXIT_CODES.usage,
+      );
+      assert.match(cap.stderrText(), pattern);
+      assert.deepEqual(cap.out, []);
+    });
+  }
+});
