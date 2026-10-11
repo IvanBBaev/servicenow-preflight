@@ -30,6 +30,7 @@ import {
   jsonRunReport,
   main,
   parseArtifact,
+  parseRunArgs,
   planIdentity,
   provisionAftermath,
   runExitDisposition,
@@ -1562,4 +1563,35 @@ describe("run --skeleton — fake-only flags need --fake", () => {
       assert.deepEqual(cap.out, []);
     });
   }
+});
+
+describe("run --skeleton — --acknowledge-prod reaches the guard config", () => {
+  const BASE = ["--skeleton", "--instance", "dev.example.com"];
+
+  it("carries the reason, the context actor and the cli surface", () => {
+    const parsed = parseRunArgs(
+      [...BASE, "--acknowledge-prod", "PDI mirrors prod properties"],
+      capture().context,
+    );
+    assert.equal(parsed.kind, "run");
+    assert.deepEqual(parsed.options.acknowledgeProd, {
+      reason: "PDI mirrors prod properties",
+      actor: "test",
+      surface: "cli",
+    });
+  });
+
+  it("records an explicit --actor as the acknowledging actor", () => {
+    const parsed = parseRunArgs(
+      [...BASE, "--actor", "qa-lead", "--acknowledge-prod", "change CHG1"],
+      capture().context,
+    );
+    assert.equal(parsed.options.acknowledgeProd.actor, "qa-lead");
+  });
+
+  it("has no acknowledgement at all without the flag", () => {
+    const parsed = parseRunArgs(BASE, capture().context);
+    assert.equal(parsed.kind, "run");
+    assert.equal("acknowledgeProd" in parsed.options, false);
+  });
 });
