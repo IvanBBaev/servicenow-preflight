@@ -209,3 +209,99 @@ describe("mutated copies fail", () => {
     expectProblem("<xml/>", /not an update-set export/);
   });
 });
+
+const OWNER = `<remote_update_set display_value="Tessera authoring channel 1.0.0">7e55e0a0c0de4a5ea000000000000001</remote_update_set>`;
+const entry = (inner) =>
+  `<sys_update_xml action="INSERT_OR_UPDATE">${inner}${OWNER}</sys_update_xml>\n`;
+
+describe("mutated copies fail — malformed update entries", () => {
+  test("an entry without a payload", () => {
+    expectProblem(
+      insertBeforeUnloadEnd(ASSET, entry("<name>x</name>")),
+      /has no <payload>/,
+    );
+  });
+
+  test("a payload without a record_update document", () => {
+    expectProblem(
+      insertBeforeUnloadEnd(
+        ASSET,
+        entry("<payload><![CDATA[<x/>]]></payload>"),
+      ),
+      /holds no <record_update> document/,
+    );
+  });
+
+  test("a record_update that carries no record", () => {
+    expectProblem(
+      insertBeforeUnloadEnd(
+        ASSET,
+        entry(
+          '<payload><![CDATA[<record_update table="sys_properties"></record_update>]]></payload>',
+        ),
+      ),
+      /carries no record/,
+    );
+  });
+
+  test("an entry owned by another update set", () => {
+    const mutated = ASSET.replace(
+      "7e55e0a0c0de4a5ea000000000000001</remote_update_set>",
+      "7e55e0a0c0de4a5ea0000000000000ff</remote_update_set>",
+    );
+    assert.notEqual(mutated, ASSET);
+    expectProblem(mutated, /does not belong to the update set/);
+  });
+
+  test("a record shipped with an action other than INSERT_OR_UPDATE", () => {
+    expectProblem(
+      ASSET.replace(
+        '<sys_properties action="INSERT_OR_UPDATE">',
+        '<sys_properties action="DELETE">',
+      ),
+      /sys_properties record has action DELETE/,
+    );
+  });
+
+  test("a version value that is not MAJOR.MINOR[.PATCH]", () => {
+    expectProblem(
+      ASSET.replace("<value>1.0.0</value>", "<value>one</value>"),
+      /is not MAJOR\.MINOR\[\.PATCH\]/,
+    );
+  });
+});
+
+describe("mutated copies fail — ACL shape", () => {
+  for (const [label, from, to, pattern] of [
+    [
+      "an ACL on another table",
+      '<name>sys_variable_value</name><operation display_value="create">',
+      '<name>sys_user</name><operation display_value="create">',
+      /\(create\) targets sys_user, not sys_variable_value/,
+    ],
+    [
+      "a non-record ACL",
+      '<type display_value="record">record</type>',
+      '<type display_value="field">field</type>',
+      /\(create\) is not a record ACL/,
+    ],
+    [
+      "an inactive ACL",
+      "<active>true</active><admin_overrides>",
+      "<active>false</active><admin_overrides>",
+      /\(create\) is not active/,
+    ],
+    [
+      "an advanced ACL even with an empty script",
+      "<advanced>false</advanced>",
+      "<advanced>true</advanced>",
+      /\(create\) carries a script/,
+    ],
+  ]) {
+    test(label, () => {
+      const mutated = ASSET.replace(from, to);
+      assert.notEqual(mutated, ASSET);
+      expectProblem(mutated, pattern);
+    });
+  }
+});
