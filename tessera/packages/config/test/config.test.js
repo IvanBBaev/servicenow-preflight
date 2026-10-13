@@ -812,6 +812,21 @@ describe("the real disk reader", () => {
       undefined,
     );
   });
+
+  it("reports a path under a regular file as absent (ENOTDIR)", () => {
+    // Upward discovery can probe `<file>/tessera.config.json`; a file where a
+    // directory was expected holds no config, so it is absence, not a fault.
+    const thisFile = fileURLToPath(import.meta.url);
+    assert.equal(
+      readTextFileSync(path.join(thisFile, "tessera.config.json")),
+      undefined,
+    );
+  });
+
+  it("returns the text of a file that is there", () => {
+    const thisFile = fileURLToPath(import.meta.url);
+    assert.match(readTextFileSync(thisFile), /the real disk reader/);
+  });
 });
 
 // Delegated decision 2026-09-25 — review W3a finding 2: a URL with userinfo
