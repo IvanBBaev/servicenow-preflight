@@ -226,3 +226,57 @@ describe("infra ledger — host-scoped idempotency dedupe", () => {
     );
   });
 });
+
+describe("infra ledger — confirm and compensate edges", () => {
+  function lineCount(rootDir) {
+    return readFileSync(logPath(rootDir), "utf8").split("\n").filter(Boolean)
+      .length;
+  }
+
+  it("refuses to confirm or compensate an entry that was never intended", async (t) => {
+    const rootDir = tempRoot(t);
+    const infra = open(rootDir);
+    await infra.intend(infraIntent("k-1"));
+    for (const call of [() => infra.confirm(7), () => infra.compensate(7)]) {
+      await assert.rejects(
+        call(),
+        (error) =>
+          expectCode("protocol")(error) &&
+          error.message === `infra namespace ${HOST} has no ledger entry #7`,
+      );
+    }
+    assert.equal(lineCount(rootDir), 1);
+  });
+
+  it("re-confirms an applied entry without a new line, but not as another record", async (t) => {
+    const rootDir = tempRoot(t);
+    const infra = open(rootDir);
+    await infra.intend(infraIntent("k-1"));
+    const applied = await infra.confirm(1, { sysId: "p1" });
+    assert.deepEqual(await infra.confirm(1), applied);
+    assert.deepEqual(await infra.confirm(1, { sysId: "p1" }), applied);
+    await assert.rejects(
+      infra.confirm(1, { sysId: "p2" }),
+      (error) =>
+        expectCode("protocol")(error) &&
+        /already applied as p1; confirming p2/.test(error.message),
+    );
+    assert.equal(lineCount(rootDir), 2);
+  });
+
+  it("refuses to confirm a compensated entry and compensates only once", async (t) => {
+    const rootDir = tempRoot(t);
+    const infra = open(rootDir);
+    await infra.intend(infraIntent("k-1"));
+    const compensated = await infra.compensate(1);
+    assert.equal(compensated.state, "compensated");
+    assert.deepEqual(await infra.compensate(1), compensated);
+    await assert.rejects(
+      infra.confirm(1),
+      (error) =>
+        expectCode("protocol")(error) &&
+        /already compensated and cannot be confirmed/.test(error.message),
+    );
+    assert.equal(lineCount(rootDir), 2);
+  });
+});
