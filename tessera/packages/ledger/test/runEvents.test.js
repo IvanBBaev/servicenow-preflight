@@ -5,7 +5,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -136,5 +136,73 @@ describe("run event log — persisted state and result", () => {
     assert.equal(status.run.state, "provisioning");
     assert.deepEqual(status.result, written);
     assert.deepEqual(await reopened.readResult(runId), written);
+  });
+});
+
+describe("run event log — fails closed on damage", () => {
+  it("refuses a value JSON.stringify drops instead of persisting nothing", async (t) => {
+    const { events, runId } = await openRunWithLog(t);
+    await assert.rejects(
+      events.appendEvent(runId, { type: "a", data: () => 1 }),
+      (error) =>
+        expectCode("protocol")(error) &&
+        error.message === "data is not JSON-serializable",
+    );
+    await assert.rejects(
+      events.writeResult(runId, () => 1),
+      (error) =>
+        expectCode("protocol")(error) &&
+        error.message === "result is not JSON-serializable",
+    );
+    assert.equal(await events.readResult(runId), undefined);
+    assert.equal((await events.readEvents(runId)).cursor, 0);
+  });
+
+  it("reads an unparsable or mis-shaped run record or result as corrupt", async (t) => {
+    const { rootDir, events, runId } = await openRunWithLog(t);
+    const dir = join(rootDir, "runs", runId);
+    writeFileSync(join(dir, "result.json"), "{not json");
+    await assert.rejects(
+      events.readResult(runId),
+      (error) =>
+        expectCode("corrupt")(error) &&
+        /result\.json is not a valid run result$/.test(error.message),
+    );
+    writeFileSync(join(dir, "result.json"), JSON.stringify({ runId }));
+    await assert.rejects(events.readResult(runId), expectCode("corrupt"));
+
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ runId }));
+    await assert.rejects(
+      events.readStatus(runId),
+      (error) =>
+        expectCode("corrupt")(error) &&
+        /run\.json is not a valid run record$/.test(error.message),
+    );
+    await assert.rejects(
+      events.appendEvent(runId, { type: "a" }),
+      expectCode("corrupt"),
+    );
+  });
+
+  it("refuses a committed log whose cursors gap or name another run", async (t) => {
+    for (const bad of [
+      { cursor: 3, runId: "run-ev", type: "b", at: "x" },
+      { cursor: 2, runId: "run-other", type: "b", at: "x" },
+    ]) {
+      const { rootDir, events, runId } = await openRunWithLog(t);
+      await events.appendEvent(runId, { type: "a" });
+      const file = join(rootDir, "runs", runId, RUN_EVENTS_FILENAME);
+      appendFileSync(file, `${JSON.stringify(bad)}\n`);
+      const before = readFileSync(file, "utf8");
+      const corrupt = (error) =>
+        expectCode("corrupt")(error) &&
+        error.message.includes(
+          `record 2 carries cursor ${bad.cursor} of run ${bad.runId}`,
+        );
+      await assert.rejects(events.readEvents(runId), corrupt);
+      await assert.rejects(events.readStatus(runId), corrupt);
+      await assert.rejects(events.appendEvent(runId, { type: "c" }), corrupt);
+      assert.equal(readFileSync(file, "utf8"), before, "nothing was appended");
+    }
   });
 });
