@@ -19,7 +19,10 @@ import {
   readLogLines,
   readTextFile,
   repairLogTail,
+  repairLogTailSync,
+  syncDir,
   writeJsonAtomic,
+  writeJsonExclusive,
 } from "../build/durability.js";
 import { tempRoot } from "./helpers.js";
 
@@ -181,5 +184,68 @@ describe("readTextFile / ensureDir / listDirectories", () => {
 
     assert.deepEqual(await listDirectories(join(root, "runs")), ["run-a"]);
     assert.deepEqual(await listDirectories(join(root, "absent")), []);
+  });
+});
+
+describe("repairLogTailSync", () => {
+  it("applies the same cut as the async repair", (t) => {
+    const root = tempRoot(t);
+    const file = join(root, "log.jsonl");
+    writeFileSync(file, '{"a":1}\n{"b":');
+
+    assert.equal(repairLogTailSync(file), true);
+    assert.equal(readFileSync(file, "utf8"), '{"a":1}\n');
+    assert.equal(repairLogTailSync(file), false, "a clean log is left alone");
+    assert.equal(repairLogTailSync(join(root, "absent.jsonl")), false);
+  });
+});
+
+describe("writeJsonExclusive", () => {
+  it("creates once, then refuses to replace, leaving no temp files", async (t) => {
+    const root = tempRoot(t);
+    const file = join(root, "claim.json");
+
+    assert.equal(await writeJsonExclusive(file, { owner: "a" }), true);
+    assert.equal(await writeJsonExclusive(file, { owner: "b" }), false);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { owner: "a" });
+    assert.deepEqual(readdirSync(root), ["claim.json"]);
+  });
+});
+
+// Absence is the only failure these primitives may fold into an empty answer.
+// Anything else — here, a path occupied by the wrong kind of entry — must reach
+// the caller, or a damaged ledger root would read as an empty one.
+describe("fails closed on anything other than absence", () => {
+  it("rethrows when a log path is a directory", async (t) => {
+    const dir = tempRoot(t);
+    const isDir = (error) => error.code === "EISDIR";
+
+    await assert.rejects(readLogLines(dir), isDir);
+    await assert.rejects(repairLogTail(dir), isDir);
+    assert.throws(() => repairLogTailSync(dir), isDir);
+    await assert.rejects(readTextFile(dir), isDir);
+  });
+
+  it("rethrows when the runs directory is a file", async (t) => {
+    const file = join(tempRoot(t), "runs");
+    writeFileSync(file, "");
+
+    await assert.rejects(
+      listDirectories(file),
+      (error) => error.code === "ENOTDIR",
+    );
+  });
+
+  it("rethrows a failed atomic replace and removes its temp file", async (t) => {
+    const root = tempRoot(t);
+    const target = join(root, "state.json");
+    await ensureDir(join(target, "occupied"));
+
+    await assert.rejects(writeJsonAtomic(target, { x: 1 }));
+    assert.deepEqual(readdirSync(root), ["state.json"]);
+  });
+
+  it("treats a directory it cannot open as nothing to sync", async (t) => {
+    await syncDir(join(tempRoot(t), "absent"));
   });
 });
