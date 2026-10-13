@@ -142,4 +142,22 @@ describe("the frozen skeleton composition", () => {
     assert.equal(ports.reporters.length, SKELETON_PIPELINE.reporters.length);
     assert.ok(ports.provisioner);
   });
+
+  it("names its absent impact and generation stages, which yield nothing", async () => {
+    // "none" in the resolved config must mean an empty graph and no specs —
+    // not a stage that invents work, and not a missing port.
+    const { ports, config } = composeSkeletonPipeline({
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+    });
+
+    assert.equal(config.impactAnalyzer, "none");
+    assert.equal(config.generator, "none");
+    assert.deepEqual(await ports.impactAnalyzer.analyze(), {
+      nodes: [],
+      edges: [],
+      unanalyzable: [],
+      demanded: [],
+    });
+    assert.deepEqual(await ports.generator.generate(), []);
+  });
 });
