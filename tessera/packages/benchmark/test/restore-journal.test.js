@@ -18,7 +18,9 @@ import {
   DEFAULT_LEASE_TABLE,
   DESIGN_GATE_POLICY,
   RESTORE_JOURNAL_FILENAME,
+  RESTORE_JOURNAL_SCHEMA,
   RestoreJournalError,
+  clearRestoreJournalFile,
   createFileRestoreJournal,
   createInstanceBenchmarkSubstrate,
   createMemoryRestoreJournal,
@@ -710,5 +712,218 @@ describe("catalog — optional correctSha256", () => {
         e instanceof CatalogError &&
         e.problems.some((p) => /conflicting correctSha256/.test(p)),
     );
+  });
+});
+
+describe("restore journal — entries and paths are checked, never repaired", () => {
+  const entry = (source) => ({
+    table: T,
+    sysId: "a1",
+    field: "script",
+    sha256: sha(source),
+    source,
+  });
+  const fileJournal = async (runId = "run-1") => {
+    const root = await tmpRoot();
+    const file = restoreJournalPath(root, runId);
+    const journal = createFileRestoreJournal({
+      file,
+      runId,
+      runnerProfile: "p",
+      instance: null,
+    });
+    return { root, file, journal };
+  };
+
+  it("the memory journal keeps one entry per artifact and refuses a second correct source", async () => {
+    // `async` turns the memory journal's synchronous throw into the
+    // rejection the file journal produces, so both pin one contract.
+    const j = createMemoryRestoreJournal("run-1");
+    assert.equal(j.runId, "run-1");
+    assert.equal("runId" in createMemoryRestoreJournal(), false);
+    await j.record(entry("X"));
+    await j.record(entry("X"));
+    assert.deepEqual(j.entries(), [entry("X")]);
+    await assert.rejects(
+      async () => j.record({ ...entry("X"), field: "condition" }),
+      /already holds a different correct source for sys_script_include\/a1/,
+    );
+    await assert.rejects(
+      async () => j.record(entry("Y")),
+      (e) => e instanceof RestoreJournalError && e.file === "memory",
+    );
+    await assert.rejects(
+      async () => j.record({ ...entry("X"), sysId: "a2", source: "Z" }),
+      /entry sys_script_include\/a2 sha256 does not match its source/,
+    );
+    assert.deepEqual(j.entries(), [entry("X")]);
+  });
+
+  it("the file journal skips a repeated entry and writes nothing for a bad one", async () => {
+    const { file, journal } = await fileJournal();
+    await assert.rejects(
+      () => journal.record({ ...entry("X"), source: "tampered" }),
+      RestoreJournalError,
+    );
+    await assert.rejects(() => fs.stat(file), { code: "ENOENT" });
+    await journal.record(entry("X"));
+    const written = await fs.readFile(file, "utf8");
+    await journal.record(entry("X"));
+    assert.equal(await fs.readFile(file, "utf8"), written);
+    await assert.rejects(() => journal.record(entry("Y")), RestoreJournalError);
+    assert.deepEqual(journal.entries(), [entry("X")]);
+  });
+
+  it("clear() removes the file, so the next record creates a fresh one", async () => {
+    let now = new Date("2026-10-01T00:00:00.000Z");
+    const root = await tmpRoot();
+    const file = restoreJournalPath(root, "run-1");
+    const journal = createFileRestoreJournal({
+      file,
+      runId: "run-1",
+      runnerProfile: "p",
+      instance: null,
+      now: () => now,
+    });
+    await journal.clear();
+    await journal.record(entry("X"));
+    await journal.clear();
+    await assert.rejects(() => fs.stat(file), { code: "ENOENT" });
+    assert.deepEqual(journal.entries(), []);
+    now = new Date("2026-10-02T00:00:00.000Z");
+    await journal.record(entry("Y"));
+    const doc = await readRestoreJournal(file);
+    assert.equal(doc.createdAt, "2026-10-02T00:00:00.000Z");
+    assert.deepEqual(doc.entries, [entry("Y")]);
+  });
+
+  it("a failed replace leaves no temp file behind and rejects", async () => {
+    const { file, journal } = await fileJournal();
+    await journal.record(entry("X"));
+    await fs.rm(file);
+    await fs.mkdir(path.join(file, "occupied"), { recursive: true });
+    await assert.rejects(() => journal.record({ ...entry("Y"), sysId: "a2" }));
+    assert.deepEqual(await fs.readdir(path.dirname(file)), [
+      RESTORE_JOURNAL_FILENAME,
+    ]);
+    assert.deepEqual(journal.entries(), [entry("X")]);
+  });
+
+  it("clearRestoreJournalFile tolerates an absent file but not an unremovable one", async () => {
+    const root = await tmpRoot();
+    await clearRestoreJournalFile(path.join(root, "absent.json"));
+    await assert.rejects(() => clearRestoreJournalFile(root));
+    await fs.stat(root);
+  });
+
+  it("restoreJournalPath refuses every runId that is not one plain segment", () => {
+    for (const runId of ["", ".", "..", "a/b", "a\\b", "a\u0000b"]) {
+      assert.throws(
+        () => restoreJournalPath("/ledger", runId),
+        (e) =>
+          e instanceof RestoreJournalError &&
+          e.message.includes("refusing restore-journal path") &&
+          e.file === undefined,
+        JSON.stringify(runId),
+      );
+    }
+    assert.equal(
+      restoreJournalPath("/ledger", "..run"),
+      path.join("/ledger", "benchmark", "..run", RESTORE_JOURNAL_FILENAME),
+    );
+  });
+
+  it("a document that is not valid JSON is corrupt, not absent", async () => {
+    const { file } = await fileJournal();
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, "{ not json");
+    await assert.rejects(
+      () => readRestoreJournal(file),
+      (e) =>
+        e instanceof RestoreJournalError &&
+        /is corrupt: not valid JSON/.test(e.message) &&
+        e.cause instanceof SyntaxError,
+    );
+  });
+
+  it("every malformed field of a document is named, and nothing is restored", async () => {
+    const { file, journal } = await fileJournal();
+    await journal.record(entry("X"));
+    const valid = JSON.parse(await fs.readFile(file, "utf8"));
+    assert.equal(valid.schema, RESTORE_JOURNAL_SCHEMA);
+    const cases = [
+      [[], "not a JSON object"],
+      [
+        { ...valid, schema: "other/1" },
+        `schema is not ${RESTORE_JOURNAL_SCHEMA}`,
+      ],
+      [{ ...valid, runId: "" }, "no runId"],
+      [{ ...valid, runId: 1 }, "no runId"],
+      [{ ...valid, runnerProfile: null }, "no runnerProfile"],
+      [{ ...valid, instance: 1 }, "instance is neither a string nor null"],
+      [{ ...valid, pid: "1" }, "no pid"],
+      [{ ...valid, pid: 1.5 }, "no pid"],
+      [{ ...valid, hostname: undefined }, "no hostname"],
+      [{ ...valid, createdAt: 0 }, "no createdAt"],
+      [{ ...valid, entries: {} }, "entries is not an array"],
+      [{ ...valid, entries: [null] }, "entries[0] is not an object"],
+    ];
+    const good = valid.entries[0];
+    for (const [key, bad] of [
+      ["table", ""],
+      ["sysId", ""],
+      ["sysId", 1],
+      ["field", ""],
+      ["field", undefined],
+      ["sha256", good.sha256.toUpperCase()],
+      ["sha256", 1],
+      ["source", 1],
+    ]) {
+      cases.push([
+        { ...valid, entries: [good, { ...good, [key]: bad }] },
+        "entries[1] is malformed",
+      ]);
+    }
+    for (const [doc, why] of cases) {
+      await fs.writeFile(file, JSON.stringify(doc));
+      await assert.rejects(
+        () => readRestoreJournal(file),
+        (e) =>
+          e instanceof RestoreJournalError &&
+          e.file === file &&
+          e.message.includes(`is corrupt: ${why} — inspect it by hand`),
+        why,
+      );
+    }
+    await fs.writeFile(file, JSON.stringify({ ...valid, instance: "dev" }));
+    assert.equal((await readRestoreJournal(file)).instance, "dev");
+  });
+
+  it("findRestoreJournals skips run directories without a journal and plain files", async () => {
+    const { root, journal } = await fileJournal("run-2");
+    await journal.record(entry("X"));
+    await fs.mkdir(path.join(root, "benchmark", "run-1"));
+    await fs.writeFile(path.join(root, "benchmark", "stray.json"), "{}");
+    const found = await findRestoreJournals(root);
+    assert.deepEqual(
+      found.map((f) => [f.runId, f.document.entries.length]),
+      [["run-2", 1]],
+    );
+  });
+
+  it("findRestoreJournals throws when the benchmark directory cannot be listed", async (t) => {
+    if (process.getuid?.() === 0) {
+      t.skip("root ignores directory permissions");
+      return;
+    }
+    const root = await tmpRoot();
+    const dir = path.join(root, "benchmark");
+    await fs.mkdir(dir);
+    await fs.chmod(dir, 0o000);
+    try {
+      await assert.rejects(() => findRestoreJournals(root), { code: "EACCES" });
+    } finally {
+      await fs.chmod(dir, 0o755);
+    }
   });
 });
