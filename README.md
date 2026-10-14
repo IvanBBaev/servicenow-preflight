@@ -32,6 +32,7 @@ It ships as both a **CLI** you drop into a CI gate and a small, dependency-free
   [Report formats](#report-formats) · [CI integration](#ci-integration)
 - **Embed** — [Library API](#library-api) · [Development](#development) ·
   [Security](#security) · [Support](#support) · [License](#license)
+- **Preview** — [Tessera: `tess` and `tessera-mcp`](#tessera-preview-tess-and-tessera-mcp)
 
 ## Quick start
 
@@ -460,6 +461,58 @@ secrets never appear in the messages:
 To add your own check, implement the `Check` interface (a `run(ctx)` returning a
 `CheckResult`, catching every `ctx.http` error) and pass a custom list to
 `runPreflight`, or register it in `defaultChecks` under [src/checks/](src/checks/).
+
+## Tessera (preview): `tess` and `tessera-mcp`
+
+The package also carries **Tessera**, a test framework for ServiceNow that runs
+impact analysis and ATF tests as a gate. It is the product `servicenow-preflight`
+grows into at **v1.0.0**. It is a **preview**: the full live pipeline has not yet
+been verified end to end against a real instance, and its commands and flags may
+still change before 1.0.
+
+Nothing above changes. `servicenow-preflight` / `snpf`, the 23 checks and the
+library API keep working as documented. Tessera adds two more binaries:
+
+| Binary        | What it is                                                                                     |
+| ------------- | ---------------------------------------------------------------------------------------------- |
+| `tess`        | The Tessera CLI (`tess <command> --help` for every command)                                    |
+| `tessera-mcp` | A stdio MCP server exposing the same pipeline as 13 `preflight_*` tools (doctor, impact, run…) |
+
+| Command                        | What it answers                                                                     | Writes                                       |
+| ------------------------------ | ----------------------------------------------------------------------------------- | -------------------------------------------- |
+| `tess doctor`                  | Is this instance ready to run tests? Three states: ready / not ready / undecided.   | nothing                                      |
+| `tess preflight`               | Is the topology ready, and does the runner carry the code the source has?           | nothing unless `--mode apply`                |
+| `tess resolve`                 | Which artifacts does this story or scope change?                                    | nothing                                      |
+| `tess impact`                  | What else does that change reach (where-used scan of one scope)?                    | nothing                                      |
+| `tess coverage`                | Which impacted artifacts have a declared test spec, and which have none?            | nothing                                      |
+| `tess generate`                | Proposes specs for the gaps (offline template or the Anthropic API).                | files under `<tests-root>/proposed/` only    |
+| `tess run --live`              | Projects the repo's specs onto the runner as ATF tests, runs them, gives a verdict. | the runner instance and the local run ledger |
+| `tess status` / `tess confirm` | Where is a run, and what did a finished run decide?                                 | nothing                                      |
+| `tess cleanup`                 | Tears down a failed run's ATF projection.                                           | nothing in `--mode plan` (the default)       |
+
+Tessera separates three **roles**: `--source` (read artifacts from here),
+`--runner` (the only instance a write may touch) and `--target` (probed
+read-only). `--instance` sets all three to one profile. A role names a
+credential profile: `default` reads `SN_INSTANCE` / `SN_USER` / `SN_PASSWORD`,
+any other profile `SN_PROFILE_<NAME>_INSTANCE` / `_USER` / `_PASSWORD`. These
+are not the `SNPF_*` variables the preflight checks use. Options resolve as
+flag > env > `tessera.config.json` > default, and secrets are read only from env
+or the credential store, never from a config file.
+
+```bash
+export SN_INSTANCE=https://dev12345.service-now.com SN_USER=admin SN_PASSWORD='…'
+npx tess doctor --instance default
+npx tess impact --instance default --scope x_acme_app
+```
+
+Exit codes: `0` ready / GO · `1` not ready / NO_GO · `2` usage · `3`
+infrastructure fault · `4` a write was refused and nothing was written · `5`
+inconclusive.
+
+Tessera ships inside this one package: no extra npm dependencies, and the
+`@tessera/*` workspace packages under [tessera/](tessera/) are internal and never
+published on their own. See [tessera/README.md](tessera/README.md) for the
+package map and the development workflow.
 
 ## Development
 

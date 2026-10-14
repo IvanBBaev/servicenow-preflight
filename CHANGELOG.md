@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tessera (preview)** ships inside the package: a ServiceNow test framework
+  that this package grows into at v1.0.0. Two new binaries: `tess` (doctor,
+  preflight, resolve, impact, coverage, generate, `run --live`, status, confirm,
+  cleanup, benchmark) and `tessera-mcp` (a stdio MCP server with 13
+  `preflight_*` tools). The runtime closure of the internal `@tessera/*`
+  workspace packages is staged into `build/tessera/` on `prepack`; it adds no
+  npm dependencies. The `servicenow-preflight` / `snpf` binaries, the checks and
+  the library API are unchanged. The live pipeline is not yet verified end to
+  end against a real instance, so commands and flags may still change before
+  1.0.
+
 - Three new default-suite checks: `default-set-leakage` (captured work stranded
   in a "Default"-flagged update set for the target scope), `remote-set-preview`
   (every pending retrieved update set on the target is previewed with all

@@ -3,8 +3,10 @@
 AI-driven test framework for ServiceNow — the codebase that
 `servicenow-preflight` v1.0.0 is planned to become. This directory is a
 **self-contained npm workspace**: it installs, builds, and tests independently
-of the shipped package in the repository root, and nothing in here ships with
-0.x releases.
+of the package in the repository root. It ships inside that package: the root
+`prepack` (`scripts/stage-tessera.mjs`) stages the runtime closure of these
+packages into `build/tessera/`, which backs the root `tess` and `tessera-mcp`
+bins.
 
 ## Packages
 

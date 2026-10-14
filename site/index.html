@@ -436,6 +436,60 @@ report.summary; <span class="tok-com">// { pass, warn, fail }</span></pre>
         </div>
       </section>
 
+      <!-- ===== TESSERA (PREVIEW) ===== -->
+      <section id="tessera" class="section">
+        <div class="section-head">
+          <div class="eyebrow">NEXT DEPARTURE · PREVIEW</div>
+          <h2>Tessera: tess &amp; tessera-mcp</h2>
+        </div>
+
+        <div class="conn-grid">
+          <div class="code-panel" data-term>
+            <div class="head">
+              <span class="fname">tess · impact, coverage, a gated run</span>
+              <button class="copy-btn" data-copy data-label="copy">copy</button>
+            </div>
+            <pre><span class="tok-com"># one profile for source, runner and target</span>
+export SN_INSTANCE=https://dev12345.service-now.com
+export SN_USER=admin SN_PASSWORD='…'
+
+npx tess doctor   --instance default
+npx tess impact   --instance default --scope x_acme_app
+npx tess coverage --instance default --scope x_acme_app
+npx tess run --live --help   <span class="tok-com"># ATF projection + verdict</span></pre>
+            <div class="note">
+              Preview: not yet verified end to end against a live instance;
+              commands may change before 1.0.
+            </div>
+          </div>
+          <div class="kv-panel">
+            <div class="mini-label">WHAT SHIPS IN THE SAME PACKAGE</div>
+            <div class="kv">
+              <div class="k">tess</div>
+              <div class="v">
+                doctor · preflight · resolve · impact · coverage · generate ·
+                run · status · confirm · cleanup
+              </div>
+            </div>
+            <div class="kv">
+              <div class="k">tessera-mcp</div>
+              <div class="v">stdio MCP server · 13 preflight_* tools</div>
+            </div>
+            <div class="kv">
+              <div class="k">exit codes</div>
+              <div class="v">
+                0 GO · 1 NO_GO · 2 usage · 3 infra · 4 refused · 5 inconclusive
+              </div>
+            </div>
+            <div class="foot">
+              The checks, <b>snpf</b> and the library API are unchanged.
+              Instance writes go only to the <b>--runner</b>; source and target
+              are read-only.
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ===== SUPPORT + FOOTER ===== -->
       <section id="support" class="support-section">
         <div class="support">
