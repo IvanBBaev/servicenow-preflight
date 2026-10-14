@@ -504,6 +504,75 @@ describe("sn-client probe — the CI/CD API (DR-2)", () => {
   });
 });
 
+describe("sn-client probe — the outcome each status maps to", () => {
+  // The precondition tests above assert the finding a probe turns into; these
+  // pin the probe's own answer, field by field, for the statuses that are not
+  // 404 and not a missing response — the cases a finding-level assertion
+  // flattens into the same `unknown` or `not-ready`.
+
+  it("reports the status a reachable API actually answered with", async () => {
+    const h = withFake({ atfRunnerEnabled: true });
+    try {
+      const path = "/api/now/table/sys_atf_step";
+      const probed = await h.probe.reachApi(path);
+      assert.deepEqual(probed, {
+        outcome: "present",
+        status: 200,
+        detail: `${path} answered 200`,
+      });
+    } finally {
+      h.restore();
+    }
+  });
+
+  it("reads a 403 on the API as a refusal, not as an absent plugin", async () => {
+    const h = withFake({ atfRunnerEnabled: true });
+    try {
+      h.fake.faults.add({
+        match: { path: CICD_PROBE_PATH },
+        mode: { kind: "http-error", status: 403, message: "denied" },
+      });
+      const probed = await h.probe.reachApi(CICD_PROBE_PATH);
+      assert.deepEqual(probed, {
+        outcome: "denied",
+        status: 403,
+        detail: `${CICD_PROBE_PATH} refused (403)`,
+      });
+    } finally {
+      h.restore();
+    }
+  });
+
+  it("keeps any other status undecided, with the status and the message", async () => {
+    const h = withFake({ atfRunnerEnabled: true });
+    try {
+      h.fake.faults.add({
+        match: { path: CICD_PROBE_PATH },
+        mode: { kind: "http-error", status: 500, message: "internal error" },
+      });
+      h.fake.faults.add({
+        match: { table: "sys_atf_step" },
+        mode: { kind: "http-error", status: 500, message: "internal error" },
+      });
+
+      const api = await h.probe.reachApi(CICD_PROBE_PATH);
+      const table = await h.probe.readTable("sys_atf_step");
+
+      for (const [label, probed, subject] of [
+        ["reachApi", api, CICD_PROBE_PATH],
+        ["readTable", table, "sys_atf_step"],
+      ]) {
+        assert.equal(probed.outcome, "undecidable", label);
+        assert.equal(probed.status, 500, label);
+        assert.ok(probed.detail.startsWith(`${subject}: `), label);
+        assert.match(probed.detail, /internal error/, label);
+      }
+    } finally {
+      h.restore();
+    }
+  });
+});
+
 describe("sn-client probe — the ATF tables", () => {
   it("is ready but says what a read-only probe cannot prove", async () => {
     const h = withFake({ atfRunnerEnabled: true });
