@@ -194,6 +194,85 @@ describe("loadCatalog — refuses", () => {
   });
 });
 
+describe("loadCatalog — refuses malformed shapes", () => {
+  test("a bad header is refused before any entry is read", () => {
+    assert.deepEqual(refused({ fixture: "yes", mutants: {}, baselines: 1 }), [
+      "catalogVersion must be a non-empty string",
+      "fixture must be a boolean when present",
+      "mutants must be an array",
+      "baselines must be an array",
+    ]);
+    const blankVersion = buildFixtureCatalog();
+    blankVersion.catalogVersion = "  ";
+    assert.deepEqual(refused(blankVersion), [
+      "catalogVersion must be a non-empty string",
+    ]);
+  });
+
+  test("a non-object entry or a blank id is named by its index", () => {
+    const raw = buildFixtureCatalog();
+    raw.mutants[0] = null;
+    raw.baselines[0] = "fx-b-0";
+    raw.mutants[1].id = "";
+    raw.baselines[1].id = 7;
+    const problems = refused(raw);
+    assert.ok(problems.includes("mutants[0]: not an object"));
+    assert.ok(problems.includes("baselines[0]: not an object"));
+    assert.ok(problems.includes("mutants[1]: id must be a non-empty string"));
+    assert.ok(problems.includes("baselines[1]: id must be a non-empty string"));
+  });
+
+  test("an artifact that is not { table, sysId, name } of strings", () => {
+    const raw = buildFixtureCatalog();
+    raw.mutants[0].baseArtifact = { table: "sys_script", sysId: "a" };
+    raw.baselines[0].artifact = "sys_script_include";
+    const problems = refused(raw).join("\n");
+    assert.match(
+      problems,
+      /mutant "fx-m-business-rule-0": artifact must be \{ table, sysId, name \}/,
+    );
+    assert.match(problems, /baseline "fx-b-0": artifact must be/);
+  });
+
+  test("a baseline category is optional but must be known", () => {
+    const tagged = buildFixtureCatalog();
+    tagged.baselines[0].category = "acl";
+    const catalog = load(tagged);
+    assert.equal(catalog.baselines[0].category, "acl");
+    assert.equal("category" in catalog.baselines[1], false);
+    const unknown = buildFixtureCatalog();
+    unknown.baselines[0].category = "not-a-category";
+    assert.match(
+      refused(unknown).join("\n"),
+      /baseline "fx-b-0": category must be one of .* when present/,
+    );
+  });
+
+  test("a detonator with a blank diff", () => {
+    const raw = buildFixtureCatalog();
+    raw.baselines[2].detonator.diff = "";
+    assert.deepEqual(refused(raw), [
+      'baseline "fx-b-2": detonator diff must be a non-empty string',
+    ]);
+  });
+
+  test("two baselines on one target, or with one detonator", () => {
+    const sameTarget = buildFixtureCatalog();
+    sameTarget.baselines[1].artifact = { ...sameTarget.baselines[0].artifact };
+    sameTarget.baselines[1].behaviour = sameTarget.baselines[0].behaviour;
+    assert.match(
+      refused(sameTarget).join("\n"),
+      /baseline "fx-b-1": same artifact×behaviour target as baseline "fx-b-0" — baselines must be independent/,
+    );
+    const sameDetonator = buildFixtureCatalog();
+    sameDetonator.baselines[1].detonator.diff =
+      sameDetonator.baselines[0].detonator.diff;
+    assert.deepEqual(refused(sameDetonator), [
+      'baseline "fx-b-1": identical detonator to baseline "fx-b-0"',
+    ]);
+  });
+});
+
 describe("no default catalog", () => {
   test("a path is required and the file is validated", async () => {
     await assert.rejects(
