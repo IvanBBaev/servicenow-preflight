@@ -15,7 +15,10 @@ as long as you follow the flow below — no back-fix needed.
 ## The release flow
 
 1. Land every change (including any `package.json` metadata edits) on `main`
-   through a PR, and make sure CI is green on `main`.
+   through a PR, and make sure CI is green on `main`. Optionally, with Docker
+   available, run `npm run smoke:sdist:container`: it builds a clean checkout of
+   `HEAD` in `node:20`/`node:22` Linux containers and runs the SDIST smoke
+   (pack, offline install, `tess doctor`, `tessera-mcp`) with the network off.
 2. From an up-to-date `main` working copy, bump the version, commit, and tag in
    one atomic step with `npm version`:
 

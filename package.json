@@ -67,7 +67,8 @@
     "prepublishOnly": "npm run check",
     "stage:tessera": "node scripts/stage-tessera.mjs",
     "prepack": "node scripts/stage-tessera.mjs",
-    "smoke:sdist": "node scripts/sdist-smoke.mjs"
+    "smoke:sdist": "node scripts/sdist-smoke.mjs",
+    "smoke:sdist:container": "node scripts/sdist-container.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
