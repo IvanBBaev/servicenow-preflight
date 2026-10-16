@@ -112,6 +112,9 @@ const BUILD_SCRIPT = [
 async function runOne(node, commit, keep) {
   const image = `node:${node}-bookworm-slim`;
   const volume = `snpf-sdist-${node}-${randomBytes(4).toString("hex")}`;
+  // Named, so a timed-out `docker run` (killing the client does not stop the
+  // container) can still be removed before its volume.
+  const containers = [`${volume}-build`, `${volume}-smoke`];
   const entry = { node, image, ok: false };
   const started = Date.now();
   try {
@@ -131,6 +134,8 @@ async function runOne(node, commit, keep) {
       [
         "run",
         "--rm",
+        "--name",
+        containers[0],
         "-i",
         "-v",
         `${volume}:/work`,
@@ -164,6 +169,8 @@ async function runOne(node, commit, keep) {
       [
         "run",
         "--rm",
+        "--name",
+        containers[1],
         "--network",
         "none",
         "-v",
@@ -195,7 +202,10 @@ async function runOne(node, commit, keep) {
   } finally {
     entry.ms = Date.now() - started;
     if (keep) log(`kept volume ${volume}`);
-    else await runProcess("docker", ["volume", "rm", "-f", volume]);
+    else {
+      await runProcess("docker", ["rm", "-f", ...containers]);
+      await runProcess("docker", ["volume", "rm", "-f", volume]);
+    }
     log(`node ${node}: ${entry.ok ? "ok" : "FAILED"} (${entry.ms} ms)`);
   }
 }
