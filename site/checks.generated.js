@@ -225,5 +225,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "eval, new Function, client GlideRecord or GlideScopedEvaluator.evaluateScript found, or a script table read was security-trimmed.",
     "warn": "No scope set, or an ambiguous zero-row read.",
     "pass": "No unsafe dynamic code or client GlideRecord in any in-scope script, or the scope ships none."
+  },
+  {
+    "code": "26",
+    "name": "property-privacy",
+    "tag": "scope",
+    "desc": "Every password-typed system property in scope is private (kept out of update sets and clones); a secret-like name with a plain type is flagged.",
+    "fail": "A password-typed property is not private, or the read was security-trimmed to nothing.",
+    "warn": "A secret-like property name uses a non-password type, or no scope set.",
+    "pass": "Every property in scope is private when password-typed, or the scope ships none."
   }
 ];

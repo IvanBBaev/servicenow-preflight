@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`property-privacy` check** — adjacent to rule 1.7 (blocker): every
+  active, password-typed `sys_properties` row in scope must be private
+  (`is_private`), otherwise its value is exported in update sets and copied
+  on clone → **fail**; a property whose name looks like a secret but uses a
+  non-password type → **warn**. Only names and types are read, never values.
 - **`CODE_OF_CONDUCT.md`** — the Contributor Covenant 2.1, verbatim; conduct
   reports go to the maintainer via GitHub (no e-mail address). Linked from the
   README next to `SECURITY.md` and `CONTRIBUTING.md`.

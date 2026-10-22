@@ -50,6 +50,7 @@ export const RULE_TITLES: Readonly<Record<string, string>> = {
   "1.3": "Scripted REST resources require Authentication + REST_Endpoint ACLs",
   "1.4": "No script-type columns exposed to non-admins",
   "1.6": "No ACLs shipped onto out-of-scope / OOB tables",
+  "1.7": "No hard-coded secrets in artifacts",
   "2.1": "UI Actions are gated by a condition and/or Required Roles",
   "2.2": "UI Pages have read ACLs",
   "2.6": "Service Portal widgets & pages have roles",
