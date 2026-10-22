@@ -13,28 +13,28 @@ bins.
 Exactly one of them is a composition root; every other package takes its
 collaborators as arguments and names none of them (ARCH-1).
 
-| Package                  | Role                                                                                            |
-| ------------------------ | ----------------------------------------------------------------------------------------------- |
-| `@tessera/cli`           | **The composition root** — argv, config, role binding, wiring, exit codes. Ships `tess`         |
-| `@tessera/mcp`           | The read-only MCP surface (tools only, DR-6) — turns a `tools/call` into a `tess` run           |
-| `@tessera/types`         | Shared wire types: verdicts, checklist rows, test events, artifact refs                         |
-| `@tessera/core`          | Pipeline ports (stage interfaces), engine, and the pure verdict reducer                         |
-| `@tessera/config`        | One resolved value set per run: flag > env > `tessera.config.json` > default, with provenance   |
-| `@tessera/resolvers`     | ARCH-5 "what changed?" — story and scope adapters, unioned and de-duplicated by the composite   |
-| `@tessera/impact`        | ARCH-15 "what does it touch?" — textual where-used scan, graph builder, declared-intent join    |
-| `@tessera/specs`         | The tests-as-code registry read off disk; the spec↔artifact link is declared, never inferred    |
-| `@tessera/generate`      | The AI TestGenerator — prompt fencing, the lexical code gate, the quality bar, `proposed/` only |
-| `@tessera/runner-atf`    | The ATF adapter — triggers a suite, polls it under a bound deadline, normalises the results     |
-| `@tessera/reporter`      | Rendering only — console, `--json` and JUnit views of a run that has already been decided       |
-| `@tessera/doctor`        | EnvironmentDoctor — three-state readiness over a declared precondition catalogue, read-only     |
-| `@tessera/parity`        | ARCH-20 code-version parity: does the runner carry what the source was tested at?               |
-| `@tessera/provisioner`   | Turns not-ready findings into an inspectable plan, and applies it only when asked (ARCH-2)      |
-| `@tessera/guard`         | TargetGuard — the fail-closed §11 write-side control on the single mutation channel             |
-| `@tessera/ledger`        | Write-ahead intent ledger (intend → write → confirm), run lifecycle, audit log                  |
-| `@tessera/sn-client`     | ServiceNow REST client — transport, auth, write journal, typed API modules (vendored, MIT)      |
-| `@tessera/store`         | Local projection store helpers and the collaboration lock (vendored)                            |
-| `@tessera/fake-instance` | Stateful in-memory fake instance with injectable faults — what the Tier-2 suites run against    |
-| `@tessera/phase05`       | The frozen Phase-0.5 walking-skeleton adapters, kept only behind `tess run --skeleton`          |
+| Package                  | Role                                                                                                                             |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `@tessera/cli`           | **The composition root** — argv, config, role binding, wiring, exit codes. Ships `tess`                                          |
+| `@tessera/mcp`           | The read-only MCP surface (tools only, DR-6) — turns a `tools/call` into a `tess` run                                            |
+| `@tessera/types`         | Shared wire types: verdicts, checklist rows, test events, artifact refs                                                          |
+| `@tessera/core`          | Pipeline ports (stage interfaces), engine, and the pure verdict reducer                                                          |
+| `@tessera/config`        | One resolved value set per run: flag > env > `tessera.config.json` > default, with provenance                                    |
+| `@tessera/resolvers`     | ARCH-5 "what changed?" — story and scope adapters, unioned and de-duplicated by the composite                                    |
+| `@tessera/impact`        | ARCH-15 "what does it touch?" — textual where-used scan, graph builder, declared-intent join                                     |
+| `@tessera/specs`         | The tests-as-code registry read off disk; the spec↔artifact link is declared, never inferred                                     |
+| `@tessera/generate`      | The AI TestGenerator — prompt fencing, the two-layer TM-3 code gate (AST allowlist + lexical), the quality bar, `proposed/` only |
+| `@tessera/runner-atf`    | The ATF adapter — triggers a suite, polls it under a bound deadline, normalises the results                                      |
+| `@tessera/reporter`      | Rendering only — console, `--json` and JUnit views of a run that has already been decided                                        |
+| `@tessera/doctor`        | EnvironmentDoctor — three-state readiness over a declared precondition catalogue, read-only                                      |
+| `@tessera/parity`        | ARCH-20 code-version parity: does the runner carry what the source was tested at?                                                |
+| `@tessera/provisioner`   | Turns not-ready findings into an inspectable plan, and applies it only when asked (ARCH-2)                                       |
+| `@tessera/guard`         | TargetGuard — the fail-closed §11 write-side control on the single mutation channel                                              |
+| `@tessera/ledger`        | Write-ahead intent ledger (intend → write → confirm), run lifecycle, audit log                                                   |
+| `@tessera/sn-client`     | ServiceNow REST client — transport, auth, write journal, typed API modules (vendored, MIT)                                       |
+| `@tessera/store`         | Local projection store helpers and the collaboration lock (vendored)                                                             |
+| `@tessera/fake-instance` | Stateful in-memory fake instance with injectable faults — what the Tier-2 suites run against                                     |
+| `@tessera/phase05`       | The frozen Phase-0.5 walking-skeleton adapters, kept only behind `tess run --skeleton`                                           |
 
 All packages are `private: true` — internal names, never published. Vendored
 code keeps its provenance in a per-package `VENDORED.md`.

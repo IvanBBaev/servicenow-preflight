@@ -23,6 +23,7 @@
     "@tessera/core": "*",
     "@tessera/impact": "*",
     "@tessera/specs": "*",
-    "@tessera/types": "*"
+    "@tessera/types": "*",
+    "acorn": "8.18.0"
   }
 }

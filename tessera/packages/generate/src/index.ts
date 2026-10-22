@@ -69,11 +69,17 @@ export {
 export {
   GATE_CATEGORIES,
   MAX_GATED_SOURCE_CHARS,
+  createAtfServerScriptGate,
   createGeneratedCodeGate,
   gateRuleNames,
+  inspectAtfServerScript,
   inspectGeneratedSource,
 } from "./gate.js";
 export type {
+  AtfServerScriptGate,
+  AtfServerScriptGateOptions,
+  AtfServerScriptVerdict,
+  AtfServerScriptViolation,
   ClearedSource,
   GateCategory,
   GateClearance,
@@ -82,6 +88,17 @@ export type {
   GateViolation,
   GeneratedCodeGate,
 } from "./gate.js";
+export {
+  AST_ALLOWLIST,
+  AST_RULE_DETAILS,
+  astGateRuleNames,
+} from "./astGate.js";
+export type {
+  AstGateCategory,
+  AstGateOptions,
+  AstGateRuleName,
+  AstGateViolation,
+} from "./astGate.js";
 
 export {
   DEFAULT_GENERATION_DEADLINE_MS,

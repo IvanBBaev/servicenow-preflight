@@ -257,6 +257,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check is exported as `resolveAnthropicBaseUrl`. A response body that is not
   JSON now faults without a `cause`, so the parser's error, which quotes the
   body, cannot reach a log.
+- **Tessera TM-3 gate: AST allowlist layer** (`@tessera/generate`, PA-10) —
+  `inspectAtfServerScript` / `createAtfServerScriptGate` hold an ATF server
+  script to two layers: an ES5 parse (acorn 8.18.0) checked against a data
+  allowlist (layer 1), then the existing lexical deny-list (layer 2); both must
+  pass. Layer 1 fails closed on an unparseable body, a call or construction
+  outside the allowlist, a computed member, `eval` / `Function` / `with` /
+  `this` / `arguments`, a non-ASCII identifier, an aliased function value, a
+  non-literal table name and any redeclared allowlisted name. Allowed:
+  GlideRecord / GlideAggregate reads, the ATF assertion helpers, `gs.info` /
+  `gs.debug`, and construction of the caller-declared Script Include targets.
+  DML, `setWorkflow` / `autoSysFields`, other Script Includes,
+  `GlideSysAttachment`, `RESTMessageV2`, `GlideHTTPRequest` and
+  `gs.eventQueue` are refused. Findings reuse the lexical gate's
+  `{rule, category, line, detail}` shape and never echo the source. The
+  bundled Tessera tree now vendors `acorn` at exactly 8.18.0; the staging
+  script refuses any other third-party package, a range, a different installed
+  version or a vendored package with dependencies of its own.
 - The encoded-query builder rejects operator injection and validates the field
   and value charset; scope is resolved once per run.
 - The Table API client detects response security-trimming via `X-Total-Count`

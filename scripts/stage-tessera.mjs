@@ -22,6 +22,15 @@
 // Only `package.json` (scripts and devDependencies stripped), `build/` (minus
 // source maps, whose `src/` targets are not shipped) and `bin/` are copied.
 //
+// Third-party runtime dependencies (PA-10, 2026-10-22): refused, EXCEPT the
+// entries of `VETTED_THIRD_PARTY` — each pinned to one exact version and
+// required to have no dependencies of its own. A vetted package is copied
+// from the Tessera install (`<from>/packages/<pkg>/node_modules/<dep>` or
+// `<from>/node_modules/<dep>`) into the staged `node_modules/`, and the run
+// fails if it is missing, at another version, declared with a range, or has
+// grown a dependency. The only entry is acorn, the ES5 parser behind the TM-3
+// gate's AST allowlist layer (`@tessera/generate`).
+//
 // Fail-closed (delegated decision 2026-09-26, W6b review):
 //   * No `--if-present` skip. It let `prepack` print "nothing staged" and pack
 //     a tarball whose `tess`/`tessera-mcp` bins point at a tree that is not in
@@ -114,6 +123,15 @@ const ENTRY_PACKAGES = ["@tessera/cli", "@tessera/mcp"];
 /** Packages that must never ship inside the published tarball. */
 const EXCLUDED_PACKAGES = ["@tessera/store", "@tessera/fake-instance"];
 
+/**
+ * Third-party runtime dependencies that may be staged, each at exactly this
+ * version. Adding one is a supply-chain decision: it ships in the tarball.
+ */
+const VETTED_THIRD_PARTY = {
+  // ES5 parser for the TM-3 AST allowlist gate; MIT, zero dependencies.
+  acorn: "8.18.0",
+};
+
 /** A staging refusal; caught at the top level (exit 1) after cleanup ran. */
 class StageError extends Error {}
 
@@ -154,9 +172,13 @@ function readWorkspace(from) {
   return byName;
 }
 
-/** Every package reachable from the entries through runtime `dependencies`. */
+/**
+ * Every package reachable from the entries through runtime `dependencies`,
+ * plus the vetted third-party packages they need (name -> requiring dirs).
+ */
 function releaseClosure(byName) {
   const closure = new Set();
+  const vendored = new Map();
   const queue = [...ENTRY_PACKAGES];
   while (queue.length > 0) {
     const name = queue.shift();
@@ -164,7 +186,18 @@ function releaseClosure(byName) {
     const pkg = byName.get(name);
     if (!pkg) fail(`${name} is required but not in the workspace`);
     closure.add(name);
-    for (const dep of Object.keys(pkg.manifest.dependencies ?? {})) {
+    for (const [dep, spec] of Object.entries(pkg.manifest.dependencies ?? {})) {
+      if (Object.hasOwn(VETTED_THIRD_PARTY, dep)) {
+        if (spec !== VETTED_THIRD_PARTY[dep]) {
+          fail(
+            `${name} depends on "${dep}" at "${spec}"; the vetted version is ` +
+              `exactly "${VETTED_THIRD_PARTY[dep]}"`,
+          );
+        }
+        if (!vendored.has(dep)) vendored.set(dep, []);
+        vendored.get(dep).push(pkg.dir);
+        continue;
+      }
       if (!dep.startsWith("@tessera/")) {
         fail(
           `${name} depends on "${dep}"; only @tessera/* runtime dependencies ` +
@@ -180,7 +213,36 @@ function releaseClosure(byName) {
       fail(`${excluded} is in the runtime closure and must not ship`);
     }
   }
-  return [...closure].sort();
+  return { closure: [...closure].sort(), vendored };
+}
+
+/** Copy one vetted third-party package into the staged `node_modules/`. */
+function stageVendored(name, requiredBy, from, outModules) {
+  const candidates = [
+    ...requiredBy.map((dir) => join(dir, "node_modules", name)),
+    join(from, "node_modules", name),
+  ];
+  const source = candidates.find((dir) =>
+    existsSync(join(dir, "package.json")),
+  );
+  if (!source)
+    fail(`vetted dependency "${name}" is not installed under ${from}`);
+  const manifest = JSON.parse(
+    readFileSync(join(source, "package.json"), "utf8"),
+  );
+  if (manifest.name !== name || manifest.version !== VETTED_THIRD_PARTY[name]) {
+    fail(
+      `vetted dependency "${name}" is installed at ${manifest.version}; ` +
+        `exactly ${VETTED_THIRD_PARTY[name]} is vetted`,
+    );
+  }
+  if (Object.keys(manifest.dependencies ?? {}).length > 0) {
+    fail(`vetted dependency "${name}" has dependencies of its own`);
+  }
+  cpSync(source, join(outModules, name), {
+    recursive: true,
+    filter: (src) => !src.endsWith(".map") && basename(src) !== "node_modules",
+  });
 }
 
 function stagePackage(pkg, outModules) {
@@ -430,7 +492,7 @@ function verifyStaged(out, shownAs = out) {
  * half-built or unverified tree where `npm pack` would ship it — the temp dir
  * is removed in `finally`, and `out` is only touched after verification.
  */
-function stageInto(out, byName, closure) {
+function stageInto(out, byName, { closure, vendored }, from) {
   sweepLeftovers(out);
   const tmp = `${out}${TMP_INFIX}${process.pid}`;
   const old = `${out}${OLD_INFIX}${process.pid}`;
@@ -439,6 +501,9 @@ function stageInto(out, byName, closure) {
     mkdirSync(tmp, { recursive: true });
     const outModules = join(tmp, "node_modules");
     for (const name of closure) stagePackage(byName.get(name), outModules);
+    for (const [name, requiredBy] of vendored) {
+      stageVendored(name, requiredBy, from, outModules);
+    }
     const verified = verifyStaged(tmp, out);
     // Sealed before the swap, so `out` never holds an unmarked staged tree.
     writeMarker(tmp);
@@ -463,10 +528,13 @@ function main() {
   if (!existsSync(opts.from)) fail(`${opts.from} does not exist`);
   guardOut(opts.out);
   const byName = readWorkspace(opts.from);
-  const closure = releaseClosure(byName);
-  const verified = stageInto(opts.out, byName, closure);
+  const plan = releaseClosure(byName);
+  const verified = stageInto(opts.out, byName, plan, opts.from);
+  const { closure, vendored } = plan;
+  const thirdParty = [...vendored.keys()].sort();
   console.error(
     `stage-tessera: staged ${closure.length} packages into ${opts.out}: ${closure.join(", ")}; ` +
+      `vetted third-party: ${thirdParty.length > 0 ? thirdParty.join(", ") : "(none)"}; ` +
       `verified bins: ${verified.length > 0 ? verified.join(", ") : "(none declared)"}`,
   );
 }

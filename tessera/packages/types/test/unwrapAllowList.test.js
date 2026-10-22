@@ -58,6 +58,10 @@ const ALLOWED_UNWRAPS = [
   // unwrapped only as `verdict.cleared.source`, after the TM-3 gate passed it,
   // to become the ATF step script the store projects — the writer.ts pattern.
   "cli/src/liveSpecs.ts PROJECTION_BOUNDARY",
+  // PA-10: the two-layer ATF server-script gate unwraps once to hand the text
+  // to acorn (layer 1); the body is parsed, never evaluated, and only rule
+  // names and constant details leave the gate.
+  "generate/src/gate.ts ATF_GATE_BOUNDARY",
   "generate/src/gate.ts GATE_BOUNDARY",
   "generate/src/prompt.ts PROMPT_BOUNDARY",
   "generate/src/provider.ts PARSE_BOUNDARY",
@@ -166,7 +170,7 @@ describe("TM-1 unwrap call-site allow-list", () => {
   // with the removal in a `finally`.
   const cases = [
     [
-      "an undeclared eighth call site",
+      "an undeclared extra call site",
       'import { unwrapUntrusted } from "@tessera/types";\nconst ROGUE_BOUNDARY = "x";\nexport const f = (v) => unwrapUntrusted(v, ROGUE_BOUNDARY);\n',
       /differ from ALLOWED_UNWRAPS/,
     ],
@@ -185,14 +189,24 @@ describe("TM-1 unwrap call-site allow-list", () => {
     it(`fails on ${label}`, () => {
       const root = mkdtempSync(join(tmpdir(), "tessera-unwrap-"));
       try {
-        // Mirror the real call sites so only the rogue file differs.
+        // Mirror the real call sites so only the rogue file differs. One file
+        // may hold several call sites (gate.ts holds two), so group by file.
+        const byFile = new Map();
         for (const line of ALLOWED_UNWRAPS) {
           const [file, boundary] = line.split(" ");
+          byFile.set(file, [...(byFile.get(file) ?? []), boundary]);
+        }
+        for (const [file, boundaries] of byFile) {
           const path = join(root, ...file.split("/"));
           mkdirSync(join(path, ".."), { recursive: true });
           writeFileSync(
             path,
-            `const ${boundary} = "b";\nexport const f = (v) => unwrapUntrusted(v, ${boundary});\n`,
+            boundaries
+              .map(
+                (boundary, i) =>
+                  `const ${boundary} = "b";\nexport const f${i} = (v) => unwrapUntrusted(v, ${boundary});\n`,
+              )
+              .join(""),
           );
         }
         assertAllowed(root); // the mirror alone is clean

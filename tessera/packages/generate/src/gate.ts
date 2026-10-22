@@ -77,9 +77,19 @@
 //   construct Rhino accepts that this lexer does not model. These are the
 //   "shape the gate has not thought of" above.
 //
-// Raising this to a real guarantee means an AST for the ES5/Rhino dialect plus
-// an allowlist of permitted call targets — a different piece of work, owned and
-// versioned. Until that exists, do not describe this file as one.
+// The AST allowlist that the paragraph above called "a different piece of work"
+// now exists as LAYER 1 in `./astGate.ts` (PA-10). `inspectAtfServerScript`
+// below runs it in front of this file for every body written into an ATF "Run
+// Server Side Script" step — repo `unit` specs on the live path included — and
+// admits a body only when BOTH layers pass. Two limits stay true:
+//   * `inspectGeneratedSource` (this file alone) is still lexical only. It is
+//     the generator's gate, and the generator also gates e2e YAML and template
+//     output that is not an ES5 step body; those keep exactly the guarantee
+//     described above.
+//   * The AST layer is an allowlist over a syntax tree, not a sandbox: it does
+//     not bound what an admitted target Script Include method does. Its own
+//     header lists what it does not cover.
+// Do not describe this file alone as more than a deny-list.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // FAIL-CLOSED. Anything the lexer cannot confidently account for is a rejection
@@ -105,6 +115,9 @@ import { LEX_CODE, LEX_COMMENT, LEX_STRING, lexScript } from "@tessera/impact";
 import type { ScriptLexResult } from "@tessera/impact";
 import { unwrapUntrusted } from "@tessera/types";
 import type { Untrusted } from "@tessera/types";
+
+import { inspectAstAllowlist } from "./astGate.js";
+import type { AstGateOptions, AstGateViolation } from "./astGate.js";
 
 /**
  * The unwrap boundary, phrased as the claim the rest of the file keeps true.
@@ -1422,4 +1435,60 @@ export function gateRuleNames(): readonly GateRuleName[] {
   const structuralRules = Object.keys(STRUCTURAL_DETAILS) as GateRuleName[];
   const denyRules = DENY_TABLE.map(([name]) => name);
   return [...denyRules, ...structuralRules].sort();
+}
+
+/** A finding from either layer of the ATF server-script gate. */
+export type AtfServerScriptViolation = GateViolation | AstGateViolation;
+
+export type AtfServerScriptVerdict =
+  | { readonly ok: true; readonly cleared: ClearedSource }
+  | {
+      readonly ok: false;
+      readonly violations: readonly AtfServerScriptViolation[];
+    };
+
+/** Options for the layered gate; see `AstGateOptions`. */
+export type AtfServerScriptGateOptions = AstGateOptions;
+
+export interface AtfServerScriptGate {
+  inspect(source: Untrusted<string>): AtfServerScriptVerdict;
+}
+
+const ATF_GATE_BOUNDARY =
+  "TM-3 gate, layer 1 — an ATF server-script body is parsed as ES5 and walked against the allowlist; it is never evaluated, and no slice of it leaves the gate (TM-1/TM-3)";
+
+/**
+ * The TM-3 gate for a body written into an ATF "Run Server Side Script" step:
+ * layer 1 is the AST allowlist (`./astGate.ts`), layer 2 is the lexical
+ * deny-list (`inspectGeneratedSource`). Both always run — a layer-1 rejection
+ * does not skip layer 2 — and the body is cleared only when neither reports.
+ * Violations list layer 1's first, then layer 2's, each in its own order.
+ *
+ * `targetClassNames` are the Script Include classes the spec declares as its
+ * targets; only those (and the read-only Glide classes) are constructible.
+ */
+export function inspectAtfServerScript(
+  source: Untrusted<string>,
+  options: AtfServerScriptGateOptions = {},
+): AtfServerScriptVerdict {
+  const text = unwrapUntrusted(source, ATF_GATE_BOUNDARY);
+  // Blank and oversize are layer 2's to report; parsing 20k+ characters of an
+  // untrusted body is work the size cap exists to avoid.
+  const astViolations =
+    text.trim() === "" || text.length > MAX_GATED_SOURCE_CHARS
+      ? []
+      : inspectAstAllowlist(text, options);
+  const lexical = inspectGeneratedSource(source);
+  if (astViolations.length === 0 && lexical.ok) return lexical;
+  return {
+    ok: false,
+    violations: [...astViolations, ...(lexical.ok ? [] : lexical.violations)],
+  };
+}
+
+/** The layered gate as a port, like `createGeneratedCodeGate`. */
+export function createAtfServerScriptGate(
+  options: AtfServerScriptGateOptions = {},
+): AtfServerScriptGate {
+  return { inspect: (source) => inspectAtfServerScript(source, options) };
 }

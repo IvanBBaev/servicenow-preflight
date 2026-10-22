@@ -690,7 +690,11 @@ file; `npm run check` runs `gen:site -- --check` and fails when it is stale.
   file, never logged, never included in error messages.
 - Checks are **read-mostly**: the only write is _running_ the ATF suites you
   explicitly configure via `options.atfSuites`.
-- Zero runtime dependencies — the entire supply chain is this package plus Node.
+- No npm runtime dependencies — the preflight CLI and library are this package
+  plus Node. The bundled Tessera tree (`build/tessera/`) vendors exactly one
+  third-party package, `acorn` pinned at 8.18.0 (MIT, no dependencies), the ES5
+  parser behind the TM-3 gate's AST allowlist layer; the staging script refuses
+  any other third-party package or version.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md). Contributions:
 [CONTRIBUTING.md](CONTRIBUTING.md).

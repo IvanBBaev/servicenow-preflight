@@ -188,6 +188,73 @@ test("stage-tessera refuses a third-party runtime dependency", () => {
   });
 });
 
+/** A synthetic installed copy of a third-party package under the workspace. */
+function writeInstalled(ws, name, manifest) {
+  const dir = join(ws, "node_modules", name);
+  mkdirSync(join(dir, "dist"), { recursive: true });
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({ name, version: "0.0.0", ...manifest }),
+  );
+  writeFileSync(join(dir, "dist", "index.js"), "export {};\n");
+  writeFileSync(join(dir, "dist", "index.js.map"), "{}");
+  writeFileSync(join(dir, "LICENSE"), "MIT\n");
+}
+
+test("stage-tessera stages the vetted acorn at its pinned version", () => {
+  withRoot(({ root, ws, out }) => {
+    writePackage(ws, "types", { dependencies: { acorn: "8.18.0" } });
+    writeInstalled(ws, "acorn", { version: "8.18.0" });
+    const res = stage(root);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stderr, /vetted third-party: acorn/);
+    const staged = join(out, "node_modules", "acorn");
+    assert.equal(
+      JSON.parse(readFileSync(join(staged, "package.json"), "utf8")).version,
+      "8.18.0",
+    );
+    assert.ok(existsSync(join(staged, "dist", "index.js")));
+    assert.ok(existsSync(join(staged, "LICENSE")));
+    assert.equal(existsSync(join(staged, "dist", "index.js.map")), false);
+  });
+});
+
+test("stage-tessera refuses the vetted acorn declared with a range", () => {
+  withRoot(({ root, ws }) => {
+    writePackage(ws, "types", { dependencies: { acorn: "^8.18.0" } });
+    writeInstalled(ws, "acorn", { version: "8.18.0" });
+    const res = stage(root);
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /the vetted version is exactly "8\.18\.0"/);
+  });
+});
+
+test("stage-tessera refuses acorn installed at another version", () => {
+  withRoot(({ root, ws }) => {
+    writePackage(ws, "types", { dependencies: { acorn: "8.18.0" } });
+    writeInstalled(ws, "acorn", { version: "8.19.0" });
+    const res = stage(root);
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /installed at 8\.19\.0/);
+  });
+});
+
+test("stage-tessera refuses acorn that is missing or grew dependencies", () => {
+  withRoot(({ root, ws }) => {
+    writePackage(ws, "types", { dependencies: { acorn: "8.18.0" } });
+    let res = stage(root);
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /"acorn" is not installed/);
+    writeInstalled(ws, "acorn", {
+      version: "8.18.0",
+      dependencies: { leftpad: "1.0.0" },
+    });
+    res = stage(root);
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /has dependencies of its own/);
+  });
+});
+
 test("stage-tessera refuses an unbuilt package in the closure", () => {
   withRoot(({ root, ws }) => {
     rmSync(join(ws, "packages", "types", "build"), {
