@@ -156,6 +156,109 @@ test("formatMarkdownAll passes the title option through", () => {
   assert.match(md, /^### Gate — dev — ✅ passed$/m);
 });
 
+/** Minimal check stubs; only `name` and `meta` matter to the reporter. */
+const check = (name, remediation) => ({
+  name,
+  ...(remediation === undefined ? {} : { meta: { remediation } }),
+  run: () => ({ name, status: "pass", message: "ok" }),
+});
+
+test("formatMarkdown without checks renders no Fix lines", () => {
+  const md = formatMarkdown(summarize([fail("f"), warn("w")]));
+  assert.ok(!md.includes("Fix:"));
+  assert.ok(!md.includes("<sub>"));
+});
+
+test("formatMarkdown with checks adds a Fix line to fail and warn rows", () => {
+  const md = formatMarkdown(
+    summarize([fail("f", "broken"), warn("w")]),
+    "dev",
+    {
+      checks: [check("f", "Repair the ACL."), check("w", "Rotate the job.")],
+    },
+  );
+  assert.deepEqual(rows(md), [
+    "| ❌ | `f` | broken<br><sub>Fix: Repair the ACL.</sub> |",
+    "| ⚠️ | `w` | hm<br><sub>Fix: Rotate the job.</sub> |",
+  ]);
+});
+
+test("formatMarkdown gives a pass row no Fix line, even with remediation", () => {
+  const md = formatMarkdown(summarize([pass("p"), fail("f")]), undefined, {
+    checks: [check("p", "Never shown."), check("f", "Shown.")],
+  });
+  assert.deepEqual(rows(md), [
+    "| ❌ | `f` | bad<br><sub>Fix: Shown.</sub> |",
+    "| ✅ | `p` | ok |",
+  ]);
+  assert.ok(!md.includes("Never shown."));
+});
+
+test("formatMarkdown skips the Fix line for a check without meta.remediation or not in the list", () => {
+  const md = formatMarkdown(
+    summarize([fail("bare"), fail("absent")]),
+    undefined,
+    {
+      checks: [check("bare"), { name: "other", meta: {}, run: () => null }],
+    },
+  );
+  assert.deepEqual(rows(md), [
+    "| ❌ | `bare` | bad |",
+    "| ❌ | `absent` | bad |",
+  ]);
+});
+
+test("formatMarkdown adds the Fix line to folded-layout warn rows too", () => {
+  const results = [warn("w"), ...[1, 2, 3, 4, 5, 6].map((n) => pass(`p${n}`))];
+  const md = formatMarkdown(summarize(results), undefined, {
+    checks: [check("w", "Do it."), check("p1", "Hidden.")],
+  });
+  const [main, folded] = md.split("<details>");
+  assert.deepEqual(rows(main), ["| ⚠️ | `w` | hm<br><sub>Fix: Do it.</sub> |"]);
+  assert.ok(!folded.includes("Fix:"));
+});
+
+for (const [label, input, expected] of ESCAPES) {
+  test(`formatMarkdown escapes ${label} in remediation text`, () => {
+    const md = formatMarkdown(summarize([fail("chk", "m")]), undefined, {
+      checks: [check("chk", input)],
+    });
+    const body = rows(md);
+    assert.equal(body.length, 1, md);
+    assert.equal(
+      body[0],
+      `| ❌ | \`chk\` | m<br><sub>Fix: ${expected}</sub> |`,
+    );
+  });
+}
+
+test("formatMarkdownAll applies remediation hints in every instance block", () => {
+  const md = formatMarkdownAll(
+    [
+      { name: "dev", report: summarize([pass("a"), warn("b")]) },
+      { name: "prod", report: summarize([fail("a", "gone")]) },
+    ],
+    { checks: [check("a", "Fix a."), check("b", "Fix b.")] },
+  );
+  const [, dev, prod] = md.split("### ");
+  assert.deepEqual(rows(dev), [
+    "| ⚠️ | `b` | hm<br><sub>Fix: Fix b.</sub> |",
+    "| ✅ | `a` | ok |",
+  ]);
+  assert.deepEqual(rows(prod), [
+    "| ❌ | `a` | gone<br><sub>Fix: Fix a.</sub> |",
+  ]);
+  assert.match(md, /^\*\*dev\*\* ✅ · \*\*prod\*\* ❌\n/);
+});
+
+test("formatMarkdownAll without checks renders no Fix lines", () => {
+  const md = formatMarkdownAll([
+    { name: "dev", report: summarize([fail("a")]) },
+    { name: "prod", report: summarize([warn("b")]) },
+  ]);
+  assert.ok(!md.includes("Fix:"));
+});
+
 test("the Markdown formatters are part of the public API", () => {
   assert.equal(api.formatMarkdown, formatMarkdown);
   assert.equal(api.formatMarkdownAll, formatMarkdownAll);

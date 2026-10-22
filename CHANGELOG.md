@@ -59,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fail → warn → pass, more than five passes folded into `<details>`); `--all`
   adds a one-line roll-up and one block per instance. Exported as
   `formatMarkdown` / `formatMarkdownAll`.
+- **Markdown remediation hints** — `MarkdownOptions.checks`: when given, fail
+  and warn rows whose check has `meta.remediation` get a second line,
+  `<br><sub>Fix: …</sub>`, escaped like messages; pass rows never do. The CLI
+  passes the checks that ran, so `--format markdown` shows the hints.
 - **GitHub annotations** — `--format github` prints one `::error` (fail) or
   `::warning` (warn) workflow command per non-pass check, titled with the check
   and, under `--all`, the instance, followed by the plain summary line; inside a

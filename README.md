@@ -463,7 +463,8 @@ Selected with `--format` (or `--json`):
   a `###` heading with the instance and verdict, the bold summary, and a table
   ordered fail → warn → pass (more than five pass rows fold into `<details>`).
   Cell text is escaped (`|`, newlines, `<`/`>`, backticks), so a message cannot
-  break the table. With `--all`, a one-line roll-up (`**dev** ✅ · **prod** ❌`)
+  break the table. Fail and warn rows also carry the check's remediation hint on
+  a second line (`<br><sub>Fix: …</sub>`); pass rows do not. With `--all`, a one-line roll-up (`**dev** ✅ · **prod** ❌`)
   leads one block per instance.
 - **`github`** — GitHub Actions workflow commands: one `::error` (fail) or
   `::warning` (warn) line per non-`pass` check, titled with the check (and the

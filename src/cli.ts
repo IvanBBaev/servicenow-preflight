@@ -51,6 +51,7 @@ import {
   type Baseline,
 } from "./baseline.js";
 import type {
+  Check,
   CheckResult,
   CheckStatus,
   PreflightContext,
@@ -463,17 +464,31 @@ const STATUS_ICON: Record<CheckStatus, string> = {
 };
 
 /**
+ * The checks from `pool` that produced at least one of `reports`' results —
+ * what actually ran after `--only` / `--skip` / policy selection.
+ */
+function ranChecks(
+  pool: readonly Check[],
+  reports: readonly PreflightReport[],
+): Check[] {
+  const names = new Set(reports.flatMap((r) => r.results.map((x) => x.name)));
+  return pool.filter((c) => names.has(c.name));
+}
+
+/**
  * Render one report in the requested format to a string. `instance` names the
  * target in formats that show it (markdown, github); the others ignore it.
+ * `checks` are the checks that ran; markdown uses them for remediation hints.
  */
 function render(
   report: PreflightReport,
   format: OutputFormat,
   instance?: string,
+  checks?: readonly Check[],
 ): string {
   switch (format) {
     case "markdown":
-      return formatMarkdown(report, instance);
+      return formatMarkdown(report, instance, checks ? { checks } : undefined);
     case "github":
       return formatGitHubAnnotations(report, instance);
     case "json":
@@ -549,7 +564,11 @@ function renderSarifAll(reports: NamedReport[]): string {
 }
 
 /** Render an aggregate `--all` result across instances. */
-function renderAll(reports: NamedReport[], format: OutputFormat): string {
+function renderAll(
+  reports: NamedReport[],
+  format: OutputFormat,
+  checks?: readonly Check[],
+): string {
   const ok = reports.every((r) => r.report.ok);
   if (format === "json") {
     const instances: Record<string, PreflightReport> = {};
@@ -568,7 +587,7 @@ function renderAll(reports: NamedReport[], format: OutputFormat): string {
   }
   if (format === "markdown") {
     // One Markdown document: a roll-up line, then a block per instance.
-    return formatMarkdownAll(reports);
+    return formatMarkdownAll(reports, checks ? { checks } : undefined);
   }
   if (format === "github") {
     // Every instance's annotations, then a summary line per instance.
@@ -840,7 +859,14 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
   if (!args.all && targets.length === 1 && firstTarget && !firstTarget.name) {
     // Single-instance: preserve the original single-report output exactly.
     const report = await runOneInstance(firstTarget, args, cwd);
-    process.stdout.write(render(report, args.format));
+    process.stdout.write(
+      render(
+        report,
+        args.format,
+        undefined,
+        ranChecks(defaultChecks, [report]),
+      ),
+    );
     process.exitCode = report.ok ? 0 : 1;
     return;
   }
@@ -851,13 +877,17 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
     reports.push({ name: target.name ?? "instance", report });
   }
 
+  const ran = ranChecks(
+    defaultChecks,
+    reports.map((r) => r.report),
+  );
   const [firstReport] = reports;
   if (reports.length === 1 && firstReport) {
     process.stdout.write(
-      render(firstReport.report, args.format, firstReport.name),
+      render(firstReport.report, args.format, firstReport.name, ran),
     );
   } else {
-    process.stdout.write(renderAll(reports, args.format));
+    process.stdout.write(renderAll(reports, args.format, ran));
   }
   process.exitCode = reports.every((r) => r.report.ok) ? 0 : 1;
 }
@@ -989,7 +1019,9 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
   const extra = [order, ...stale, ...parity];
   const finalReport = extra.length > 0 ? mergeResults(report, extra) : report;
 
-  process.stdout.write(render(finalReport, args.format));
+  process.stdout.write(
+    render(finalReport, args.format, undefined, [testDrift]),
+  );
   process.exitCode = finalReport.ok ? 0 : 1;
 }
 

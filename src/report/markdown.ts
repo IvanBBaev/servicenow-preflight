@@ -1,4 +1,4 @@
-import type { CheckResult, PreflightReport } from "../types.js";
+import type { Check, CheckResult, PreflightReport } from "../types.js";
 import type { NamedReport } from "./junit.js";
 
 /** Options for the Markdown reporter. */
@@ -8,6 +8,27 @@ export interface MarkdownOptions {
    * the instance name and the verdict always follow it.
    */
   title?: string;
+  /**
+   * The checks that produced the report. When given, a fail or warn row whose
+   * check (matched by name) has `meta.remediation` gets a second line in its
+   * result cell: `<br><sub>Fix: …</sub>`. Pass rows never do. Omitted, no
+   * remediation hints are rendered.
+   */
+  checks?: readonly Check[];
+}
+
+/** Remediation text by check name; only checks that carry one are included. */
+type RemediationIndex = ReadonlyMap<string, string>;
+
+function remediationIndex(
+  checks: readonly Check[] | undefined,
+): RemediationIndex {
+  const index = new Map<string, string>();
+  for (const check of checks ?? []) {
+    const fix = check.meta?.remediation;
+    if (fix) index.set(check.name, fix);
+  }
+  return index;
 }
 
 /** Pass rows beyond this count are folded into a `<details>` element. */
@@ -47,11 +68,14 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-function table(rows: readonly CheckResult[]): string {
+function table(rows: readonly CheckResult[], fixes: RemediationIndex): string {
   const lines = ["| | Check | Result |", "|---|---|---|"];
   for (const r of rows) {
+    const fix = r.status === "pass" ? undefined : fixes.get(r.name);
+    const hint =
+      fix === undefined ? "" : `<br><sub>Fix: ${escapeMarkdownCell(fix)}</sub>`;
     lines.push(
-      `| ${icon(r.status)} | \`${escapeMarkdownCell(r.name)}\` | ${escapeMarkdownCell(r.message)} |`,
+      `| ${icon(r.status)} | \`${escapeMarkdownCell(r.name)}\` | ${escapeMarkdownCell(r.message)}${hint} |`,
     );
   }
   return lines.join("\n");
@@ -83,15 +107,16 @@ function block(
     .map((r, i) => ({ r, i }))
     .sort((a, b) => rank(a.r.status) - rank(b.r.status) || a.i - b.i)
     .map(({ r }) => r);
+  const fixes = remediationIndex(opts?.checks);
   const passes = sorted.filter((r) => r.status === "pass");
   const others = sorted.filter((r) => r.status !== "pass");
 
   if (passes.length <= PASS_FOLD_THRESHOLD) {
-    parts.push(table(sorted));
+    parts.push(table(sorted, fixes));
   } else {
-    if (others.length > 0) parts.push(table(others));
+    if (others.length > 0) parts.push(table(others, fixes));
     parts.push(
-      `<details><summary>${passes.length} passed</summary>\n\n${table(passes)}\n\n</details>`,
+      `<details><summary>${passes.length} passed</summary>\n\n${table(passes, fixes)}\n\n</details>`,
     );
   }
   return parts.join("\n\n");
@@ -100,7 +125,8 @@ function block(
 /**
  * Format a report as GitHub-flavoured Markdown, suitable for a pull-request
  * comment (`gh pr comment --body-file`). Rows are ordered fail → warn → pass;
- * more than five pass rows are folded into a `<details>` element.
+ * more than five pass rows are folded into a `<details>` element. With
+ * `opts.checks`, fail and warn rows also carry the check's remediation hint.
  */
 export function formatMarkdown(
   report: PreflightReport,

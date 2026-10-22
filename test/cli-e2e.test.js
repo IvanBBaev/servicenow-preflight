@@ -159,6 +159,20 @@ test("CLI --format markdown emits a Markdown table", () => {
   assert.match(res.stdout, /\| ✅ \| `instance-url-configured` \|/);
 });
 
+test("CLI --format markdown adds the ran check's remediation to a fail row", () => {
+  const res = runCli([
+    "--only",
+    "instance-url-configured",
+    "--format",
+    "markdown",
+  ]);
+  assert.equal(res.status, 1);
+  assert.match(
+    res.stdout,
+    /^\| ❌ \| `instance-url-configured` \| .*<br><sub>Fix: Pass --instance &lt;url&gt;, .*<\/sub> \|$/m,
+  );
+});
+
 test("CLI --format github prints annotations and the summary line", () => {
   const res = runCli([
     "--only",
