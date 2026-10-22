@@ -39,6 +39,36 @@ collaborators as arguments and names none of them (ARCH-1).
 All packages are `private: true` — internal names, never published. Vendored
 code keeps its provenance in a per-package `VENDORED.md`.
 
+## Which instances Tessera may write to
+
+Tessera writes only to the `--runner` instance, and only when `@tessera/guard`
+classifies that runner as `sub-prod`. Every instance gets one of four classes
+(`guard/src/types.ts` `INSTANCE_CLASSES`):
+
+| Class          | How an instance gets it                                                                                             | Writes                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `sub-prod`     | It is on the explicit non-prod allowlist (`--allow`) and no probe disagrees                                         | allowed                                      |
+| `prod-suspect` | It is allowlisted, but a §11.2 probe disagrees (for example `glide.installation.production` is not exactly `false`) | refused unless `--acknowledge-prod <reason>` |
+| `prod`         | It is declared production (`--prod`)                                                                                | refused; no flag lifts it                    |
+| `unknown`      | Anything not in the configuration                                                                                   | refused; no flag lifts it                    |
+
+The allowlist is the only source of writability. Name patterns and properties
+can only downgrade an instance, never clear one.
+
+Policy for operators:
+
+- Point `--runner` at a dedicated sub-production instance (a PDI or a
+  dev/test clone), never at production.
+- `--acknowledge-prod` exists for a genuinely non-production instance whose
+  properties are wrong. Do not use it to write to an instance that really is
+  production: fix the classification instead. The reason, the actor and the
+  evidence are journalled before the first write.
+- `--source` and `--target` are only ever read. Pointing them at production is
+  fine.
+- Importing the authoring-channel update set (the `x_tessera` scope and the
+  `x_tessera.author` role) changes the instance itself. Do it only on an
+  instance you are allowed to change, and with the instance owner's approval.
+
 ## Commands (run in this directory)
 
 ```sh
