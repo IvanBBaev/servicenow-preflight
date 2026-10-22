@@ -36,6 +36,8 @@ export {
   SPEC_MANIFEST_FILENAME,
   SPEC_MANIFEST_MAX_BYTES,
   SPEC_MANIFEST_VERSION,
+  SPEC_REVIEW_SHA256_PATTERN,
+  SPEC_REVIEWER_PATTERN,
 } from "./types.js";
 export type {
   InventoryNote,
@@ -44,4 +46,6 @@ export type {
   ReadInventoryOptions,
   SpecInventory,
   SpecManifest,
+  SpecReviewRead,
+  SpecReviewRecord,
 } from "./types.js";

@@ -68,7 +68,45 @@ export interface ManifestSpecEntry {
   readonly kind: TestKind;
   /** The QA-16 declaration: what this spec claims to exercise. */
   readonly targets: readonly TargetArtifactRef[];
+  /**
+   * The PA-10 (3) review record `tess review` writes once a human has read the
+   * body. Optional on the wire so a manifest written before it existed still
+   * reads; `tess run --live` refuses any unit spec without a valid one.
+   */
+  readonly review?: SpecReviewRecord;
 }
+
+/**
+ * Who read a spec body, and exactly which body they read (PA-10 fix 3).
+ *
+ * `bodySha256` is lowercase hex SHA-256 over the spec file's text exactly as
+ * `tess run --live` would project it: decoded as UTF-8 and hashed as UTF-8,
+ * with NO normalisation — no newline, BOM, whitespace or Unicode folding. The
+ * canonical form is the identity on purpose: the hash covers the bytes that
+ * execute, so any change a script engine could observe needs a new review.
+ *
+ * `reviewer` is the identity given by `--reviewer` on `tess review`. It is an
+ * attestation recorded in a reviewed diff, not an authentication.
+ */
+export interface SpecReviewRecord {
+  readonly bodySha256: string;
+  readonly reviewer: string;
+}
+
+/** A `review` field as read: a valid record, or why it is not one. */
+export type SpecReviewRead =
+  | { readonly ok: true; readonly record: SpecReviewRecord }
+  | { readonly ok: false; readonly problem: string };
+
+/** The shape of `SpecReviewRecord.bodySha256`. */
+export const SPEC_REVIEW_SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * The shape of `SpecReviewRecord.reviewer`: 1-128 ASCII characters from a
+ * login/email-safe set. No whitespace, no control or non-ASCII characters, so
+ * the identity prints unambiguously in a diff and in a refusal line.
+ */
+export const SPEC_REVIEWER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$/;
 
 export interface SpecManifest {
   readonly version: number;
@@ -112,6 +150,13 @@ export interface SpecInventory {
   readonly notes: readonly InventoryNote[];
   /** True iff any note is a `warning` — see `InventoryNote`. */
   readonly incomplete: boolean;
+  /**
+   * The review record of each spec in `specs` whose entry carries a `review`
+   * field, keyed by spec id. Absent from the map means no record. A malformed
+   * record is reported here and NOT as a warning: only `tess run --live`
+   * depends on it, so it refuses there and every other command keeps reading.
+   */
+  readonly reviews: ReadonlyMap<string, SpecReviewRead>;
 }
 
 export interface ReadInventoryOptions {

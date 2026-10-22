@@ -41,12 +41,15 @@ import {
   SPEC_MANIFEST_FILENAME,
   SPEC_MANIFEST_MAX_BYTES,
   SPEC_MANIFEST_VERSION,
+  SPEC_REVIEW_SHA256_PATTERN,
+  SPEC_REVIEWER_PATTERN,
 } from "./types.js";
 import type {
   InventoryNote,
   InventoryNoteLevel,
   ReadInventoryOptions,
   SpecInventory,
+  SpecReviewRead,
 } from "./types.js";
 
 /**
@@ -241,7 +244,13 @@ function isSpecFileName(name: string): boolean {
  * hunting for two problems where there is one.
  */
 type EntryResult =
-  | { readonly ok: true; readonly file: string; readonly spec: TestSpec }
+  | {
+      readonly ok: true;
+      readonly file: string;
+      readonly spec: TestSpec;
+      /** Undefined when the entry has no `review` field at all. */
+      readonly review: SpecReviewRead | undefined;
+    }
   | {
       readonly ok: false;
       readonly file: string | undefined;
@@ -250,6 +259,49 @@ type EntryResult =
 
 function rejected(problem: string, file?: string): EntryResult {
   return { ok: false, file, problem };
+}
+
+/**
+ * An entry's `review` field, validated (PA-10 fix 3). Exactly two keys, both
+ * well-formed; anything else is a problem, never a coerced record — a reader
+ * that ignored an unknown key would silently accept a record format it does
+ * not understand, which is the version-bump argument at field scale.
+ */
+function readReview(value: unknown): SpecReviewRead | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      problem: `the \`review\` field is ${shapeOf(value)}, not an object`,
+    };
+  }
+  const unknown = Object.keys(value).filter(
+    (key) => key !== "bodySha256" && key !== "reviewer",
+  );
+  if (unknown.length > 0) {
+    return {
+      ok: false,
+      problem: `the \`review\` field has unknown key(s) ${unknown.sort(compare).join(", ")}`,
+    };
+  }
+  const { bodySha256, reviewer } = value;
+  if (
+    typeof bodySha256 !== "string" ||
+    !SPEC_REVIEW_SHA256_PATTERN.test(bodySha256)
+  ) {
+    return {
+      ok: false,
+      problem: "the `review.bodySha256` is not a lowercase SHA-256 hex digest",
+    };
+  }
+  if (typeof reviewer !== "string" || !SPEC_REVIEWER_PATTERN.test(reviewer)) {
+    return {
+      ok: false,
+      problem:
+        "the `review.reviewer` is not a valid reviewer id (1-128 characters of A-Z a-z 0-9 . _ @ + -, starting with a letter or digit)",
+    };
+  }
+  return { ok: true, record: { bodySha256, reviewer } };
 }
 
 /**
@@ -353,6 +405,7 @@ function validateEntry(
     // `path` is the declared string verbatim, not the resolved one. It is what
     // a reviewer greps for and what the diff showed them.
     spec: { ref: { id, path: declaredPath }, kind, targets },
+    review: readReview(value.review),
   };
 }
 
@@ -452,11 +505,13 @@ function settleNotes(notes: readonly InventoryNote[]): InventoryNote[] {
 function inventory(
   specs: readonly TestSpec[],
   notes: readonly InventoryNote[],
+  reviews: ReadonlyMap<string, SpecReviewRead> = new Map(),
 ): SpecInventory {
   const settled = settleNotes(notes);
   return {
     specs,
     notes: settled,
+    reviews,
     // Computed, never hand-set per branch: `SpecInventory` defines `incomplete`
     // as "some note is a warning", and a branch that pushes a warning while
     // forgetting the flag is precisely the silent short list this package
@@ -641,6 +696,9 @@ export async function readSpecInventoryWithSeams(
   const claimed = new Set<string>();
   // Case-folded real path AND case-folded lexical path → the id that took it.
   const byFile = new Map<string, string>();
+  // Only for kept entries: a dropped or duplicate entry's record describes a
+  // spec that is not in this inventory.
+  const reviews = new Map<string, SpecReviewRead>();
 
   for (const [index, value] of declaredSpecs.entries()) {
     const result = validateEntry(root, value, index);
@@ -652,7 +710,7 @@ export async function readSpecInventoryWithSeams(
       continue;
     }
 
-    const { spec, file } = result;
+    const { spec, file, review } = result;
     if (byId.has(spec.ref.id)) {
       // First wins, and the loser is named. Identity that is not unique is not
       // identity: silently keeping the last would make the inventory depend on
@@ -730,6 +788,7 @@ export async function readSpecInventoryWithSeams(
 
     byId.set(spec.ref.id, spec);
     for (const key of fileKeys) byFile.set(key, spec.ref.id);
+    if (review !== undefined) reviews.set(spec.ref.id, review);
     specs.push(spec);
   }
 
@@ -796,5 +855,5 @@ export async function readSpecInventoryWithSeams(
 
   // ── 5. the answer ───────────────────────────────────────────────────────
   specs.sort((left, right) => compare(left.ref.id, right.ref.id));
-  return inventory(specs, notes);
+  return inventory(specs, notes, reviews);
 }
