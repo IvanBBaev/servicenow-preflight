@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Shared script scanner** — `scanScripts` (`src/checks/script-scan.ts`) reads
+  the script fields of active, in-scope artifacts and tests line patterns
+  against every non-comment line (a small state machine skips `//` and
+  multi-line `/* … */` comments and ignores markers inside string literals).
+  Hits name the artifact, field and line — never the matched text — and are
+  capped at 500 per scan; security-trimmed sources are reported so callers can
+  fail closed.
 - **`list` and `explain` subcommands** — `list [--format pretty|json]` prints
   the check catalogue (one line per check: name, severity, rule, description;
   `test-drift` marked `(drift only)`); `explain <check>` prints a check's rule
