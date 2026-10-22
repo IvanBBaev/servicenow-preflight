@@ -54,6 +54,8 @@ own (`npm run build && npm test`).
 2. Register it in `defaultChecks` (`src/checks/index.ts`).
 3. Add a test in `test/` and document it in the README's "What it checks"
    section.
+4. Regenerate the site's check catalogue with `npm run build && npm run gen:site`
+   (`site/checks.generated.js`); `npm run check` fails while it is stale.
 
 ## Licence
 

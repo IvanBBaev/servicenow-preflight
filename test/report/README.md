@@ -1,9 +1,8 @@
 # test/report/
 
-Home for the report-formatter test suites. Downstream agents implementing the
-`formatJUnit` / `formatSarif` stubs (`src/report/junit.ts`, `src/report/sarif.ts`)
-add their `*.test.js` files here — they are picked up by the recursive test glob
-`test/**/*.test.js`.
+Home for the report-formatter test suites: one `*.test.js` per formatter in
+`src/report/` (`github`, `junit`, `markdown`, `sarif`). They are picked up by the
+recursive test glob `test/**/*.test.js`.
 
 Tests import the COMPILED output, e.g.:
 

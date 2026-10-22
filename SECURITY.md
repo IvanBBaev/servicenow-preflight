@@ -48,4 +48,6 @@ pointing `--runner` at a production instance).
 - The preflight checks are read-mostly; the only write is running the ATF
   suites you configure. Tessera writes only to the `--runner` instance and
   records every write in a local journal.
-- There are no runtime npm dependencies.
+- There are no runtime npm dependencies. The bundled Tessera tree
+  (`build/tessera/`) vendors one third-party package, `acorn` 8.18.0 (MIT),
+  and the staging script refuses any other.
