@@ -1,0 +1,19 @@
+{
+  "all": true,
+  "src": ["packages"],
+  "include": ["packages/*/build/**/*.js"],
+  "exclude": [
+    "**/*.d.ts",
+    "**/*.map",
+    "**/*.test.js",
+    "**/test/**",
+    "**/node_modules/**",
+    "scripts/**"
+  ],
+  "reporter": ["text-summary", "lcov"],
+  "check-coverage": true,
+  "statements": 93,
+  "branches": 91,
+  "functions": 89,
+  "lines": 93
+}

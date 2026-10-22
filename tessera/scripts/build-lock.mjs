@@ -406,7 +406,7 @@
 //
 //   root  build   → build-lock npm run build:all      (the 20-package chain)
 //   root  test    → build-lock npm run test:all       (workspaces + this suite)
-//   root  check   → build-lock npm run check:all      (build, lint, fmt, test)
+//   root  check   → build-lock npm run check:all      (build, lint, fmt, c8 test)
 //   pkg   build   → build-lock npm run build:compile  (rmSync + tsc)
 //   pkg   test    → build-lock npm run test:run       (node --test)
 //

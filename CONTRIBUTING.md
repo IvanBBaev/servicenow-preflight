@@ -24,7 +24,7 @@ every project it touches is green.
 
 ```bash
 npm run check                # root: build + lint + format:check + tests with coverage
-(cd tessera && npm run check) # Tessera: build + lint + format:check + tests
+(cd tessera && npm run check) # Tessera: build + lint + format:check + tests with coverage
 ```
 
 Tests import the compiled output, so **build before running tests** on their

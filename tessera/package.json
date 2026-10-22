@@ -21,12 +21,15 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "//test:coverage": "c8 (config in .c8rc.json) wraps the LOCKED `npm run test`, so a standalone run takes the build lock and a run inside check:all re-enters it. NODE_V8_COVERAGE is inherited by every nested npm and node --test process, so one report covers all workspace suites; the thresholds in .c8rc.json are a regression floor set just under the measured values, not a target.",
+    "test:coverage": "c8 npm run test",
     "check": "node scripts/build-lock.mjs npm run check:all",
-    "check:all": "npm run build && npm run lint && npm run format:check && npm run test"
+    "check:all": "npm run build && npm run lint && npm run format:check && npm run test:coverage"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.0.0",
+    "c8": "^11.0.0",
     "eslint": "^10.7.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^15.15.0",

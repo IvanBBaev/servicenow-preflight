@@ -73,7 +73,7 @@ Policy for operators:
 
 ```sh
 npm install
-npm run check   # build + lint + format:check + test
+npm run check   # build + lint + format:check + test:coverage (c8)
 npx tess --help
 ```
 
@@ -89,11 +89,12 @@ cover them instead — each parses the imports out of every file its package
 names in `bin` and asserts every named binding is a function in the built
 output.
 
-One convention does not match the root: `npm run check` here is the
-four-stage script above, while the repository root defines a different
-`check` that ends in `npm run test:coverage`. There is no code-coverage
-stage in this workspace, so a root-level description of `check` as
-"verify + coverage" describes the root package, not this one.
+`npm run check` ends in `npm run test:coverage`, as the repository root's
+does: c8 wraps the whole workspace test run (every package suite plus the
+build-lock suite) and fails the gate when coverage of `packages/*/build/`
+drops below the floors in `.c8rc.json`. Those floors sit just under the
+measured values, so they catch regressions rather than set a target; raise
+them when coverage rises. `npm test` stays the plain, uninstrumented run.
 
 ## Behaviour notes
 
