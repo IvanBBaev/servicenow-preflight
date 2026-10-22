@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fail → warn → pass, more than five passes folded into `<details>`); `--all`
   adds a one-line roll-up and one block per instance. Exported as
   `formatMarkdown` / `formatMarkdownAll`.
+- **GitHub annotations** — `--format github` prints one `::error` (fail) or
+  `::warning` (warn) workflow command per non-pass check, titled with the check
+  and, under `--all`, the instance, followed by the plain summary line; inside a
+  GitHub job they become run and PR annotations with no upload step. Exported as
+  `formatGitHubAnnotations` / `formatGitHubAnnotationsAll`.
 - **Tessera (preview)** ships inside the package: a ServiceNow test framework
   that this package grows into at v1.0.0. Two new binaries: `tess` (doctor,
   preflight, resolve, impact, coverage, generate, `run --live`, status, confirm,

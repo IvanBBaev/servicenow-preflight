@@ -143,6 +143,10 @@ export {
   type MarkdownOptions,
 } from "./report/markdown.js";
 export {
+  formatGitHubAnnotations,
+  formatGitHubAnnotationsAll,
+} from "./report/github.js";
+export {
   defaultChecks,
   instanceUrlConfigured,
   connectivityAuth,

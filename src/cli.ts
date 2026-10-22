@@ -4,6 +4,10 @@ import { runPreflight } from "./index.js";
 import { loadConfig, UsageError } from "./config.js";
 import { createSnClient } from "./http/client.js";
 import { formatJUnit, formatJUnitSuites } from "./report/junit.js";
+import {
+  formatGitHubAnnotations,
+  formatGitHubAnnotationsAll,
+} from "./report/github.js";
 import { formatMarkdown, formatMarkdownAll } from "./report/markdown.js";
 import { formatSarif } from "./report/sarif.js";
 import {
@@ -31,7 +35,8 @@ import type {
 } from "./types.js";
 
 /** Output format for the report. */
-type OutputFormat = "pretty" | "json" | "junit" | "sarif" | "markdown";
+type OutputFormat =
+  "pretty" | "json" | "junit" | "sarif" | "markdown" | "github";
 
 const FORMATS: readonly OutputFormat[] = [
   "pretty",
@@ -39,6 +44,7 @@ const FORMATS: readonly OutputFormat[] = [
   "junit",
   "sarif",
   "markdown",
+  "github",
 ];
 
 /** Subcommand: run checks, sync a manifest, or compare two instances. */
@@ -293,7 +299,8 @@ Options:
       --only <csv>       Run only these checks (comma-separated names)
       --skip <csv>       Skip these checks (comma-separated names)
       --format <fmt>     Output: pretty (default), json, junit, sarif,
-                         markdown (a PR-comment table)
+                         markdown (a PR-comment table), github (Actions
+                         ::error/::warning annotations; GitHub jobs only)
       --json             Shorthand for --format json
       --max-age <dur>    drift: fail if a compared manifest is older than <dur>.
                          Duration is <number><unit>, unit s|m|h|d|w (e.g. 7d,
@@ -341,7 +348,7 @@ const STATUS_ICON: Record<CheckStatus, string> = {
 
 /**
  * Render one report in the requested format to a string. `instance` names the
- * target in formats that show it (markdown); the others ignore it.
+ * target in formats that show it (markdown, github); the others ignore it.
  */
 function render(
   report: PreflightReport,
@@ -351,6 +358,8 @@ function render(
   switch (format) {
     case "markdown":
       return formatMarkdown(report, instance);
+    case "github":
+      return formatGitHubAnnotations(report, instance);
     case "json":
       return `${JSON.stringify(report, null, 2)}\n`;
     case "junit":
@@ -444,6 +453,10 @@ function renderAll(reports: NamedReport[], format: OutputFormat): string {
   if (format === "markdown") {
     // One Markdown document: a roll-up line, then a block per instance.
     return formatMarkdownAll(reports);
+  }
+  if (format === "github") {
+    // Every instance's annotations, then a summary line per instance.
+    return formatGitHubAnnotationsAll(reports);
   }
   if (format === "junit") {
     // One JUnit document: a <testsuite> per instance inside one <testsuites>.

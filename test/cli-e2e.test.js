@@ -159,6 +159,37 @@ test("CLI --format markdown emits a Markdown table", () => {
   assert.match(res.stdout, /\| ✅ \| `instance-url-configured` \|/);
 });
 
+test("CLI --format github prints annotations and the summary line", () => {
+  const res = runCli([
+    "--only",
+    "instance-url-configured",
+    "--format",
+    "github",
+  ]);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /^::error title=instance-url-configured::/m);
+  assert.match(res.stdout, /0 passed, 0 warnings, 1 failed\n$/);
+});
+
+test("CLI run --all --format github tags each annotation with its instance", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com", stage: "dev" },
+    prod: { url: "https://prod98765.service-now.com", stage: "prod" },
+  });
+  try {
+    const res = runCli(
+      ["run", "--all", "--only", "no-such-check", "--format", "github"],
+      { cwd: dir },
+    );
+    assert.equal(res.status, 1);
+    assert.match(res.stdout, /^::error title=preflight \(dev\)::/m);
+    assert.match(res.stdout, /^::error title=preflight \(prod\)::/m);
+    assert.match(res.stdout, /^prod: 0 passed, 0 warnings, 1 failed$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI accepts --format markdown before failing on a missing registry (exit 2)", () => {
   const dir = mkdtempSync(join(tmpdir(), "snpf-md-"));
   try {

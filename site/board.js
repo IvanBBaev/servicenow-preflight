@@ -766,7 +766,7 @@
     },
     {
       flag: "--format <fmt>",
-      desc: "pretty (default), json, junit, sarif, markdown.",
+      desc: "pretty (default), json, junit, sarif, markdown, github.",
     },
     { flag: "--json / -h", desc: "Shorthand for --format json / show help." },
   ];

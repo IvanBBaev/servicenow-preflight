@@ -364,6 +364,11 @@ Selected with `--format` (or `--json`):
   Cell text is escaped (`|`, newlines, `<`/`>`, backticks), so a message cannot
   break the table. With `--all`, a one-line roll-up (`**dev** ✅ · **prod** ❌`)
   leads one block per instance.
+- **`github`** — GitHub Actions workflow commands: one `::error` (fail) or
+  `::warning` (warn) line per non-`pass` check, titled with the check (and the
+  instance under `--all`), then the plain summary line. Inside a GitHub job they
+  become annotations on the run and the PR's Checks tab with no upload step;
+  anywhere else the raw command lines are printed.
 
 ```bash
 snpf --format junit > preflight-junit.xml
@@ -404,6 +409,24 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: preflight.sarif
+```
+
+For annotations without any upload step, use `--format github` instead — each
+failing or warning check shows up on the run summary and the PR's Checks tab:
+
+```yaml
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx servicenow-preflight --format github
+        env:
+          SNPF_INSTANCE: ${{ secrets.SNPF_INSTANCE }}
+          SNPF_USER: ${{ secrets.SNPF_USER }}
+          SNPF_PASS: ${{ secrets.SNPF_PASS }}
 ```
 
 Store credentials as CI secrets — the tool only ever reads them from the
