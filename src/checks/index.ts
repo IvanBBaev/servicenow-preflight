@@ -62,6 +62,9 @@ export const instanceUrlConfigured: Check = {
   name: "instance-url-configured",
   description: "A ServiceNow instance URL is configured and well-formed.",
   meta: {
+    requires: "ALWAYS",
+    summary:
+      "An instance URL is present and well-formed, and preferably uses https.",
     severity: "blocker",
     tables: [],
     remediation:

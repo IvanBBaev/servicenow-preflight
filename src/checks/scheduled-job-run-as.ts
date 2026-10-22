@@ -30,6 +30,9 @@ export const scheduledJobRunAs: Check = {
   name: NAME,
   description: "Scheduled Jobs leave 'Run as' empty (run as system).",
   meta: {
+    requires: "scope",
+    summary:
+      "Scheduled Jobs leave 'Run as' empty so they run as system. Advisory — never fails.",
     rule: "6.2",
     severity: "advisory",
     tables: ["sysauto_script"],

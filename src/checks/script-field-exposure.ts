@@ -39,6 +39,7 @@ export const scriptFieldExposure: Check = {
   description:
     "Every script-typed column ships with an active field write ACL.",
   meta: {
+    requires: "scope",
     rule: "1.4",
     severity: "blocker",
     tables: ["sys_dictionary", "sys_security_acl"],

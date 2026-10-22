@@ -29,6 +29,9 @@ export const connectivityAuth: Check = {
   description:
     "The target instance is reachable and the credentials authenticate.",
   meta: {
+    requires: "ALWAYS",
+    summary:
+      "The instance is reachable and the supplied credentials authenticate against it.",
     severity: "blocker",
     tables: ["sys_user"],
     remediation:

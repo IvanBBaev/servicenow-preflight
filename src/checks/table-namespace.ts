@@ -31,6 +31,8 @@ export const tableNamespace: Check = {
   name: NAME,
   description: "Every custom table is prefixed with the app's scope namespace.",
   meta: {
+    requires: "scope",
+    summary: "Every custom table is prefixed with the app scope namespace.",
     rule: "6.1",
     severity: "blocker",
     tables: ["sys_db_object"],

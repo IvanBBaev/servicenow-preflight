@@ -138,6 +138,9 @@ export const aclRoleSanity: Check = {
   name: NAME,
   description: "Shipped ACLs and roles pass basic security sanity checks.",
   meta: {
+    requires: "scope",
+    summary:
+      "No wide-open mutating ACLs, and no ACLs that reference non-existent roles.",
     severity: "blocker",
     tables: ["sys_security_acl", "sys_security_acl_role", "sys_user_role"],
     remediation:

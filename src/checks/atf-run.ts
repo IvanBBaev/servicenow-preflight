@@ -272,6 +272,9 @@ export const atfRun: Check = {
   name: NAME,
   description: "The configured ATF test suite passes.",
   meta: {
+    requires: "atfSuites",
+    summary:
+      "The configured ATF test suites run green — no failing or errored tests.",
     severity: "blocker",
     tables: ["sys_atf_test_suite_result", "sys_atf_test_result"],
     remediation:

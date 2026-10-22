@@ -62,6 +62,9 @@ export const uiPageAcl: Check = {
   name: NAME,
   description: "Every custom UI Page is protected by an active read ACL.",
   meta: {
+    requires: "scope",
+    summary:
+      "Every custom UI Page is protected by an active read ACL named for its endpoint.",
     rule: "2.2",
     severity: "blocker",
     tables: ["sys_ui_page", "sys_security_acl"],

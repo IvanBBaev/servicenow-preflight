@@ -663,13 +663,20 @@ npm install
 npm run build        # tsc -> build/
 npm test             # node --test (run AFTER build — tests import from build/)
 npm run verify       # build + lint + format:check + test
-npm run check        # verify + coverage (the full local gate)
+npm run check        # verify + site-catalogue freshness + coverage (the full local gate)
+npm run gen:site     # regenerate site/checks.generated.js from the registry
 ```
 
 ESM (`"type": "module"`) with TypeScript `Node16` resolution — relative imports
 carry the `.js` extension. Prettier: `semi`, double quotes, `trailingComma: all`.
 Tests (`test/**/*.test.js`) import compiled output from `build/`, **so build
 before testing**.
+
+The docs site's check catalogue (`site/checks.generated.js`) is generated from
+the check registry: each check's `meta.requires` becomes the board tag and
+`meta.summary` (or `description`) its one-line blurb. After adding or changing
+a check, run `npm run build && npm run gen:site` and commit the regenerated
+file; `npm run check` runs `gen:site -- --check` and fails when it is stale.
 
 ## Security
 

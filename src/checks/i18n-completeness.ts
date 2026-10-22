@@ -163,6 +163,9 @@ export const i18nCompleteness: Check = {
   name: NAME,
   description: "Translations are complete for the required languages.",
   meta: {
+    requires: "scope · languages",
+    summary:
+      "Every configured language has full translation coverage for the target scope.",
     severity: "blocker",
     tables: [
       "sys_translated_text",

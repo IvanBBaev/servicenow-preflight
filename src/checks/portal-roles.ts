@@ -123,6 +123,9 @@ export const portalRoles: Check = {
   description:
     "Service Portal widgets and pages carry roles unless deliberately public. Advisory.",
   meta: {
+    requires: "scope",
+    summary:
+      "Service Portal widgets and pages carry roles unless deliberately public. Advisory — never fails.",
     rule: "2.6",
     severity: "advisory",
     tables: ["sp_widget", "sp_page"],

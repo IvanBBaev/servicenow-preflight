@@ -40,6 +40,9 @@ export const mobileMenuHygiene: Check = {
   name: NAME,
   description: "No mobile Application Menus/Modules ship in a non-mobile app.",
   meta: {
+    requires: "scope",
+    summary:
+      "No mobile Application Menus or Modules ship in a non-mobile app. Advisory — never fails.",
     rule: "5.1",
     severity: "advisory",
     tables: ["sys_app_application", "sys_app_module"],

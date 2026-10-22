@@ -43,6 +43,9 @@ export const restEndpointSecurity: Check = {
   description:
     "Scripted REST resources require authentication and ACL authorization.",
   meta: {
+    requires: "scope",
+    summary:
+      "Scripted REST resources require authentication and enforce ACL authorization.",
     rule: "1.3",
     severity: "blocker",
     tables: ["sys_ws_operation", "sys_security_acl"],

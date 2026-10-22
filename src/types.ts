@@ -114,6 +114,13 @@ export interface CheckMeta {
   remediation?: string;
   /** Catalogue wording for each verdict. */
   verdicts?: { pass: string; warn: string; fail: string };
+  /**
+   * The docs-site board tag: the configuration the check requires
+   * ("scope", "updateSetId", …), or "ALWAYS" when it runs unconditionally.
+   */
+  requires?: string;
+  /** One-sentence catalogue summary for the docs site; falls back to `description`. */
+  summary?: string;
   /** Eligible to run against an offline update-set export. Default false. */
   offline?: boolean;
   /** Must run alone after the parallel batch. Default false. */

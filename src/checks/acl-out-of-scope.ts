@@ -44,6 +44,7 @@ export const aclOutOfScope: Check = {
   name: NAME,
   description: "The app ships no ACLs onto tables outside its own scope.",
   meta: {
+    requires: "scope",
     rule: "1.6",
     severity: "blocker",
     tables: ["sys_security_acl", "sys_db_object"],

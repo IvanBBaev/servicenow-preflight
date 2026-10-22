@@ -87,6 +87,9 @@ export const moduleRoles: Check = {
   description:
     "Navigator modules are gated by their own or their menu's roles. Advisory.",
   meta: {
+    requires: "scope",
+    summary:
+      "Navigator modules are gated by their own or their menu's roles. Advisory — never fails.",
     rule: "5.5",
     severity: "advisory",
     tables: ["sys_app_module", "sys_app_application"],

@@ -52,6 +52,7 @@ export const clientCallableAcl: Check = {
   description:
     "Every client-callable Script Include is gated by an active execute ACL.",
   meta: {
+    requires: "scope",
     rule: "1.2",
     severity: "blocker",
     tables: ["sys_script_include", "sys_security_acl"],

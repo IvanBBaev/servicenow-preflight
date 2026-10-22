@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Generated site check catalogue** — `npm run gen:site`
+  (`scripts/gen-site.mjs`) writes `site/checks.generated.js` from the
+  registry, and the docs board reads it (plus the check count) instead of a hand-kept copy;
+  `npm run check` fails when the file is stale. `CheckMeta` gains optional
+  `requires` (the board tag) and `summary` (the catalogue blurb).
 - **`client-script-safety` check** — rule 2.8 (blocker): fails on `eval(`,
   `new Function(` or `new GlideRecord(` in active in-scope client scripts, UI
   Scripts, UI Policy scripts and UI Action client scripts, and on

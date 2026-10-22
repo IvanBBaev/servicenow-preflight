@@ -170,6 +170,9 @@ export const updateSetState: Check = {
   name: NAME,
   description: "The target update set is in a deployable state.",
   meta: {
+    requires: "updateSetId",
+    summary:
+      "The target update set, and any batched child sets, are complete and carry changes.",
     severity: "blocker",
     tables: ["sys_update_set", "sys_update_xml"],
     remediation:

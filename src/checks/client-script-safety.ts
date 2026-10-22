@@ -56,6 +56,7 @@ export const clientScriptSafety: Check = {
   description:
     "No eval, Function constructor or client GlideRecord in client scripts, and no GlideScopedEvaluator.evaluateScript on the server.",
   meta: {
+    requires: "scope",
     rule: "2.8",
     severity: "blocker",
     tables: sourceTables([...CLIENT_SCRIPT_SOURCES, ...SERVER_SCRIPT_SOURCES]),

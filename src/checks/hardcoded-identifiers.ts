@@ -58,6 +58,7 @@ export const hardcodedIdentifiers: Check = {
   description:
     "No hard-coded sys_ids or non-instance URLs in in-scope scripts. Advisory.",
   meta: {
+    requires: "scope",
     rule: "4.5",
     severity: "advisory",
     tables: sourceTables(ALL_SCRIPT_SOURCES),

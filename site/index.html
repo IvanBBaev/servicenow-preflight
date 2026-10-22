@@ -38,6 +38,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles.css" />
+    <script src="checks.generated.js" defer></script>
     <script src="board.js" defer></script>
   </head>
   <body>
@@ -105,8 +106,9 @@
             <h1>Cleared for departure.</h1>
             <p>
               A pre-deployment checklist for ServiceNow. Point it at an instance
-              and it flips through the twenty-five things that quietly break a
-              deploy — then holds at the gate, or clears you for takeoff with a
+              and it flips through the
+              <span data-check-count>twenty-five</span> things that quietly
+              break a deploy — then holds at the gate, or clears you for takeoff with a
               single exit code.
             </p>
           </div>
@@ -183,11 +185,13 @@
         </div>
       </section>
 
-      <!-- ===== TIMETABLE — THE TWENTY-FIVE CHECKS ===== -->
+      <!-- ===== TIMETABLE — THE CHECKS ===== -->
       <section id="timetable" class="section">
         <div class="section-head">
-          <div class="eyebrow">DEPARTURES · GATES 01–25</div>
-          <h2>The twenty-five checks</h2>
+          <div class="eyebrow">
+            DEPARTURES · GATES 01–<span data-check-count="pad">25</span>
+          </div>
+          <h2>The <span data-check-count>twenty-five</span> checks</h2>
           <p>
             Gates 01–02, 05 and 06 board on credentials alone. The rest stay
             <b style="color: var(--amberdim)">ON HOLD</b> until you supply their

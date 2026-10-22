@@ -90,6 +90,7 @@ export const uiActionGating: Check = {
   description:
     "Every active UI Action is gated by a condition or a Requires-role entry.",
   meta: {
+    requires: "scope",
     rule: "2.1",
     severity: "blocker",
     tables: ["sys_ui_action", "sys_ui_action_role"],

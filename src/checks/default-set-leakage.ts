@@ -158,6 +158,9 @@ export const defaultSetLeakage: Check = {
   description:
     "No work in the target scope is stranded in a Default update set.",
   meta: {
+    requires: "scope",
+    summary:
+      "No captured work for the target scope is stranded in a Default-flagged update set.",
     severity: "blocker",
     tables: ["sys_update_set", "sys_update_xml"],
     remediation:

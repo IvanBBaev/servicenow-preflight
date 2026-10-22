@@ -123,6 +123,9 @@ export const atfEnablement: Check = {
   name: NAME,
   description: "ATF test execution is enabled on the target instance.",
   meta: {
+    requires: "ALWAYS",
+    summary:
+      "ATF test execution is enabled instance-wide — optionally with an online client test runner.",
     severity: "blocker",
     tables: ["sys_properties", "sys_atf_agent"],
     remediation:

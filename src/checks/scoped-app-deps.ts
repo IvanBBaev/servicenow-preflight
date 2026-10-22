@@ -220,6 +220,9 @@ export const scopedAppDeps: Check = {
   description:
     "The scoped application's dependencies are present on the target instance.",
   meta: {
+    requires: "requiredApps",
+    summary:
+      "Required scoped apps and plugins are installed, active, and meet any minVersion.",
     severity: "blocker",
     tables: ["sys_store_app", "sys_app", "sys_plugins"],
     remediation:

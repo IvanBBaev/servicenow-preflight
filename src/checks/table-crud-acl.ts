@@ -132,6 +132,7 @@ export const tableCrudAcl: Check = {
   description:
     "Every custom table has active table-level create, read, write and delete ACLs.",
   meta: {
+    requires: "scope",
     rule: "1.1",
     severity: "blocker",
     tables: ["sys_db_object", "sys_security_acl"],

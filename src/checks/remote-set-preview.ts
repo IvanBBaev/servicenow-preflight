@@ -260,6 +260,9 @@ export const remoteSetPreview: Check = {
   description:
     "Retrieved update sets on the target instance have a clean preview.",
   meta: {
+    requires: "ALWAYS",
+    summary:
+      "Every pending retrieved update set is previewed with all preview problems resolved.",
     severity: "blocker",
     tables: ["sys_remote_update_set", "sys_update_preview_problem"],
     remediation:

@@ -121,6 +121,9 @@ export const scriptHygiene: Check = {
   description:
     "No comment-only Fix Scripts and no duplicate-named Script Includes. Advisory.",
   meta: {
+    requires: "scope",
+    summary:
+      "No comment-only Fix Scripts and no duplicate-named Script Includes. Advisory — never fails.",
     rule: "4.10",
     severity: "advisory",
     tables: ["sys_script_fix", "sys_script_include"],
