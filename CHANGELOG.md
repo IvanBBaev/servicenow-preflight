@@ -235,6 +235,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Tessera's Anthropic adapter pins its base URL (AIS-5): `baseUrl` must be an
+  `https:` origin with no userinfo, path, query or fragment, and it must be
+  `https://api.anthropic.com` unless the caller passes
+  `allowBaseUrlOverride: true`. A refused value is never quoted back. The
+  check is exported as `resolveAnthropicBaseUrl`. A response body that is not
+  JSON now faults without a `cause`, so the parser's error, which quotes the
+  body, cannot reach a log.
 - The encoded-query builder rejects operator injection and validates the field
   and value charset; scope is resolved once per run.
 - The Table API client detects response security-trimming via `X-Total-Count`

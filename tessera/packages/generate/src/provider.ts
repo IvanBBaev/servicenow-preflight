@@ -285,7 +285,77 @@ export interface AnthropicProviderOptions {
   /** Read from the environment by the composition root, never from a file. */
   readonly apiKey: string;
   readonly config?: PinnedGenConfig;
+  /**
+   * Pinned to `ANTHROPIC_DEFAULT_BASE_URL` (AIS-5). Any other origin is refused
+   * unless `allowBaseUrlOverride` is `true`; see `resolveAnthropicBaseUrl`.
+   */
   readonly baseUrl?: string;
+  /**
+   * Explicit opt-in for a `baseUrl` on another origin (a proxy or a gateway).
+   * The composition root sets it only from operator configuration, never by
+   * default, and says so in its log.
+   */
+  readonly allowBaseUrlOverride?: boolean;
+}
+
+/**
+ * Validate a caller-supplied Anthropic base URL and return its origin (AIS-5).
+ *
+ * The base URL decides where the API key and the cleared prompt are sent, so a
+ * value that arrived from an environment variable or a flag is not trusted on
+ * its own. Fail closed:
+ *
+ * - it must parse as an absolute `https:` URL — never plain `http:`, with or
+ *   without the override, because the request carries the key in a header;
+ * - it may carry no userinfo, query or fragment, and no path beyond `/`
+ *   (the messages path is appended here, so a path could only redirect the
+ *   endpoint);
+ * - without `allowOverride`, its origin must be `ANTHROPIC_DEFAULT_BASE_URL`.
+ *
+ * The refused value is never quoted: a URL pasted from a browser can carry
+ * credentials, and the message reaches a CI log.
+ *
+ * @throws GenerateInputError when the value is refused.
+ */
+export function resolveAnthropicBaseUrl(
+  baseUrl: string | undefined,
+  allowOverride = false,
+): string {
+  if (baseUrl === undefined) return ANTHROPIC_DEFAULT_BASE_URL;
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new GenerateInputError(
+      "the Anthropic base URL is not an absolute URL",
+    );
+  }
+  if (parsed.protocol !== "https:") {
+    throw new GenerateInputError(
+      `the Anthropic base URL must use https (got ${parsed.protocol === "http:" ? "http" : "another scheme"}); the request carries the API key`,
+    );
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new GenerateInputError(
+      "the Anthropic base URL carries userinfo (user@ or user:password@); credentials travel only in the API-key header",
+    );
+  }
+  if (
+    (parsed.pathname !== "/" && parsed.pathname !== "") ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    /[?#]/.test(baseUrl)
+  ) {
+    throw new GenerateInputError(
+      "the Anthropic base URL must be an origin only (no path, query or fragment); the messages path is appended by the adapter",
+    );
+  }
+  if (!allowOverride && parsed.origin !== ANTHROPIC_DEFAULT_BASE_URL) {
+    throw new GenerateInputError(
+      `the Anthropic base URL is pinned to ${ANTHROPIC_DEFAULT_BASE_URL}; another origin needs an explicit override in the operator's configuration (AIS-5)`,
+    );
+  }
+  return parsed.origin;
 }
 
 /** The API's own error taxonomy. A closed set, so it is safe to put in a message. */
@@ -390,7 +460,7 @@ export function createAnthropicProvider(
   // Closure-scoped, and not a property of the returned object. Nothing that
   // inspects, serialises or logs the provider can reach it.
   const apiKey = options.apiKey;
-  const url = `${options.baseUrl ?? ANTHROPIC_DEFAULT_BASE_URL}${ANTHROPIC_MESSAGES_PATH}`;
+  const url = `${resolveAnthropicBaseUrl(options.baseUrl, options.allowBaseUrlOverride === true)}${ANTHROPIC_MESSAGES_PATH}`;
 
   return {
     name: "anthropic",
@@ -448,10 +518,14 @@ export function createAnthropicProvider(
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw);
-      } catch (error) {
+      } catch {
+        // No `cause` (AIS-5): a `SyntaxError` from `JSON.parse` quotes the body
+        // it choked on, and the body is the vendor's response — text that may
+        // echo the prompt. Anything that serialises the error chain (a CI
+        // annotation, `util.inspect`) would print it. The message and the
+        // body length are the whole report.
         throw new GenerationFaultError(
-          "the Anthropic Messages API answered with a body that is not JSON",
-          { cause: error },
+          `the Anthropic Messages API answered with a body that is not JSON (${raw.length} characters)`,
         );
       }
 

@@ -54,6 +54,7 @@ import {
   createTemplateProvider,
   modelAcceptsSamplingParams,
   parseCandidates,
+  resolveAnthropicBaseUrl,
 } from "../build/index.js";
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -209,6 +210,9 @@ function providerAnswering(body, options = {}) {
     apiKey: FAKE_API_KEY,
     config: options.config ?? pinned(),
     ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+    ...(options.allowBaseUrlOverride === undefined
+      ? {}
+      : { allowBaseUrlOverride: options.allowBaseUrlOverride }),
   });
   return { provider, stub };
 }
@@ -398,13 +402,16 @@ describe("createAnthropicProvider — the request", () => {
     assert.equal(stub.calls[0].init.method, "POST");
   });
 
-  it("honours a supplied base URL and keeps the messages path", async () => {
+  it("honours an overridden base URL and keeps the messages path", async () => {
     // The override exists for a proxy or a gateway. It may move the HOST; it may
     // not move the endpoint, or a caller could be redirected to a path that
-    // answers 200 to anything.
+    // answers 200 to anything. It takes an explicit opt-in (AIS-5).
     const { provider, stub } = providerAnswering(
       messagesResponse(SPECS_PAYLOAD),
-      { baseUrl: "https://gateway.internal.example" },
+      {
+        baseUrl: "https://gateway.internal.example",
+        allowBaseUrlOverride: true,
+      },
     );
     await provider.complete(request(), liveSignal());
     assert.equal(
@@ -662,6 +669,122 @@ describe("modelAcceptsSamplingParams", () => {
   });
 });
 
+// ── the base URL pin (AIS-5) ───────────────────────────────────────────────
+
+describe("createAnthropicProvider — the base URL is pinned (AIS-5)", () => {
+  const create = (baseUrl, allowBaseUrlOverride) =>
+    createAnthropicProvider({
+      fetch: stubFetch(() => respond(200, messagesResponse(SPECS_PAYLOAD)))
+        .fetch,
+      apiKey: FAKE_API_KEY,
+      config: pinned(),
+      baseUrl,
+      ...(allowBaseUrlOverride === undefined ? {} : { allowBaseUrlOverride }),
+    });
+
+  it("accepts the default origin, with or without a trailing slash", async () => {
+    for (const baseUrl of [
+      "https://api.anthropic.com",
+      "https://api.anthropic.com/",
+      "HTTPS://API.ANTHROPIC.COM",
+    ]) {
+      const { provider, stub } = providerAnswering(
+        messagesResponse(SPECS_PAYLOAD),
+        { baseUrl },
+      );
+      await provider.complete(request(), liveSignal());
+      assert.equal(
+        stub.calls[0].url,
+        `${ANTHROPIC_DEFAULT_BASE_URL}${ANTHROPIC_MESSAGES_PATH}`,
+      );
+    }
+  });
+
+  it("refuses another origin without the override, before any request", () => {
+    const calls = [];
+    assert.throws(
+      () =>
+        createAnthropicProvider({
+          fetch: (url) => {
+            calls.push(url);
+            return Promise.reject(new Error("unreachable"));
+          },
+          apiKey: FAKE_API_KEY,
+          config: pinned(),
+          baseUrl: "https://gateway.internal.example",
+        }),
+      (error) => {
+        assert.equal(error.name, "GenerateInputError");
+        assert.match(error.message, /pinned to https:\/\/api\.anthropic\.com/);
+        assert.match(error.message, /override/);
+        // The refused value is not echoed.
+        assert.ok(!error.message.includes("gateway.internal.example"));
+        assertNoKeyIn(error.message, "the refusal");
+        return true;
+      },
+    );
+    assert.deepEqual(calls, []);
+  });
+
+  it("refuses a look-alike of the default origin", () => {
+    for (const baseUrl of [
+      "https://api.anthropic.com.evil.example",
+      "https://api.anthropic.com:8443",
+      "https://evil.example#api.anthropic.com",
+    ]) {
+      assert.throws(
+        () => create(baseUrl),
+        /GenerateInputError|pinned|origin only/,
+      );
+    }
+  });
+
+  const refusedEvenWithOverride = [
+    ["plain http", "http://gateway.internal.example", /must use https/],
+    [
+      "plain http to the default host",
+      "http://api.anthropic.com",
+      /must use https/,
+    ],
+    ["another scheme", "ftp://gateway.internal.example", /another scheme/],
+    ["userinfo", "https://user:pw@gateway.internal.example", /userinfo/],
+    ["a bare user", "https://user@api.anthropic.com", /userinfo/],
+    ["a path", "https://gateway.internal.example/v2", /origin only/],
+    ["a query", "https://gateway.internal.example/?x=1", /origin only/],
+    ["an empty query", "https://gateway.internal.example?", /origin only/],
+    ["a fragment", "https://gateway.internal.example/#f", /origin only/],
+    ["not a URL", "gateway.internal.example", /not an absolute URL/],
+  ];
+  for (const [label, baseUrl, expected] of refusedEvenWithOverride) {
+    it(`refuses ${label} even with the override`, () => {
+      assert.throws(
+        () => create(baseUrl, true),
+        (error) => {
+          assert.equal(error.name, "GenerateInputError");
+          assert.match(error.message, expected);
+          assert.ok(!error.message.includes("pw@"));
+          return true;
+        },
+      );
+    });
+  }
+
+  it("resolves to the origin, and to the default when nothing is supplied", () => {
+    assert.equal(
+      resolveAnthropicBaseUrl(undefined),
+      ANTHROPIC_DEFAULT_BASE_URL,
+    );
+    assert.equal(
+      resolveAnthropicBaseUrl("https://Gateway.Internal.Example/", true),
+      "https://gateway.internal.example",
+    );
+    assert.throws(
+      () => resolveAnthropicBaseUrl("https://gateway.internal.example"),
+      /pinned/,
+    );
+  });
+});
+
 // ── transport and protocol faults ──────────────────────────────────────────
 
 describe("createAnthropicProvider — a fault is never an empty completion", () => {
@@ -705,6 +828,26 @@ describe("createAnthropicProvider — a fault is never an empty completion", () 
     // failure — an outage that reads downstream as a clean bill of health.
     const { provider } = providerAnswering("<html>gateway timeout</html>");
     await assertFault(provider.complete(request(), liveSignal()), /not JSON/);
+  });
+
+  it("never quotes the unparsable body, not even through the cause (AIS-5)", async () => {
+    // A `SyntaxError` from `JSON.parse` quotes the text it choked on. The body
+    // is the vendor's response and may echo the prompt, so the fault carries
+    // no `cause` and nothing that serialises the error can reach the body.
+    const BODY_CANARY = "body-canary-81d3-never-quote-this";
+    const { provider } = providerAnswering(`not json ${BODY_CANARY}`);
+    await assert.rejects(
+      provider.complete(request(), liveSignal()),
+      (error) => {
+        assert.equal(error.name, "GenerationFaultError");
+        assert.equal(error.cause, undefined);
+        assert.ok(!("cause" in error));
+        assert.ok(!inspect(error, { depth: 10 }).includes(BODY_CANARY));
+        assert.ok(!String(error.stack).includes(BODY_CANARY));
+        assert.match(error.message, /not JSON \(\d+ characters\)/);
+        return true;
+      },
+    );
   });
 
   it("faults on JSON of the wrong shape", async () => {

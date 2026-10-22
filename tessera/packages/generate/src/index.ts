@@ -120,6 +120,7 @@ export {
   createTemplateProvider,
   modelAcceptsSamplingParams,
   parseCandidates,
+  resolveAnthropicBaseUrl,
 } from "./provider.js";
 export type {
   AnthropicProviderOptions,
