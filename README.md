@@ -51,14 +51,14 @@ npx servicenow-preflight        # run the default suite (short alias: snpf)
 ```text
 ✓ instance-url-configured: Instance URL looks good: https://dev12345.service-now.com
 ✓ connectivity-auth: Instance is reachable and the credentials authenticate.
-! update-set-state: No update set configured (set updateSetId in the config); skipping.
+! update-set-state: No update set specified (set SNPF_UPDATE_SET, add "updateSetId" to the config file, or set PreflightContext.updateSetId); skipping the update-set state check.
 ! default-set-leakage: No target scope set (PreflightContext.scope); nothing to verify — skipping the Default-set leakage check.
 ✓ remote-set-preview: No pending retrieved update sets on the target instance — nothing awaiting preview or commit.
 ✓ atf-enablement: ATF test execution is enabled ("sn_atf.runner.enabled" is "true").
-! atf-run: No ATF suite configured (set options.atfSuites); skipping.
-! scoped-app-deps: No required apps declared (set options.requiredApps); skipping.
-! i18n-completeness: No target scope set; skipping.
-! acl-role-sanity: No scope set; skipping.
+! atf-run: No ATF suite configured (set options.atfSuites or options.atfSuiteId); skipping.
+! scoped-app-deps: No required apps declared (set options.requiredApps to verify dependencies); skipping.
+! i18n-completeness: No target scope set (PreflightContext.scope); skipping i18n completeness check.
+! acl-role-sanity: No scope set — skipping ACL/role sanity (pass a scope to enable it).
 ! client-callable-acl: No scope set — skipping the client-callable Script Include ACL gate (pass a scope to enable it).
 ! rest-endpoint-security: No scope set — skipping the scripted REST security gate (pass a scope to enable it).
 ! script-field-exposure: No scope set — skipping the script-field write ACL gate (pass a scope to enable it).
@@ -67,15 +67,10 @@ npx servicenow-preflight        # run the default suite (short alias: snpf)
 ! table-crud-acl: No scope set — skipping the table CRUD ACL gate (pass a scope to enable it).
 ! ui-page-acl: No scope set — skipping the UI Page read ACL gate (pass a scope to enable it).
 ! ui-action-gating: No scope set — skipping the UI Action gating check (pass a scope to enable it).
-
 ! table-namespace: No scope set — skipping the table namespace check (pass a scope to enable it).
-
 ! portal-roles: No scope set — skipping the Service Portal widget/page roles check (pass a scope to enable it).
-
 ! acl-out-of-scope: No scope set — skipping the out-of-scope ACL check (pass a scope to enable it).
-
 ! module-roles: No scope set — skipping the navigator module roles check (pass a scope to enable it).
-
 ! script-hygiene: No scope set — skipping the Fix Script / Script Include hygiene check (pass a scope to enable it).
 ! hardcoded-identifiers: No scope set — skipping the hard-coded identifier scan (pass a scope to enable it).
 ! client-script-safety: No scope set — skipping the client script safety scan (pass a scope to enable it).
@@ -288,6 +283,8 @@ checks to run, and per-check options — but **never credentials**.
 | `options`     | `object`                                 | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `baseline`    | `string \| boolean`                      | Apply a baseline file: `true` = the default path, a string = that file (CLI `--baseline` overrides).                                                                                                                                                                                                                                                                                                                                                                                                |
 | `severity`    | `{ [check]: "fail" \| "warn" \| "off" }` | Severity policy (see [below](#severity-policy)); CLI `--severity` overrides per check.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `proxy`       | `string`                                 | Forward proxy URL; outranks `SNPF_PROXY` and `HTTPS_PROXY` (see [HTTP(S) proxy](#https-proxy)). Keep credentials in `SNPF_PROXY`, not in this file.                                                                                                                                                                                                                                                                                                                                                 |
+| `noProxy`     | `string`                                 | Extra proxy-bypass entries, merged with `SNPF_NO_PROXY` and `NO_PROXY`/`no_proxy`.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ### Severity policy
 
@@ -578,8 +575,9 @@ timeoutMs?, cicdPollIntervalMs?, cicdMaxPolls?, maxRows?, proxy?, noProxy? }`),
   backed by Node's global `fetch` (or `node:https` when `tls` is set).
   `table(name).query()` **auto-paginates** unless you pass a `sysparm_limit`, and
   throws `SnTruncationError` past `maxRows` (default 100000) rather than
-  truncating. `proxy` outranks the `HTTPS_PROXY` / `HTTP_PROXY` environment
-  variables; `noProxy` overrides `NO_PROXY`.
+  truncating. `proxy` outranks the `SNPF_PROXY` and `HTTPS_PROXY` / `https_proxy`
+  environment variables (`HTTP_PROXY` is never used); `noProxy` is merged with
+  `SNPF_NO_PROXY` and `NO_PROXY` / `no_proxy`.
 - **`formatJUnit`** / **`formatSarif`**, and **`loadConfig`** /
   **`resolveAuthFromEnv`** / **`resolveTlsFromEnv`** (the CLI's own resolution).
 - **`describeChecks(checks, defaults?)`** → `CheckDescriptor[]` (`name`,
@@ -626,26 +624,33 @@ library API keep working as documented. Tessera adds two more binaries:
 | `tess`        | The Tessera CLI (`tess <command> --help` for every command)                                    |
 | `tessera-mcp` | A stdio MCP server exposing the same pipeline as 13 `preflight_*` tools (doctor, impact, run…) |
 
-| Command                        | What it answers                                                                     | Writes                                       |
-| ------------------------------ | ----------------------------------------------------------------------------------- | -------------------------------------------- |
-| `tess doctor`                  | Is this instance ready to run tests? Three states: ready / not ready / undecided.   | nothing                                      |
-| `tess preflight`               | Is the topology ready, and does the runner carry the code the source has?           | nothing unless `--mode apply`                |
-| `tess resolve`                 | Which artifacts does this story or scope change?                                    | nothing                                      |
-| `tess impact`                  | What else does that change reach (where-used scan of one scope)?                    | nothing                                      |
-| `tess coverage`                | Which impacted artifacts have a declared test spec, and which have none?            | nothing                                      |
-| `tess generate`                | Proposes specs for the gaps (offline template or the Anthropic API).                | files under `<tests-root>/proposed/` only    |
-| `tess run --live`              | Projects the repo's specs onto the runner as ATF tests, runs them, gives a verdict. | the runner instance and the local run ledger |
-| `tess status` / `tess confirm` | Where is a run, and what did a finished run decide?                                 | nothing                                      |
-| `tess cleanup`                 | Tears down a failed run's ATF projection.                                           | nothing in `--mode plan` (the default)       |
+| Command                        | What it answers                                                                              | Writes                                                |
+| ------------------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `tess doctor`                  | Is this instance ready to run tests? Three states: ready / not ready / undecided.            | nothing                                               |
+| `tess preflight`               | Is the topology ready, and does the runner carry the code the source has?                    | nothing unless `--mode apply`                         |
+| `tess resolve`                 | Which artifacts does this story or scope change?                                             | nothing                                               |
+| `tess impact`                  | What else does that change reach (where-used scan of one scope)?                             | nothing                                               |
+| `tess coverage`                | Which impacted artifacts have a declared test spec, and which have none?                     | nothing                                               |
+| `tess generate`                | Proposes specs for the gaps (offline template or the Anthropic API).                         | files under `<tests-root>/proposed/` only             |
+| `tess review`                  | Records that a named reviewer read a promoted unit spec (SHA-256 of its body + reviewer id). | the local `.manifest.json` only                       |
+| `tess run --live`              | Projects the repo's specs onto the runner as ATF tests, runs them, gives a verdict.          | the runner instance and the local run ledger          |
+| `tess status` / `tess confirm` | Where is a run, and what did a finished run decide?                                          | nothing                                               |
+| `tess cleanup`                 | Tears down a failed run's ATF projection.                                                    | nothing in `--mode plan` (the default)                |
+| `tess benchmark`               | Scores a hand-authored mutant catalog against the S5 outcome gate on a sub-prod runner.      | the runner instance (it rewrites the scope's sources) |
 
 Tessera separates three **roles**: `--source` (read artifacts from here),
 `--runner` (the only instance a write may touch) and `--target` (probed
 read-only). `--instance` sets all three to one profile. A role names a
 credential profile: `default` reads `SN_INSTANCE` / `SN_USER` / `SN_PASSWORD`,
 any other profile `SN_PROFILE_<NAME>_INSTANCE` / `_USER` / `_PASSWORD`. These
-are not the `SNPF_*` variables the preflight checks use. Options resolve as
-flag > env > `tessera.config.json` > default, and secrets are read only from env
-or the credential store, never from a config file.
+are not the `SNPF_*` variables the preflight checks use. The options of
+`preflight`, `resolve`, `impact`, `coverage`, `generate` and `doctor` resolve as
+flag > env > `tessera.config.json` > default; `run`, `review`, `status`,
+`confirm`, `cleanup` and `benchmark` take flags only. Secrets are read only from
+env or the credential store, never from a config file.
+
+`tess run --live` refuses (exit `4`) any unit spec that has no `tess review`
+record or whose body no longer matches the reviewed hash.
 
 `tess generate --provider anthropic` sends redacted instance data to a third
 party, so it also needs an `egress` section in `tessera.config.json` that records
