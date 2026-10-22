@@ -58,6 +58,16 @@ If a 0.x fix is ever needed, cut a maintenance branch from the `v0.5.0` tag and
 give it its own release path. The current workflow cannot publish it as is:
 the ancestry guard requires `main`, and the 0.x guard refuses the version.
 
+## Why the tarball ships `src/`
+
+`package.json` `files` includes `src` on purpose: the root build emits
+`sourceMap` and `declarationMap`, and both point back into `../src/`. Without
+the sources, stack traces map to nothing and "go to definition" from the
+`.d.ts` files dead-ends. The staged Tessera closure under `build/tessera/` is
+different: `stage-tessera.mjs` copies no source maps, so it ships no Tessera
+sources. Dropping `src` would mean turning both map options off in
+`tsconfig.json` in the same change.
+
 ## Supply-chain guarantees in the pipeline
 
 - **Ancestry guard (OPS-1):** a `v*` tag on a commit that never reached `main`
