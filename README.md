@@ -537,6 +537,9 @@ before testing**.
   explicitly configure via `options.atfSuites`.
 - Zero runtime dependencies — the entire supply chain is this package plus Node.
 
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Contributions:
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Support
 
 Built and maintained in my own time. If it saves you or your team time, please
