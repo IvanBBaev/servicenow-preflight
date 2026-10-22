@@ -769,6 +769,14 @@
       desc: "pretty (default), json, junit, sarif, markdown, github.",
     },
     { flag: "--json / -h", desc: "Shorthand for --format json / show help." },
+    {
+      flag: "--baseline [path]",
+      desc: "Demote accepted findings to warnings · default .preflight/baseline.json.",
+    },
+    {
+      flag: "--write-baseline [path]",
+      desc: "Record every non-pass result as a baseline (--force overwrites).",
+    },
   ];
   var ENVS = [
     {

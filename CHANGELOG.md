@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Baseline of accepted findings** — `run --write-baseline [path]` records
+  every non-pass result in `.preflight/baseline.json` (per registry instance
+  `baseline.<env>.json`; `--force` to overwrite), and `run --baseline [path]`
+  (or the config key `baseline`) demotes matching findings to `warn`. A changed
+  message is flagged `Baselined but CHANGED since …`; an expired entry fails
+  again and adds a `baseline` warning row. Exported as `readBaseline`,
+  `writeBaseline`, `applyBaseline`, `baselineFromReport` and `baselinePath`.
 - **Per-check metadata** — `Check` gains an optional `meta` (`CheckMeta`: the
   certification `rule` id, `severity` blocker/advisory, the `tables` read, a
   `remediation` paragraph and the pass/warn/fail `verdicts` wording), filled on

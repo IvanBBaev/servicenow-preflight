@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runPreflight } from "./index.js";
 import { loadConfig, UsageError } from "./config.js";
@@ -27,6 +28,14 @@ import {
   type DriftManifestRef,
 } from "./state/drift.js";
 import { testDrift } from "./checks/index.js";
+import {
+  applyBaseline,
+  baselineFromReport,
+  baselinePath,
+  readBaseline,
+  writeBaseline,
+  type Baseline,
+} from "./baseline.js";
 import type {
   CheckResult,
   CheckStatus,
@@ -74,6 +83,15 @@ interface ParsedArgs {
   maxAgeMs?: number;
   /** `drift`: downgrade a skipped pipeline stage from fail to warn. */
   allowStageSkip: boolean;
+  /**
+   * `run`: apply a baseline of accepted findings — a path, or `true` for the
+   * default `.preflight/baseline[.<env>].json`.
+   */
+  baseline?: string | true;
+  /** `run`: write a baseline from the run's non-pass results (path or default). */
+  writeBaseline?: string | true;
+  /** Allow `--write-baseline` to overwrite an existing file. */
+  force: boolean;
   help: boolean;
   /** Print the package version and exit. */
   version: boolean;
@@ -136,6 +154,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     allowEmpty: false,
     allowStageSkip: false,
     format: "pretty",
+    force: false,
     help: false,
     version: false,
   };
@@ -162,6 +181,22 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     i += 1;
     return next;
+  };
+  // An optional-value flag (`--baseline [path]`): take the next token as its
+  // value when it is a real value (not the end of argv, not another option),
+  // else the flag stands alone and means "use the default path".
+  const takeOptionalValue = (): string | true => {
+    const next = argv[i + 1];
+    if (next === undefined || next.startsWith("-")) return true;
+    i += 1;
+    return next;
+  };
+  // An explicit `--flag=` value must name a file; an empty one is a typo.
+  const pathValue = (flag: string, value: string): string => {
+    if (value.trim().length === 0) {
+      throw new UsageError(`Option ${flag} needs a path after "=".`);
+    }
+    return value;
   };
   // A --only / --skip list must resolve to at least one check name. An empty or
   // whitespace-only value must error (CC-22), never silently widen `--only` to
@@ -201,6 +236,15 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--allow-stage-skip":
         args.allowStageSkip = true;
+        break;
+      case "--force":
+        args.force = true;
+        break;
+      case "--baseline":
+        args.baseline = takeOptionalValue();
+        break;
+      case "--write-baseline":
+        args.writeBaseline = takeOptionalValue();
         break;
       case "-i":
       case "--instance":
@@ -245,6 +289,16 @@ function parseArgs(argv: string[]): ParsedArgs {
           args.format = parseFormat(arg.slice("--format=".length));
         } else if (arg?.startsWith("--max-age=")) {
           args.maxAgeMs = parseDuration(arg.slice("--max-age=".length));
+        } else if (arg?.startsWith("--baseline=")) {
+          args.baseline = pathValue(
+            "--baseline",
+            arg.slice("--baseline=".length),
+          );
+        } else if (arg?.startsWith("--write-baseline=")) {
+          args.writeBaseline = pathValue(
+            "--write-baseline",
+            arg.slice("--write-baseline=".length),
+          );
         } else if (arg !== undefined && arg.startsWith("-")) {
           // CC-23: an unrecognised option is a hard usage error, not a silently
           // dropped token that could narrow or widen the run unexpectedly.
@@ -254,6 +308,11 @@ function parseArgs(argv: string[]): ParsedArgs {
         }
         break;
     }
+  }
+  if (args.baseline !== undefined && args.writeBaseline !== undefined) {
+    throw new UsageError(
+      "--baseline and --write-baseline cannot be combined; choose one (apply an existing baseline, or record a new one).",
+    );
   }
   return args;
 }
@@ -307,6 +366,17 @@ Options:
                          24h). Without it, a manifest older than 30d only warns.
       --allow-stage-skip drift: warn instead of fail when <dst> is further down
                          the registry's promotesTo pipeline than the next stage
+      --baseline [path]  run: demote findings recorded in a baseline file to
+                         warn (default .preflight/baseline.json; a registry
+                         instance tries .preflight/baseline.<env>.json first).
+                         A missing or malformed file is exit 2. A finding whose
+                         message changed still warns, flagged CHANGED.
+      --write-baseline [path]
+                         run: record every non-pass result as a baseline
+                         (default .preflight/baseline.json, or
+                         baseline.<env>.json per registry instance); exits
+                         with the run's normal code
+      --force            --write-baseline: overwrite an existing file
   -h, --help             Show this help
   -v, --version          Print the version and exit
 
@@ -609,6 +679,30 @@ async function runOneInstance(
     skip: args.skip ?? loaded.config.select?.skip,
   };
 
+  // Resolve the baseline before any network call, so a missing or malformed
+  // file (or a refused overwrite) is a usage error up front, not after a run.
+  let writePath: string | undefined;
+  let baseline: Baseline | undefined;
+  if (args.writeBaseline !== undefined) {
+    writePath =
+      typeof args.writeBaseline === "string"
+        ? resolve(cwd, args.writeBaseline)
+        : baselinePath(cwd, target.name);
+    if (existsSync(writePath) && !args.force) {
+      throw new UsageError(
+        `Baseline file ${writePath} already exists; pass --force to overwrite it.`,
+      );
+    }
+  } else {
+    const file = resolveBaselineFile(
+      args,
+      loaded.config.baseline,
+      cwd,
+      target.name,
+    );
+    if (file) baseline = readBaseline(file);
+  }
+
   const http = createSnClient({
     instanceUrl: instanceUrl ?? "https://invalid.invalid",
     ...(loaded.auth ? { auth: loaded.auth } : {}),
@@ -632,11 +726,53 @@ async function runOneInstance(
     options: loaded.config.options,
   };
 
-  return runPreflight(ctx);
+  const report = await runPreflight(ctx);
+
+  if (writePath) {
+    const b = baselineFromReport(report, target.name, new Date());
+    writeBaseline(writePath, b, { force: args.force });
+    process.stderr.write(
+      `Wrote baseline with ${b.entries.length} entr${
+        b.entries.length === 1 ? "y" : "ies"
+      } → ${writePath}\n`,
+    );
+    return report;
+  }
+  // Post-processing order: runPreflight → baseline.
+  return baseline ? applyBaseline(report, baseline, new Date()) : report;
+}
+
+/**
+ * The baseline file a run applies, or `undefined` when none is enabled. The
+ * `--baseline` flag wins over the config key; `true` means the default path,
+ * where a registry instance's own `baseline.<env>.json` is preferred over the
+ * shared `baseline.json`.
+ */
+function resolveBaselineFile(
+  args: ParsedArgs,
+  setting: string | boolean | undefined,
+  cwd: string,
+  instance: string | undefined,
+): string | undefined {
+  const chosen = args.baseline ?? setting;
+  if (chosen === undefined || chosen === false) return undefined;
+  if (typeof chosen === "string") return resolve(cwd, chosen);
+  if (instance) {
+    const own = baselinePath(cwd, instance);
+    if (existsSync(own)) return own;
+  }
+  return baselinePath(cwd);
 }
 
 /** `run` — one instance, or all of them with `--all`. */
 async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
+  if (args.all && typeof args.writeBaseline === "string") {
+    // One explicit path cannot hold every instance's findings: each instance
+    // would overwrite the previous one's file.
+    throw new UsageError(
+      "--write-baseline <path> cannot be combined with --all; omit the path to write .preflight/baseline.<env>.json per instance.",
+    );
+  }
   const registry = await loadRegistry(cwd, args.registryPath);
   const targets = resolveRunTargets(args, registry);
 
@@ -809,6 +945,14 @@ async function main(): Promise<void> {
   }
 
   const cwd = process.cwd();
+  if (
+    args.command !== "run" &&
+    (args.baseline !== undefined || args.writeBaseline !== undefined)
+  ) {
+    throw new UsageError(
+      `--baseline / --write-baseline apply to run only, not ${args.command}.`,
+    );
+  }
   switch (args.command) {
     case "sync":
       await commandSync(args, cwd);

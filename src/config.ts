@@ -57,6 +57,13 @@ export interface PreflightConfig {
    * each with an optional `:port`, or `*` to force direct connections.
    */
   noProxy?: string;
+  /**
+   * Baseline of accepted findings (see `src/baseline.ts`): `true` loads the
+   * default `.preflight/baseline.json` (per-instance file first for a registry
+   * instance), a string names the file (relative to the working directory).
+   * `false` or absent disables it. The `--baseline` flag wins over this key.
+   */
+  baseline?: string | boolean;
 }
 
 /** What {@link loadConfig} resolves: the file config plus resolved auth. */
@@ -514,6 +521,25 @@ function assertProxyConfigTypes(config: PreflightConfig): void {
   );
 }
 
+/**
+ * Fail closed on a mistyped `baseline` config value: anything other than a
+ * path string or a boolean is a {@link UsageError}, so a typo never silently
+ * disables the accepted-findings file (or enables a bogus one).
+ */
+function assertBaselineConfigType(config: PreflightConfig): void {
+  const value: unknown = config.baseline;
+  if (
+    value === undefined ||
+    typeof value === "boolean" ||
+    (typeof value === "string" && value.trim().length > 0)
+  ) {
+    return;
+  }
+  throw new UsageError(
+    `Config baseline must be true, false or a non-empty path string, got ${describeJson(value)}.`,
+  );
+}
+
 /** Options for {@link loadConfig}. */
 export interface LoadConfigOptions {
   /** Explicit config file path (overrides auto-discovery). */
@@ -576,6 +602,7 @@ export async function loadConfig(
   // Fail closed at load time on a mistyped proxy/noProxy config value (SR-5)
   // before it can reach the client as a silent bypass or a mid-request crash.
   assertProxyConfigTypes(config);
+  assertBaselineConfigType(config);
 
   // Fail closed at load time on config values that would inject into an encoded
   // query (SR-1), after env fallbacks so env-supplied values are covered too.

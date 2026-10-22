@@ -154,6 +154,16 @@ export {
   type CheckDescriptor,
 } from "./catalogue.js";
 export {
+  applyBaseline,
+  baselineFromReport,
+  baselinePath,
+  readBaseline,
+  writeBaseline,
+  BASELINE_ROW,
+  type Baseline,
+  type BaselineEntry,
+} from "./baseline.js";
+export {
   defaultChecks,
   instanceUrlConfigured,
   connectivityAuth,

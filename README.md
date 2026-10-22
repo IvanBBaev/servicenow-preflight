@@ -144,20 +144,23 @@ snpf drift <src> <dst>         # compare two instances (promote gate)
 
 Both `--flag value` and `--flag=value` forms are accepted.
 
-| Flag                      | Description                                                                    |
-| ------------------------- | ------------------------------------------------------------------------------ |
-| `-i`, `--instance <url>`  | Target instance URL (single-instance, no registry).                            |
-| `-e`, `--env <name>`      | Select a registry instance (same as positional).                               |
-| `--all`                   | `run`: sweep every instance in the registry.                                   |
-| `--registry <path>`       | Registry file (default `.preflight/instances.json`); see below.                |
-| `--config <path>`         | Config file (default: auto-discovered).                                        |
-| `--only` / `--skip <csv>` | Run only / skip these checks (comma-separated names).                          |
-| `--with-last-run`         | `sync`: also pull each test's most recent result.                              |
-| `--allow-empty`           | `sync`: commit an empty snapshot over a non-empty manifest.                    |
-| `--max-age <dur>`         | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`). |
-| `--allow-stage-skip`      | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.    |
-| `--format <fmt>`          | `pretty` (default), `json`, `junit`, `sarif`.                                  |
-| `--json` / `-h`           | Shorthand for `--format json` / show help.                                     |
+| Flag                      | Description                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--instance <url>`  | Target instance URL (single-instance, no registry).                                                           |
+| `-e`, `--env <name>`      | Select a registry instance (same as positional).                                                              |
+| `--all`                   | `run`: sweep every instance in the registry.                                                                  |
+| `--registry <path>`       | Registry file (default `.preflight/instances.json`); see below.                                               |
+| `--config <path>`         | Config file (default: auto-discovered).                                                                       |
+| `--only` / `--skip <csv>` | Run only / skip these checks (comma-separated names).                                                         |
+| `--with-last-run`         | `sync`: also pull each test's most recent result.                                                             |
+| `--allow-empty`           | `sync`: commit an empty snapshot over a non-empty manifest.                                                   |
+| `--max-age <dur>`         | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                |
+| `--allow-stage-skip`      | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                   |
+| `--format <fmt>`          | `pretty` (default), `json`, `junit`, `sarif`.                                                                 |
+| `--json` / `-h`           | Shorthand for `--format json` / show help.                                                                    |
+| `--baseline [path]`       | `run`: demote findings recorded in a baseline file to warnings (see [Baseline](#baseline-accepted-findings)). |
+| `--write-baseline [path]` | `run`: record every non-pass result as a new baseline file.                                                   |
+| `--force`                 | `--write-baseline`: overwrite an existing baseline file.                                                      |
 
 `--instance`, `--only` and `--skip` override the matching config-file values. The
 `scope` and `updateSetId` a run targets come from the config file (or the
@@ -262,6 +265,58 @@ checks to run, and per-check options — but **never credentials**.
 | `updateSetId` | `string` (sys_id)                      | `update-set-state`; also focuses `remote-set-preview` on that set's retrieved copy.                                                                                                                                                                                                                                                                                           |
 | `select`      | `{ only?: string[]; skip?: string[] }` | Check selection (CLI flags override).                                                                                                                                                                                                                                                                                                                                         |
 | `options`     | `object`                               | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).                                                                                                                                                                                                                                                                                              |
+| `baseline`    | `string \| boolean`                    | Apply a baseline file: `true` = the default path, a string = that file (CLI `--baseline` overrides).                                                                                                                                                                                                                                                                          |
+
+### Baseline (accepted findings)
+
+A brownfield app is often red on the first run. Instead of skipping whole
+checks, record today's findings once and accept them:
+
+```bash
+snpf run --write-baseline        # writes .preflight/baseline.json (refuses to overwrite without --force)
+snpf run --baseline              # applies it on every later run
+```
+
+Commit `.preflight/baseline.json` and fill in `reason` (and optionally
+`expires`) for each entry:
+
+```json
+{
+  "version": 1,
+  "generatedAt": "2026-10-22T10:00:00Z",
+  "entries": [
+    {
+      "check": "table-crud-acl",
+      "status": "fail",
+      "message": "2 custom table(s) lack CRUD ACLs: x_acme_app_a, x_acme_app_b",
+      "reason": "legacy tables, ticket ACME-123",
+      "expires": "2027-01-31"
+    }
+  ]
+}
+```
+
+- An entry matches a result by check name **and** status. A matched `fail`
+  becomes a `warn` (a matched `warn` stays one), prefixed
+  `Baselined (<reason> until <expires>): …`, so the run passes while any new
+  failure still fails it.
+- **Change detection is by message.** Results are one row per check, so when a
+  baselined check's message differs from the recorded one (for example a new
+  table joined the list), the row is still demoted but reads
+  `Baselined but CHANGED since <generatedAt>: …`. Review those rows: this is the
+  only signal that a baseline is hiding a new finding. Re-record with
+  `--write-baseline --force` once the change is understood.
+- An entry past its `expires` date (a date-only value lasts through that day,
+  UTC) is ignored — the finding fails again — and a `baseline` warning row
+  names it. Entries for checks that did not run are ignored.
+- A registry instance (`snpf run dev`, `--all`) uses
+  `.preflight/baseline.<env>.json` when present, else the shared file;
+  `--write-baseline` writes the per-instance file. An explicit path applies to
+  every instance (`--write-baseline <path>` is refused with `--all`).
+- A missing or malformed baseline file is a usage error (exit 2). `--baseline`
+  and `--write-baseline` cannot be combined. The optional path is the next
+  token unless it starts with `-`; use `--baseline=<path>` before a positional
+  instance name.
 
 ## Multi-instance: registry, sync & drift
 
