@@ -383,6 +383,29 @@ NOTES
   shell history. Set TESSERA_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY). Wherever
   the resolved config is printed, it renders <redacted>.
 
+  --provider anthropic ALSO NEEDS A CONSENTED EGRESS POLICY. It lives only in the
+  \`egress\` section of tessera.config.json, never in a flag or the env:
+
+    "egress": {
+      "consent": true,
+      "allow": { "tables": ["sys_script_include"], "fields": ["relation", "plan"] },
+      "deny":  { "tables": ["sys_user"] },
+      "baseUrlOverride": "https://proxy.example.com"
+    }
+
+  \`consent\` must be the JSON literal true; absent or false refuses the run. \`allow\`
+  is required (there is no implicit allow list); \`deny\` and \`baseUrlOverride\` are
+  optional. Field classes: name, reason, relation, plan. Unknown keys are refused.
+  Allowed free text still passes pattern redaction (keys, tokens, emails).
+
+  --egress-dry-run clears the prompt through the policy and prints it, redacted,
+  with a manifest of redaction COUNTS per class (never values). It needs the policy
+  and consent but no key, sends nothing, writes nothing, and exits 0.
+
+  The Anthropic base URL is pinned to https://api.anthropic.com. --base-url (or
+  TESSERA_ANTHROPIC_BASE_URL) may point elsewhere only when it names exactly the
+  origin in \`egress.baseUrlOverride\`; the override is logged to stderr every run.
+
   There is no --instruction flag. The library parameter it would expose REPLACES
   the frozen instruction channel rather than adding to it, and a run that drops
   the frozen prompt while still recording the pinned prompt version has provenance
@@ -402,7 +425,9 @@ NOTES
 EXIT CODES
   0 specs proposed and written — read them before you promote them
   2 usage — no source, no scope, no tests root, a kind outside the union, an
-    analysis that named nothing, or \`--provider anthropic\` with no key in the env
+    analysis that named nothing, a malformed \`egress\` section, or
+    \`--provider anthropic\` with no key in the env, no egress policy, no consent,
+    or a --base-url that \`egress.baseUrlOverride\` does not name
   3 infrastructure fault — the instance never answered, the model never answered,
     the answer was truncated, or the gate or the quality bar rejected the batch;
     either way no spec was produced and none is being claimed (DEV-1)

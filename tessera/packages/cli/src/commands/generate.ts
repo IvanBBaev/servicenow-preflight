@@ -49,6 +49,18 @@
 //    that is why the pinned generation config is built HERE rather than defaulted
 //    inside the adapter. A run that cannot name the model that produced it cannot
 //    be reproduced, and the layer that reads argv is the layer that knows.
+//
+//  * **Nothing leaves without the operator's written policy (DESIGN §10.2).**
+//    `--provider anthropic` runs only with an `egress` section in
+//    `tessera.config.json` that records `consent: true`; without one it is exit
+//    2 before anything is read. The policy is handed to the generator, which
+//    classifies and redacts the graph before a prompt exists. The base URL is
+//    pinned to the vendor's origin, and another origin needs the same file to
+//    name it (`egress.baseUrlOverride`, AIS-5). `--egress-dry-run` is the one
+//    path that prints instance-derived text on purpose: the CLEARED prompt —
+//    the bytes that would leave — escaped line by line, beside per-class
+//    redaction counts and never a redacted value. Nothing is sent and nothing
+//    is written.
 
 import path from "node:path";
 
@@ -58,7 +70,9 @@ import {
   resolveConfig,
 } from "@tessera/config";
 import {
+  ANTHROPIC_DEFAULT_BASE_URL,
   ANTHROPIC_DEFAULT_MODEL_ID,
+  clearForEgress,
   createAiTestGenerator,
   createAnthropicProvider,
   createGeneratedCodeGate,
@@ -68,7 +82,9 @@ import {
   generationTargets,
   GenerateInputError,
   PROMPT_VERSION,
+  resolveAnthropicBaseUrl,
   writeProposedSpecs,
+  type EgressPolicy,
   type LLMProvider,
   type PinnedGenConfig,
   type ProposedSpecWriter,
@@ -99,6 +115,12 @@ import type {
 } from "@tessera/types";
 
 import type { CliContext } from "../context.js";
+import {
+  EGRESS_EXAMPLE,
+  EGRESS_SECTION,
+  parseEgressConfig,
+  type EgressConfig,
+} from "../egressConfig.js";
 import { EXIT_CODES, type ExitCode } from "../exitCodes.js";
 import { GENERATE_OPTIONS } from "../options.js";
 import { createCliImpactAnalyzer } from "../impactComposition.js";
@@ -110,9 +132,12 @@ import { bindRole, TopologyError } from "../topology.js";
  *   0  specs were proposed and written to `proposed/`. Read them before you
  *      promote them; that review is the control this command is built around.
  *   2  the request was wrong: no source, no scope, no tests root, a kind outside
- *      the union, `--provider anthropic` with no key in the environment, or any
- *      `GenerateInputError` — every one of them is fixed by a different
- *      argument, not by a retry.
+ *      the union, `--provider anthropic` with no key in the environment, with
+ *      no `egress` policy in the config file, with a policy that does not
+ *      record `consent: true`, or with a base URL the policy does not name, a
+ *      malformed `egress` section, or any `GenerateInputError` (an egress
+ *      refusal included) — every one of them is fixed by a different argument
+ *      or a different policy, not by a retry.
  *   3  the instance never answered, the model never answered, the answer was
  *      truncated, the gate refused the batch, or the quality bar rejected it.
  *      All of them are DEV-1 faults reaching `cli.ts`: no spec was produced, and
@@ -171,12 +196,103 @@ export const nodeFetch: ProviderFetch = async (url, init) =>
     ...(init.signal === undefined ? {} : { signal: init.signal }),
   });
 
+/**
+ * `--egress-dry-run`: the clearance the generator would run, and its result,
+ * with no provider and no writer anywhere in reach.
+ *
+ * The prompt is the one place this command prints instance-derived text, and
+ * it prints the CLEARED prompt only — what the policy lets leave, with the
+ * withheld classes already replaced by placeholders. Each line is escaped for
+ * the terminal (TM-1): the data channel is untrusted however it was redacted.
+ * The manifest is counts per class; a redacted value never appears, not even
+ * as a length.
+ */
+function egressDryRunReport(args: {
+  readonly context: CliContext;
+  readonly json: boolean;
+  readonly kind: TestKind;
+  readonly graph: ImpactReport["graph"];
+  readonly policy: EgressPolicy;
+  readonly configFile: string;
+  readonly usage: (message: string) => ExitCode;
+}): ExitCode {
+  const { context, json, kind, graph, policy, configFile, usage } = args;
+  let clearance;
+  try {
+    clearance = clearForEgress(kind, graph, policy);
+  } catch (error) {
+    // An `EgressRefusedError` is a `GenerateInputError`: the policy withholds
+    // an artifact the run needs, which a real run would refuse identically.
+    if (error instanceof GenerateInputError) return usage(error.message);
+    throw error;
+  }
+  const { prompt, report } = clearance;
+  const escapeLines = (text: string): string[] =>
+    text.split("\n").map((line) => escapeForTerminal(line));
+
+  if (json) {
+    context.stdout(
+      JSON.stringify(
+        {
+          egressDryRun: true,
+          // Constants, for `executed`/`promoted`'s reason: this path holds no
+          // provider and no writer, so there is no branch to compute them from.
+          sent: false,
+          written: false,
+          kind,
+          policyFile: configFile,
+          artifacts: report.artifacts,
+          redactions: report.redactions,
+          promptHash: prompt.promptHash,
+          // Escaped like the human branch, so a consumer that prints a field
+          // cannot be driven by it; lines are rejoined with "\n".
+          prompt: {
+            instruction: escapeLines(prompt.instruction).join("\n"),
+            data: escapeLines(prompt.data).join("\n"),
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    return EXIT_CODES.ok;
+  }
+
+  context.stdout(
+    `egress dry run — NOTHING WAS SENT and nothing was written. Below is the prompt \`--provider anthropic\` would send under the egress policy in ${escapeForTerminal(configFile)}.`,
+  );
+  context.stdout("");
+  context.stdout(`cleared: ${report.artifacts} artifact(s), kind ${kind}`);
+  context.stdout(
+    "redactions per class (counts only; a redacted value is never shown):",
+  );
+  const categories = Object.keys(report.redactions);
+  const width = Math.max(0, ...categories.map((name) => name.length));
+  for (const [category, count] of Object.entries(report.redactions)) {
+    context.stdout(`  ${pad(category, width)}  ${count}`);
+  }
+  context.stdout(`prompt hash: ${prompt.promptHash}`);
+  context.stdout("");
+  context.stdout("--- instruction (developer-authored) ---");
+  for (const line of escapeLines(prompt.instruction)) context.stdout(line);
+  context.stdout("--- data (instance-derived, after redaction) ---");
+  for (const line of escapeLines(prompt.data)) context.stdout(line);
+  context.stdout("--- end of prompt ---");
+  return EXIT_CODES.ok;
+}
+
 export async function generateCommand(
   argv: readonly string[],
   context: CliContext,
 ): Promise<number> {
   const usage = (message: string): ExitCode => {
     context.stderr(`tess generate: ${message}`);
+    return EXIT_CODES.usage;
+  };
+  const configError = (error: ConfigError): ExitCode => {
+    context.stderr(`tess generate: ${error.message}`);
+    context.stderr("");
+    context.stderr("Run `tess generate --help` for usage.");
     return EXIT_CODES.usage;
   };
 
@@ -187,19 +303,32 @@ export async function generateCommand(
       env: context.env,
       cwd: context.cwd,
       options: GENERATE_OPTIONS,
+      sections: [EGRESS_SECTION],
     });
   } catch (error) {
-    if (error instanceof ConfigError) {
-      context.stderr(`tess generate: ${error.message}`);
-      context.stderr("");
-      context.stderr("Run `tess generate --help` for usage.");
-      return EXIT_CODES.usage;
-    }
+    if (error instanceof ConfigError) return configError(error);
     throw error;
+  }
+
+  // Parsed whenever the file carries it, whatever the provider: a broken
+  // committed policy fails here even on a template run, for the config layer's
+  // reason — a file that is only validated when it matters fails on the day it
+  // matters.
+  const configFile = resolved.configFile ?? "tessera.config.json";
+  let egressConfig: EgressConfig | undefined;
+  const rawEgress = resolved.sections?.[EGRESS_SECTION];
+  if (rawEgress !== undefined) {
+    try {
+      egressConfig = parseEgressConfig(rawEgress, configFile);
+    } catch (error) {
+      if (error instanceof ConfigError) return configError(error);
+      throw error;
+    }
   }
 
   const values = resolved.values;
   const json = values.json === true;
+  const dryRun = values.egressDryRun === true;
 
   // Redacted by descriptor — `apiKey` renders `<redacted>` here, on every layer
   // it could have come from.
@@ -259,7 +388,10 @@ export async function generateCommand(
     promptVersion: PROMPT_VERSION,
   };
 
-  let provider: LLMProvider;
+  // Undefined exactly on an `--egress-dry-run`, which builds no provider at all:
+  // the preview needs no key and must not be able to reach the transport.
+  let provider: LLMProvider | undefined;
+  let policy: EgressPolicy | undefined;
   // Whether this run sends the scope's script bodies off the machine — the one
   // question about `--provider` the document could not answer. `provider.name`
   // and `modelId` were both there, and both are useless for it unless the
@@ -279,29 +411,87 @@ export async function generateCommand(
   // flip of the first two. `--base-url` does not soften "third-party": it
   // redirects where the prompt goes, it does not keep it in this process.
   let egress: "none" | "third-party";
+  if (dryRun && providerName !== "anthropic") {
+    return usage(
+      "--egress-dry-run previews what `--provider anthropic` would send; pass it with --provider anthropic (the template provider sends nothing)",
+    );
+  }
   if (providerName === "anthropic") {
     const apiKey = values.apiKey;
-    if (typeof apiKey !== "string" || apiKey.trim() === "") {
+    if (!dryRun && (typeof apiKey !== "string" || apiKey.trim() === "")) {
       return usage(
         "--provider anthropic needs a key in TESSERA_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY); it is env-only on purpose — a flag would put the credential in your shell history and in `ps`",
       );
     }
+    // DESIGN §10.2: the policy is the operator's, in writing, and its absence
+    // is a refusal — never a default. `DEFAULT_EGRESS_POLICY` exists and is
+    // deliberately not used here: it records no consent, so it could only ever
+    // refuse later and less helpfully.
+    if (egressConfig === undefined) {
+      return usage(
+        `--provider anthropic sends the scope's impact graph to a third party, and no egress policy is configured; add an \`${EGRESS_SECTION}\` section to ${configFile} that names what may leave and records consent, e.g. ${EGRESS_EXAMPLE} — or use the offline template provider (DESIGN §10.2)`,
+      );
+    }
+    if (egressConfig.policy.consent !== true) {
+      return usage(
+        `the egress policy in ${configFile} does not record consent; instance data is sent to an LLM provider only with \`"consent": true\` in the \`${EGRESS_SECTION}\` section — an explicit opt-in no flag can supply (DESIGN §10.4). \`--egress-dry-run\` previews what would be sent once it does.`,
+      );
+    }
+    policy = egressConfig.policy;
+
+    // AIS-5: the key goes wherever the base URL points, so the URL is pinned.
+    // Normalised first, so `https://API.anthropic.com/` is the default and not
+    // an override; any other origin must be the one the policy names.
+    let baseUrl: string;
+    let allowBaseUrlOverride = false;
     try {
-      provider = createAnthropicProvider({
-        fetch: nodeFetch,
-        apiKey,
-        config: genConfig,
-        ...(typeof values.baseUrl === "string" && values.baseUrl.trim() !== ""
-          ? { baseUrl: values.baseUrl }
-          : {}),
-      });
+      baseUrl = resolveAnthropicBaseUrl(
+        typeof values.baseUrl === "string" && values.baseUrl.trim() !== ""
+          ? values.baseUrl
+          : undefined,
+        true,
+      );
     } catch (error) {
-      // The adapter validates its own config and reports what is wrong with it.
-      // The key is never in that message; it checks only that one exists.
       if (error instanceof GenerateInputError) return usage(error.message);
       throw error;
     }
-    egress = "third-party";
+    if (baseUrl !== ANTHROPIC_DEFAULT_BASE_URL) {
+      if (egressConfig.baseUrlOverride !== baseUrl) {
+        // The refused value is not echoed: it came from a flag or the
+        // environment, and the message names where to look instead.
+        return usage(
+          `the Anthropic base URL is pinned to ${ANTHROPIC_DEFAULT_BASE_URL}; --base-url (or TESSERA_ANTHROPIC_BASE_URL) names another origin, which runs only when \`${EGRESS_SECTION}.baseUrlOverride\` in ${configFile} names that exact origin (AIS-5)`,
+        );
+      }
+      allowBaseUrlOverride = true;
+      // Said on every run, not only the first: the operator reading a CI log
+      // must be able to see the key went somewhere other than the vendor.
+      context.stderr(
+        `tess generate: Anthropic base URL override in effect: ${escapeForTerminal(baseUrl)} (${EGRESS_SECTION}.baseUrlOverride in ${escapeForTerminal(configFile)})`,
+      );
+    }
+
+    if (dryRun) {
+      // No provider: the preview runs the analysis and the clearance, and
+      // returns before anything could be sent.
+      egress = "none";
+    } else {
+      try {
+        provider = createAnthropicProvider({
+          fetch: nodeFetch,
+          apiKey: apiKey as string,
+          config: genConfig,
+          ...(baseUrl === ANTHROPIC_DEFAULT_BASE_URL ? {} : { baseUrl }),
+          allowBaseUrlOverride,
+        });
+      } catch (error) {
+        // The adapter validates its own config and reports what is wrong with
+        // it. The key is never in that message; it checks only that one exists.
+        if (error instanceof GenerateInputError) return usage(error.message);
+        throw error;
+      }
+      egress = "third-party";
+    }
   } else {
     // Offline, deterministic, and the default: the spelling that costs money and
     // sends a scope's script bodies to a third party is the one you have to type.
@@ -389,6 +579,19 @@ export async function generateCommand(
     );
   }
 
+  if (provider === undefined) {
+    return egressDryRunReport({
+      context,
+      json,
+      kind: kindValue,
+      graph: report.graph,
+      // Set on every path that leaves `provider` undefined.
+      policy: policy as EgressPolicy,
+      configFile,
+      usage,
+    });
+  }
+
   // The write report never leaves the generator: `TestGenerator.generate`
   // returns specs, and three facts about what happened on disk — which files
   // were overwritten, and the live manifest the writer deliberately did not
@@ -417,6 +620,10 @@ export async function generateCommand(
     quality: createGenerationQualityBar(),
     writer,
     testsRoot,
+    // The operator's policy, on the anthropic path only: the generator
+    // classifies and redacts the graph with it before rendering, and the
+    // adapter refuses a prompt that did not come out of that clearance.
+    ...(policy === undefined ? {} : { egress: policy }),
     // No `instruction` override. `../options.ts` argues why the CLI declares no
     // flag for it: the parameter replaces the frozen instruction channel whole,
     // and a run that does that while still recording the pinned prompt version

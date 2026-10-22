@@ -77,6 +77,15 @@ export interface ResolveInput<
   readonly readTextFile?: ReadTextFile;
   /** The option table. Defaults to the Phase-1 `PREFLIGHT_OPTIONS`. */
   readonly options?: T;
+  /**
+   * Top-level config-file keys this caller accepts as STRUCTURED sections
+   * (`egress`), returned raw in `ResolvedConfig.sections` for the caller to
+   * validate against its own schema. A section is file-only: it has no flag
+   * and no environment variable, because a nested policy has no honest
+   * one-line spelling. It is still secret-scanned with the rest of the
+   * document, and a key no option and no section names is still refused.
+   */
+  readonly sections?: readonly string[];
 }
 
 const TRUE_WORDS = new Set(["true", "1", "yes", "on"]);
@@ -92,6 +101,8 @@ export function resolveConfig<
 >(input: ResolveInput<T> = {}): ResolvedConfig<ResolvedValues<T>> {
   const options: readonly OptionSpec[] = input.options ?? PREFLIGHT_OPTIONS;
   assertTable(options);
+  const sectionNames = input.sections ?? [];
+  assertSections(options, sectionNames);
 
   const argv = input.argv ?? [];
   const env = input.env ?? process.env;
@@ -107,6 +118,7 @@ export function resolveConfig<
     cwd,
     read,
     options,
+    sectionNames,
   });
 
   const values: Record<string, OptionValue> = {};
@@ -125,6 +137,7 @@ export function resolveConfig<
     provenance,
     aliasedFrom,
     ...(file.path === undefined ? {} : { configFile: file.path }),
+    ...(input.sections === undefined ? {} : { sections: file.sections }),
     options,
   };
 }
@@ -194,6 +207,38 @@ function assertTable(options: readonly OptionSpec[]): void {
   }
 }
 
+/**
+ * A section name is a wiring decision of the caller, so a bad one is a broken
+ * table: it must not shadow an option key, must not be declared twice, and must
+ * not itself be a credential-bearing key (the secret scan would refuse every
+ * file that used it).
+ */
+function assertSections(
+  options: readonly OptionSpec[],
+  sectionNames: readonly string[],
+): void {
+  const seen = new Set<string>();
+  for (const name of sectionNames) {
+    if (name.trim() === "" || name !== name.trim()) {
+      throw new ConfigError(`config section name "${name}" is blank or padded`);
+    }
+    if (seen.has(name)) {
+      throw new ConfigError(`config section "${name}" is declared twice`);
+    }
+    seen.add(name);
+    if (findByKey(options, name) !== undefined) {
+      throw new ConfigError(
+        `config section "${name}" shadows an option of the same key`,
+      );
+    }
+    if (isSecretKey(name)) {
+      throw new ConfigError(
+        `config section "${name}" is a credential-bearing name; a config file never carries one`,
+      );
+    }
+  }
+}
+
 function flagList(options: readonly OptionSpec[]): string {
   return options
     .map((option) => option.flag)
@@ -201,9 +246,11 @@ function flagList(options: readonly OptionSpec[]): string {
     .join(", ");
 }
 
-function keyList(options: readonly OptionSpec[]): string {
-  return options
-    .map((option) => option.key)
+function keyList(
+  options: readonly OptionSpec[],
+  sectionNames: readonly string[] = [],
+): string {
+  return [...options.map((option) => option.key), ...sectionNames]
     .sort()
     .join(", ");
 }
@@ -351,6 +398,8 @@ function envLayer(
 interface LoadedFile {
   readonly path?: string;
   readonly values: Readonly<Record<string, unknown>>;
+  /** Raw values of the declared sections that the file actually carries. */
+  readonly sections: Readonly<Record<string, unknown>>;
 }
 
 function explicitConfigPath(
@@ -375,8 +424,9 @@ function loadConfigFile(args: {
   cwd: string;
   read: ReadTextFile;
   options: readonly OptionSpec[];
+  sectionNames: readonly string[];
 }): LoadedFile {
-  const { explicitPath, cwd, read, options } = args;
+  const { explicitPath, cwd, read, options, sectionNames } = args;
   const guarded: ReadTextFile = (filePath) => {
     try {
       return read(filePath);
@@ -401,7 +451,7 @@ function loadConfigFile(args: {
     }
     found = { path: resolved, text };
   }
-  if (found === undefined) return { values: {} };
+  if (found === undefined) return { values: {}, sections: {} };
 
   let document: unknown;
   try {
@@ -431,13 +481,20 @@ function loadConfigFile(args: {
     );
   }
 
-  for (const key of Object.keys(document)) {
+  const values: Record<string, unknown> = {};
+  const sections: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(document)) {
+    if (sectionNames.includes(key)) {
+      sections[key] = value;
+      continue;
+    }
     const spec = findByKey(options, key);
     if (spec === undefined) {
       throw new ConfigError(
-        `unknown key "${key}" in ${found.path} — valid keys: ${keyList(options)}`,
+        `unknown key "${key}" in ${found.path} — valid keys: ${keyList(options, sectionNames)}`,
       );
     }
+    values[key] = value;
     if (!allowsSource(spec, "file")) {
       throw new ConfigError(
         `"${key}" may not be set in ${found.path} — allowed layers: ${(spec.sources ?? []).join(", ")}`,
@@ -445,7 +502,7 @@ function loadConfigFile(args: {
     }
   }
 
-  return { path: found.path, values: document };
+  return { path: found.path, values, sections };
 }
 
 // ── precedence ──────────────────────────────────────────────────────────────

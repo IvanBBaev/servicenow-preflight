@@ -641,6 +641,12 @@ are not the `SNPF_*` variables the preflight checks use. Options resolve as
 flag > env > `tessera.config.json` > default, and secrets are read only from env
 or the credential store, never from a config file.
 
+`tess generate --provider anthropic` sends redacted instance data to a third
+party, so it also needs an `egress` section in `tessera.config.json` that records
+`"consent": true` and names an `allow` list; without one it exits `2`.
+`--egress-dry-run` prints the redacted prompt and per-class redaction counts
+without calling the API. See `tess generate --help` for the schema.
+
 ```bash
 export SN_INSTANCE=https://dev12345.service-now.com SN_USER=admin SN_PASSWORD='…'
 npx tess doctor --instance default

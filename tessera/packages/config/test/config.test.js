@@ -557,6 +557,92 @@ describe("config-file discovery", () => {
   });
 });
 
+describe("structured file-only sections", () => {
+  const POLICY = { consent: true, allow: { tables: ["sys_script_include"] } };
+
+  it("routes a declared section out raw and keeps it out of the option values", () => {
+    const resolved = resolve({
+      sections: ["egress"],
+      files: {
+        "/work/tessera.config.json": json({ scope: "x_acme", egress: POLICY }),
+      },
+    });
+    assert.deepEqual(resolved.sections, { egress: POLICY });
+    assert.equal(resolved.values.scope, "x_acme");
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(resolved.values, "egress"),
+      false,
+    );
+    assert.equal(resolved.provenance.egress, undefined);
+  });
+
+  it("returns an empty section map when the file does not carry the section, or there is no file", () => {
+    assert.deepEqual(
+      resolve({
+        sections: ["egress"],
+        files: { "/work/tessera.config.json": json({ scope: "x_acme" }) },
+      }).sections,
+      {},
+    );
+    assert.deepEqual(resolve({ sections: ["egress"] }).sections, {});
+  });
+
+  it("omits the section map entirely for a caller that declared none", () => {
+    assert.equal("sections" in resolve(), false);
+  });
+
+  it("still refuses the section key for a caller that did not declare it", () => {
+    throwsWith(
+      () =>
+        resolve({
+          files: { "/work/tessera.config.json": json({ egress: POLICY }) },
+        }),
+      ConfigError,
+      (error) => assert.match(error.message, /unknown key "egress"/),
+    );
+  });
+
+  it("lists the declared sections among the valid keys of an unknown-key error", () => {
+    throwsWith(
+      () =>
+        resolve({
+          sections: ["egress"],
+          files: { "/work/tessera.config.json": json({ egres: POLICY }) },
+        }),
+      ConfigError,
+      (error) => assert.match(error.message, /valid keys: .*\begress\b/),
+    );
+  });
+
+  it("secret-scans a section like the rest of the document", () => {
+    throwsWith(
+      () =>
+        resolve({
+          sections: ["egress"],
+          files: {
+            "/work/tessera.config.json": json({
+              egress: { ...POLICY, apiKey: "fake-fixture-value" },
+            }),
+          },
+        }),
+      ConfigSecretError,
+      (error) => assert.equal(error.keyPath, "egress.apiKey"),
+    );
+  });
+
+  it("refuses a section declaration that is blank, padded, repeated, shadows an option or names a credential", () => {
+    for (const sections of [
+      [""],
+      [" egress"],
+      ["egress", "egress"],
+      ["scope"],
+      ["password"],
+    ]) {
+      assert.throws(() => resolve({ sections }), ConfigError, String(sections));
+    }
+  });
+});
+
 describe("secrets never reach a config file or argv", () => {
   it("refuses a credential planted in a config file and names the offending key path", () => {
     throwsWith(

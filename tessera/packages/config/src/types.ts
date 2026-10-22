@@ -127,6 +127,13 @@ export interface ResolvedConfig<T extends ConfigValues = ConfigValues> {
   readonly aliasedFrom: Readonly<Record<string, string>>;
   /** Absolute path of the config file that took part, if one did. */
   readonly configFile?: string;
+  /**
+   * Raw values of the structured file-only sections the caller declared via
+   * `ResolveInput.sections`, keyed by section name. Present only when the
+   * caller declared sections; a declared section the file does not carry is
+   * absent. The caller validates the shape — the resolver only routes it.
+   */
+  readonly sections?: Readonly<Record<string, unknown>>;
   /** The table this result was resolved against — what redaction keys on. */
   readonly options: readonly OptionSpec[];
 }

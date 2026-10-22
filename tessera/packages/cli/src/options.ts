@@ -486,7 +486,19 @@ export const GENERATE_OPTIONS = [
     env: "TESSERA_ANTHROPIC_BASE_URL",
     type: "string",
     default: ANTHROPIC_DEFAULT_BASE_URL,
-    describe: `API base URL for --provider anthropic (default \`${ANTHROPIC_DEFAULT_BASE_URL}\`)`,
+    describe: `API base URL for --provider anthropic (default \`${ANTHROPIC_DEFAULT_BASE_URL}\`); pinned — another https origin also needs \`egress.baseUrlOverride\` in the config file (AIS-5)`,
+  },
+  // ARGV-ONLY, like the apply hardening rows: a preview is a per-invocation
+  // request by the person at the keyboard. Left in a shell profile or a
+  // committed file it would turn every real run into a silent no-op.
+  {
+    key: "egressDryRun",
+    flag: "--egress-dry-run",
+    type: "boolean",
+    sources: ["flag"],
+    default: false,
+    describe:
+      "print the redacted prompt --provider anthropic would send, plus per-class redaction counts, and exit without calling the provider or writing anything",
   },
   // THERE IS NO `--instruction` ROW, and that is a decision rather than an
   // omission. `AiTestGeneratorOptions.instruction` exists and is reachable from

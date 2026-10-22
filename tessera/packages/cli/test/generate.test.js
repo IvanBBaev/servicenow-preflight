@@ -102,7 +102,17 @@ const DYNAMIC_SCRIPT = [
   "handler.run();",
 ].join("\n");
 
-function seed({ dynamic = false, empty = false } = {}) {
+/**
+ * Planted into an artifact NAME — a field that does reach the prompt — so the
+ * egress cases can prove the redaction rather than the absence of a script
+ * body that was never in the graph. Fake fixture values, not credentials.
+ */
+const PLANTED = "PLANTED-name-6e1d";
+const PLANTED_EMAIL = "planted.owner@example.com";
+const PLANTED_TOKEN = "fake-planted-token-value";
+const PLANTED_RULE_NAME = `${PLANTED} owner ${PLANTED_EMAIL} token=${PLANTED_TOKEN}`;
+
+function seed({ dynamic = false, empty = false, planted = false } = {}) {
   const include = (sysId, name, script) => ({
     sys_id: sysId,
     name,
@@ -134,8 +144,8 @@ function seed({ dynamic = false, empty = false } = {}) {
     sys_script: [
       {
         sys_id: RULE_ID,
-        name: "Recalculate totals",
-        sys_name: "Recalculate totals",
+        name: planted ? PLANTED_RULE_NAME : "Recalculate totals",
+        sys_name: planted ? PLANTED_RULE_NAME : "Recalculate totals",
         sys_scope: SCOPE_ID,
         script: RULE_SCRIPT,
       },
@@ -271,6 +281,10 @@ async function harness(options = {}) {
   for (const rule of options.faults ?? []) fake.faults.add(rule);
 
   const realFetch = globalThis.fetch;
+  // Every request to a host that is not the fake instance, recorded and then
+  // REJECTED. The egress cases read it to see exactly which bytes would have
+  // left, without anything leaving.
+  const foreign = [];
   globalThis.fetch = (input, init) => {
     const href =
       typeof input === "string"
@@ -279,12 +293,23 @@ async function harness(options = {}) {
           ? input.href
           : input.url;
     if (new URL(href).host !== SOURCE_HOST) {
+      foreign.push({ href, body: String(init?.body ?? "") });
       return Promise.reject(new Error(`no fake instance for ${href}`));
     }
     return fake.fetch(input, init);
   };
 
   const root = await tempRoot();
+  // Written before the command runs, at the root that is also the injected
+  // cwd, so discovery finds it exactly as it would find an operator's file.
+  if (options.config !== undefined) {
+    await fs.writeFile(
+      path.join(root, "tessera.config.json"),
+      typeof options.config === "string"
+        ? options.config
+        : `${JSON.stringify(options.config, null, 2)}\n`,
+    );
+  }
   const testsRoot =
     options.specs === undefined
       ? undefined
@@ -304,6 +329,7 @@ async function harness(options = {}) {
   const err = [];
   return {
     fake,
+    foreign,
     out,
     err,
     root,
@@ -497,9 +523,8 @@ describe("tess generate — refuses before it reads anything", () => {
   });
 
   it("takes the key from the environment and never prints it", async () => {
-    // This run gets PAST the key check, so it reaches the provider — which
-    // refuses before building a request, because no egress policy has cleared
-    // the prompt (DESIGN §10.3: classification before egress, fail-closed). The
+    // This run gets PAST the key check and stops at the egress policy: there is
+    // no config file, so nothing may leave (DESIGN §10.2, fail-closed). The
     // vendor is never called, and the host dispatcher is never even asked.
     // What is asserted here is the code (the operator's fix, not a fault) and
     // the silence about the key.
@@ -512,7 +537,8 @@ describe("tess generate — refuses before it reads anything", () => {
     );
 
     assert.equal(code, EXIT_CODES.usage);
-    assert.match(h.stderr(), /egress classification/);
+    assert.match(h.stderr(), /no egress policy is configured/);
+    assert.deepEqual(h.foreign, []);
     assert.ok(!h.stdout().includes("sk-ant-secret-value"));
     assert.ok(!h.stderr().includes("sk-ant-secret-value"));
     // The config-precedence block prints the key's ORIGIN, redacted.
@@ -926,6 +952,408 @@ describe("tess generate — an unfinished analysis is not a clean one", () => {
 });
 
 // ── the code that is never returned ────────────────────────────────────────
+
+// ── the egress policy (DESIGN §10.2, AIS-5) ────────────────────────────────
+
+/** A fake fixture key — the harness rejects every request to a vendor. */
+const FAKE_KEY = "sk-ant-fake-egress-fixture-never-print";
+const KEY_ENV = { TESSERA_ANTHROPIC_API_KEY: FAKE_KEY };
+const ANTHROPIC = ["--provider", "anthropic"];
+
+/** Every table the fixture's impact graph touches. */
+const GRAPH_TABLES = [
+  "sys_script_include",
+  "sys_script",
+  "sys_ui_action",
+  "sysauto_script",
+];
+
+function egressConfig(egress) {
+  return { egress };
+}
+
+const CONSENTED = {
+  consent: true,
+  allow: { tables: GRAPH_TABLES, fields: ["relation", "plan"] },
+};
+
+/** Nothing the egress cases print or send may carry any of these. */
+function assertNoLeak(text) {
+  for (const value of [
+    PLANTED,
+    PLANTED_EMAIL,
+    PLANTED_TOKEN,
+    CANARY,
+    FAKE_KEY,
+  ]) {
+    assert.ok(!text.includes(value), `leaked ${value}`);
+  }
+}
+
+describe("tess generate — --provider anthropic needs a policy with consent", () => {
+  it("exits 2 with no egress policy, naming the file and the section, before any read", async () => {
+    const { code, h } = await run(["generate", ...ARGV, ...ANTHROPIC], {
+      specs: LIVE,
+      env: KEY_ENV,
+    });
+
+    assert.equal(code, EXIT_CODES.usage);
+    assert.match(h.stderr(), /no egress policy is configured/);
+    assert.match(h.stderr(), /tessera\.config\.json/);
+    assert.match(h.stderr(), /"consent": true/);
+    assert.deepEqual(h.fake.requests(), []);
+    assert.deepEqual(h.foreign, []);
+    assertNoLeak(h.stdout() + h.stderr());
+  });
+
+  it("exits 2 when the policy records consent: false, or no consent at all", async () => {
+    for (const consent of [false, undefined]) {
+      const { code, h } = await run(["generate", ...ARGV, ...ANTHROPIC], {
+        specs: LIVE,
+        env: KEY_ENV,
+        config: egressConfig({ ...CONSENTED, consent }),
+      });
+
+      assert.equal(code, EXIT_CODES.usage, String(consent));
+      assert.match(h.stderr(), /does not record consent/);
+      assert.deepEqual(h.fake.requests(), []);
+      assert.deepEqual(h.foreign, []);
+    }
+  });
+
+  it("refuses consent spelled as anything but the JSON literal true", async () => {
+    for (const consent of ["true", 1, "yes"]) {
+      const { code, h } = await run(["generate", ...ARGV, ...ANTHROPIC], {
+        specs: LIVE,
+        env: KEY_ENV,
+        config: egressConfig({ ...CONSENTED, consent }),
+      });
+
+      assert.equal(code, EXIT_CODES.usage, String(consent));
+      assert.match(h.stderr(), /invalid egress policy in .*`egress\.consent`/);
+      assert.deepEqual(h.foreign, []);
+    }
+  });
+
+  it("refuses a malformed policy with the path of what is wrong, on any provider", async () => {
+    const cases = [
+      [[], /`egress` must be an object/],
+      [{ ...CONSENTED, alow: {} }, /`egress` has a key that is not part/],
+      [{ consent: true }, /`egress\.allow` is required/],
+      [{ consent: true, allow: [] }, /`egress\.allow` must be an object/],
+      [
+        { consent: true, allow: { tables: ["sys_script"], field: [] } },
+        /`egress\.allow` has a key/,
+      ],
+      [
+        { consent: true, allow: { tables: "sys_script" } },
+        /`egress\.allow\.tables` must be a list/,
+      ],
+      [
+        { consent: true, allow: { tables: ["sys_script", "not a table"] } },
+        /`egress\.allow\.tables\[1\]` is not a table name/,
+      ],
+      [
+        { consent: true, allow: { fields: "plan" } },
+        /`egress\.allow\.fields` must be a list/,
+      ],
+      [
+        { consent: true, allow: { fields: ["relation", "body"] } },
+        /`egress\.allow\.fields\[1\]` is not a field class/,
+      ],
+      [{ ...CONSENTED, deny: { tables: [7] } }, /`egress\.deny\.tables\[0\]`/],
+      [{ ...CONSENTED, baseUrlOverride: 443 }, /`egress\.baseUrlOverride`/],
+      [
+        { ...CONSENTED, baseUrlOverride: "http://gateway.example" },
+        /`egress\.baseUrlOverride` is refused: .*https/,
+      ],
+    ];
+    for (const [egress, message] of cases) {
+      // The template provider: a broken committed policy fails even on a run
+      // that would not have used it.
+      const { code, h } = await run(["generate", ...ARGV], {
+        specs: LIVE,
+        config: egressConfig(egress),
+      });
+
+      assert.equal(code, EXIT_CODES.usage, JSON.stringify(egress));
+      assert.match(h.stderr(), message, JSON.stringify(egress));
+      assert.deepEqual(h.fake.requests(), []);
+    }
+  });
+
+  it("still refuses an egress section that carries a credential", async () => {
+    const { code, h } = await run(["generate", ...ARGV, ...ANTHROPIC], {
+      specs: LIVE,
+      env: KEY_ENV,
+      config: egressConfig({
+        ...CONSENTED,
+        apiKey: "fake-fixture-key-in-file",
+      }),
+    });
+
+    assert.equal(code, EXIT_CODES.usage);
+    assert.match(h.stderr(), /egress\.apiKey/);
+    assert.ok(!h.stderr().includes("fake-fixture-key-in-file"));
+  });
+
+  it("sends only the cleared prompt, with the withheld classes redacted", async () => {
+    // The full path, as far as a fake can take it: the policy is wired, the
+    // generator clears the graph, and the adapter hands the request to fetch —
+    // which the harness records and REJECTS. Exit 3 is that transport fault;
+    // what is asserted is the body that would have left.
+    const { code, h } = await run(["generate", ...ARGV, ...ANTHROPIC], {
+      specs: LIVE,
+      env: KEY_ENV,
+      state: { planted: true },
+      config: egressConfig(CONSENTED),
+    });
+
+    assert.equal(code, EXIT_CODES.fault);
+    assert.equal(h.foreign.length, 1);
+    assert.equal(h.foreign[0].href, "https://api.anthropic.com/v1/messages");
+    assert.match(h.foreign[0].body, /«REDACTED:name:\d+»/);
+    assertNoLeak(h.foreign[0].body.replace(FAKE_KEY, ""));
+    assertNoLeak(h.stdout() + h.stderr());
+    await assert.rejects(
+      fs.access(path.join(h.testsRoot, PROPOSED_MANIFEST)),
+      /ENOENT/,
+    );
+  });
+});
+
+describe("tess generate — the Anthropic base URL is pinned (AIS-5)", () => {
+  it("refuses another origin the policy does not name, before any read", async () => {
+    const { code, h } = await run(
+      [
+        "generate",
+        ...ARGV,
+        ...ANTHROPIC,
+        "--base-url",
+        "https://gateway.example",
+      ],
+      { specs: LIVE, env: KEY_ENV, config: egressConfig(CONSENTED) },
+    );
+
+    assert.equal(code, EXIT_CODES.usage);
+    assert.match(h.stderr(), /pinned to https:\/\/api\.anthropic\.com/);
+    assert.match(h.stderr(), /egress\.baseUrlOverride/);
+    assert.ok(!h.stderr().includes("gateway.example"));
+    assert.deepEqual(h.fake.requests(), []);
+    assert.deepEqual(h.foreign, []);
+  });
+
+  it("refuses a plain-http base URL even with an override configured", async () => {
+    const { code, h } = await run(["generate", ...ARGV, ...ANTHROPIC], {
+      specs: LIVE,
+      env: {
+        ...KEY_ENV,
+        TESSERA_ANTHROPIC_BASE_URL: "http://api.anthropic.com",
+      },
+      config: egressConfig({
+        ...CONSENTED,
+        baseUrlOverride: "https://gateway.example",
+      }),
+    });
+
+    assert.equal(code, EXIT_CODES.usage);
+    assert.match(h.stderr(), /must use https/);
+    assert.deepEqual(h.foreign, []);
+  });
+
+  it("accepts the default origin in another spelling as the default", async () => {
+    const { code, h } = await run(
+      [
+        "generate",
+        ...ARGV,
+        ...ANTHROPIC,
+        "--base-url",
+        "https://API.anthropic.com/",
+      ],
+      { specs: LIVE, env: KEY_ENV, config: egressConfig(CONSENTED) },
+    );
+
+    assert.equal(code, EXIT_CODES.fault);
+    assert.doesNotMatch(h.stderr(), /override in effect/);
+    assert.equal(h.foreign[0].href, "https://api.anthropic.com/v1/messages");
+  });
+
+  it("uses the named override, and says so on stderr", async () => {
+    const { code, h } = await run(
+      [
+        "generate",
+        ...ARGV,
+        ...ANTHROPIC,
+        "--base-url",
+        "https://Gateway.example/",
+      ],
+      {
+        specs: LIVE,
+        env: KEY_ENV,
+        config: egressConfig({
+          ...CONSENTED,
+          baseUrlOverride: "https://gateway.example",
+        }),
+      },
+    );
+
+    assert.equal(code, EXIT_CODES.fault);
+    assert.match(
+      h.stderr(),
+      /Anthropic base URL override in effect: https:\/\/gateway\.example \(egress\.baseUrlOverride in .*tessera\.config\.json\)/,
+    );
+    assert.deepEqual(
+      h.foreign.map((entry) => entry.href),
+      ["https://gateway.example/v1/messages"],
+    );
+    assertNoLeak(h.stdout() + h.stderr());
+  });
+});
+
+describe("tess generate — --egress-dry-run", () => {
+  const DRY = ["generate", ...ARGV, ...ANTHROPIC, "--egress-dry-run"];
+
+  it("prints the redacted prompt and a count-only manifest, and sends and writes nothing", async () => {
+    // No key: a preview needs none, because it builds no provider.
+    const { code, h } = await run(DRY, {
+      specs: LIVE,
+      state: { planted: true },
+      config: egressConfig(CONSENTED),
+    });
+
+    assert.equal(code, EXIT_CODES.ok);
+    const report = reportOf(h);
+    assert.match(report, /NOTHING WAS SENT and nothing was written/);
+    assert.match(report, /^cleared: \d+ artifact\(s\), kind unit$/m);
+    assert.match(report, /^ {2}name +[1-9]\d*$/m);
+    for (const category of [
+      "reason",
+      "relation",
+      "plan",
+      "private-key",
+      "credential",
+      "token",
+      "email",
+    ]) {
+      assert.match(report, new RegExp(`^ {2}${category} +\\d+$`, "m"));
+    }
+    assert.match(report, /^prompt hash: [0-9a-f]{64}$/m);
+    assert.match(report, /^--- instruction \(developer-authored\) ---$/m);
+    assert.match(
+      report,
+      /^--- data \(instance-derived, after redaction\) ---$/m,
+    );
+    assert.match(report, /«REDACTED:name:\d+»/);
+    assertNoLeak(h.stdout() + h.stderr());
+    assert.deepEqual(h.foreign, []);
+    assert.deepEqual(methods(h.fake), ["GET"]);
+    await assert.rejects(
+      fs.access(path.join(h.testsRoot, PROPOSED_MANIFEST)),
+      /ENOENT/,
+    );
+    await assert.rejects(
+      fs.access(path.join(h.testsRoot, PROPOSED_DIR)),
+      /ENOENT/,
+    );
+  });
+
+  it("still scrubs credentials and addresses out of a field the policy sends", async () => {
+    const { code, h } = await run(DRY, {
+      specs: LIVE,
+      state: { planted: true },
+      config: egressConfig({
+        ...CONSENTED,
+        allow: { ...CONSENTED.allow, fields: ["name", "relation", "plan"] },
+      }),
+    });
+
+    assert.equal(code, EXIT_CODES.ok);
+    const report = reportOf(h);
+    // The name is sent now, so its harmless part reaches the prompt …
+    assert.ok(report.includes(PLANTED));
+    // … and the pattern classes still take the rest out of it.
+    assert.ok(!report.includes(PLANTED_EMAIL));
+    assert.ok(!report.includes(PLANTED_TOKEN));
+    assert.match(report, /^ {2}email +[1-9]\d*$/m);
+    assert.match(report, /^ {2}credential +[1-9]\d*$/m);
+    assert.deepEqual(h.foreign, []);
+  });
+
+  it("prints one JSON document with counts and the escaped prompt", async () => {
+    const { code, h } = await run([...DRY, "--json"], {
+      specs: LIVE,
+      state: { planted: true },
+      config: egressConfig(CONSENTED),
+    });
+
+    assert.equal(code, EXIT_CODES.ok);
+    assert.equal(h.out.length, 1);
+    const doc = h.json();
+    assert.equal(doc.egressDryRun, true);
+    assert.equal(doc.sent, false);
+    assert.equal(doc.written, false);
+    assert.equal(doc.kind, "unit");
+    assert.ok(doc.artifacts > 0);
+    assert.ok(doc.redactions.name > 0);
+    assert.match(doc.promptHash, /^[0-9a-f]{64}$/);
+    assert.equal(typeof doc.prompt.instruction, "string");
+    assert.match(doc.prompt.data, /«REDACTED:name:\d+»/);
+    assertNoLeak(h.stdout() + h.stderr());
+    assert.deepEqual(h.foreign, []);
+  });
+
+  it("exits 2 when the policy withholds a table the graph needs, as a real run would", async () => {
+    const { code, h } = await run(DRY, {
+      specs: LIVE,
+      config: egressConfig({
+        ...CONSENTED,
+        allow: { tables: ["sys_script_include"], fields: ["relation"] },
+      }),
+    });
+
+    assert.equal(code, EXIT_CODES.usage);
+    assert.match(h.stderr(), /withholds \d+ of \d+ artifacts/);
+    assert.equal(reportOf(h), "");
+  });
+
+  it("refuses without a policy or without consent, exactly like a real run", async () => {
+    const none = await run(DRY, { specs: LIVE });
+    assert.equal(none.code, EXIT_CODES.usage);
+    assert.match(none.h.stderr(), /no egress policy is configured/);
+
+    const refused = await run(DRY, {
+      specs: LIVE,
+      config: egressConfig({ ...CONSENTED, consent: false }),
+    });
+    assert.equal(refused.code, EXIT_CODES.usage);
+    assert.match(refused.h.stderr(), /does not record consent/);
+    assert.deepEqual(refused.h.fake.requests(), []);
+  });
+
+  it("is refused with the template provider, which sends nothing to preview", async () => {
+    const { code, h } = await run(["generate", ...ARGV, "--egress-dry-run"], {
+      specs: LIVE,
+      config: egressConfig(CONSENTED),
+    });
+
+    assert.equal(code, EXIT_CODES.usage);
+    assert.match(
+      h.stderr(),
+      /--egress-dry-run previews what `--provider anthropic`/,
+    );
+    assert.deepEqual(h.fake.requests(), []);
+  });
+
+  it("is argv-only: the environment and the config file cannot turn it on", async () => {
+    const { code, h } = await run(["generate", ...ARGV], {
+      specs: LIVE,
+      config: { egressDryRun: true },
+    });
+
+    assert.equal(code, EXIT_CODES.usage);
+    assert.match(h.stderr(), /egressDryRun/);
+  });
+});
 
 describe("tess generate — 1 is never returned", () => {
   it("produced 0, 2, 3 and 5 above, and never 1", () => {

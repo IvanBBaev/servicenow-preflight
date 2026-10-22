@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tessera egress policy on the CLI** — `tess generate --provider anthropic`
+  now requires an `egress` section in `tessera.config.json` with
+  `"consent": true` (the JSON literal; a string or number is a validation
+  error) and an explicit `allow` list; `deny` and `baseUrlOverride` are
+  optional and unknown keys are refused with their path. No policy, no
+  consent or a malformed section exits `2` with an actionable message.
+  `--egress-dry-run` prints the redacted prompt plus a per-class redaction
+  count manifest (never values) and exits without calling the provider. A
+  non-default `--base-url` runs only when `egress.baseUrlOverride` names that
+  exact origin, and the override is logged on stderr. `@tessera/config` gains
+  `ResolveInput.sections` for raw, secret-scanned, file-only sections.
 - **Generated site check catalogue** — `npm run gen:site`
   (`scripts/gen-site.mjs`) writes `site/checks.generated.js` from the
   registry, and the docs board reads it (plus the check count) instead of a hand-kept copy;
