@@ -327,6 +327,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outputs (`tess resolve/impact/coverage --json`, TestSpecs, the proposed
   manifest) carry the plain wire string. The proposed-manifest writer refuses
   a target whose name is not branded.
+- **Tessera generation faults carry no `cause`** (AIS-5) — a failed request
+  to the Anthropic Messages API and a provider failure wrapped by the
+  generator no longer attach the upstream error as `cause`, so a URL with a
+  query string or quoted response text cannot reach a log that walks the
+  cause chain. The message names only the upstream error's class and code
+  (for example `(TypeError, UND_ERR_SOCKET)`), each matched against a closed
+  identifier shape.
 
 ## [0.5.0] - 2026-07-04
 

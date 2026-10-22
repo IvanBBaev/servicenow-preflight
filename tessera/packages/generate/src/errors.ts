@@ -50,3 +50,41 @@ export class GenerationFaultError extends Error {
     this.name = "GenerationFaultError";
   }
 }
+
+/** An error class name: `Error`, or a capitalised identifier ending in Error/Exception. */
+const ERROR_NAME = /^(?:[A-Z][A-Za-z]{0,47})?(?:Error|Exception)$/;
+
+/** A system or library error code such as `ECONNRESET` or `UND_ERR_SOCKET`. */
+const ERROR_CODE = /^[A-Z][A-Z0-9_]{1,31}$/;
+
+function codeOf(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const code = (value as { code?: unknown }).code;
+  return typeof code === "string" && ERROR_CODE.test(code) ? code : undefined;
+}
+
+/**
+ * A log-safe summary of an upstream failure: its class name and its error
+ * code, and nothing else (AIS-5).
+ *
+ * An upstream error's MESSAGE is never quoted and the error is never attached
+ * as a `cause`: a transport error routinely carries a URL with a query string,
+ * a vendor SDK quotes the response it choked on, and both serialise through
+ * `util.inspect`, a JSON logger or a CI annotation that walks `cause`. The two
+ * fields kept here are matched against a closed identifier shape, so free text
+ * in either — a secret, a response fragment — is dropped rather than echoed.
+ * The code is read from the error itself or, as `fetch` reports it, from its
+ * own `cause` one level down.
+ *
+ * @returns `" (TypeError, ECONNRESET)"`, `" (AbortError)"`, or `""`.
+ */
+export function faultSummary(error: unknown): string {
+  const parts: string[] = [];
+  if (error instanceof Error && ERROR_NAME.test(error.name)) {
+    parts.push(error.name);
+  }
+  const code =
+    codeOf(error) ?? (error instanceof Error ? codeOf(error.cause) : undefined);
+  if (code !== undefined) parts.push(code);
+  return parts.length === 0 ? "" : ` (${parts.join(", ")})`;
+}

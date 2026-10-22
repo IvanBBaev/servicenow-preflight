@@ -40,7 +40,11 @@ import { TEST_KINDS, untrusted, unwrapUntrusted } from "@tessera/types";
 import type { InstanceArtifactRef, TestKind, Untrusted } from "@tessera/types";
 
 import { assertEgressCleared } from "./egress.js";
-import { GenerateInputError, GenerationFaultError } from "./errors.js";
+import {
+  GenerateInputError,
+  GenerationFaultError,
+  faultSummary,
+} from "./errors.js";
 import {
   MAX_FILENAME_CHARS,
   MAX_ID_CHARS,
@@ -521,12 +525,12 @@ export function createAnthropicProvider(
           signal,
         });
       } catch (error) {
-        // The cause is attached but the message is written here, so a transport
-        // error carrying a URL with a query string cannot become the text a CI
-        // annotation prints.
+        // No `cause` (AIS-5): a transport error carrying a URL with a query
+        // string, or a body it choked on, must not reach the text a CI
+        // annotation prints or a logger that walks `cause`. Only the error's
+        // class name and code survive, matched against an identifier shape.
         throw new GenerationFaultError(
-          "the request to the Anthropic Messages API did not complete",
-          { cause: error },
+          `the request to the Anthropic Messages API did not complete${faultSummary(error)}`,
         );
       }
 

@@ -802,13 +802,13 @@ describe("createAnthropicProvider — the base URL is pinned (AIS-5)", () => {
 // ── transport and protocol faults ──────────────────────────────────────────
 
 describe("createAnthropicProvider — a fault is never an empty completion", () => {
-  it("wraps a transport rejection as a GenerationFaultError with the cause attached", async () => {
+  it("wraps a transport rejection as a GenerationFaultError, naming only its class and code (AIS-5)", async () => {
     // GenerationFaultError, not GenerateInputError: the request was well formed
     // and the environment failed underneath it, so a retry is the sensible
-    // response. The cause travels for a debugger; the MESSAGE is written here so
-    // a transport error carrying a URL with a query string cannot become the
-    // text a CI annotation prints.
-    const boom = new Error("ECONNRESET");
+    // response. The MESSAGE is written here and the rejection is NOT attached
+    // as a cause: a transport error carrying a URL with a query string must
+    // not become the text a CI annotation or a cause-walking logger prints.
+    const boom = Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" });
     const stub = stubFetch(() => {
       throw boom;
     });
@@ -821,7 +821,88 @@ describe("createAnthropicProvider — a fault is never an empty completion", () 
       provider.complete(request(), liveSignal()),
       (error) => {
         assert.equal(error.name, "GenerationFaultError");
-        assert.equal(error.cause, boom);
+        assert.ok(!("cause" in error), "the rejection was attached as a cause");
+        assert.equal(
+          error.message,
+          "the request to the Anthropic Messages API did not complete (Error, ECONNRESET)",
+        );
+        return true;
+      },
+    );
+  });
+
+  it("never leaks a transport error's text, its cause or a secret through the fault (AIS-5)", async () => {
+    // The shape `fetch` really rejects with: a TypeError whose own `cause`
+    // carries the code — and here, hostile text in every free-form field: a
+    // URL with a key in its query, a response fragment, the API key itself.
+    const RESPONSE_CANARY = "response-canary-5e07-never-quote-this";
+    const SECRET_URL = `https://api.example.test/v1?key=${FAKE_API_KEY}`;
+    const inner = Object.assign(
+      new Error(`socket hang up after reading "${RESPONSE_CANARY}"`),
+      { code: "UND_ERR_SOCKET", body: RESPONSE_CANARY },
+    );
+    const outer = new TypeError(`fetch failed for ${SECRET_URL}`, {
+      cause: inner,
+    });
+    const stub = stubFetch(() => {
+      throw outer;
+    });
+    const provider = createAnthropicProvider({
+      fetch: stub.fetch,
+      apiKey: FAKE_API_KEY,
+      config: pinned(),
+    });
+    await assert.rejects(
+      provider.complete(request(), liveSignal()),
+      (error) => {
+        assert.equal(error.name, "GenerationFaultError");
+        assert.ok(!("cause" in error));
+        assert.match(
+          error.message,
+          /did not complete \(TypeError, UND_ERR_SOCKET\)$/,
+        );
+        const dumped = [
+          error.message,
+          String(error.stack),
+          inspect(error, { depth: 10, showHidden: true }),
+          JSON.stringify(error),
+        ];
+        for (const text of dumped) {
+          assert.ok(
+            !text.includes(RESPONSE_CANARY),
+            "the response text leaked",
+          );
+          assert.ok(!text.includes("api.example.test"), "the URL leaked");
+          assertNoKeyIn(text, "the transport fault");
+        }
+        return true;
+      },
+    );
+  });
+
+  it("drops an error name or code that is not a plain identifier (AIS-5)", async () => {
+    // The two kept fields are matched against a closed shape: a hostile
+    // transport that smuggles text into `name` or `code` gets neither echoed.
+    const hostile = Object.assign(new Error("x"), {
+      name: `Leak ${FAKE_API_KEY} Error`,
+      code: `sk-${FAKE_API_KEY}`,
+    });
+    const stub = stubFetch(() => {
+      throw hostile;
+    });
+    const provider = createAnthropicProvider({
+      fetch: stub.fetch,
+      apiKey: FAKE_API_KEY,
+      config: pinned(),
+    });
+    await assert.rejects(
+      provider.complete(request(), liveSignal()),
+      (error) => {
+        assert.equal(
+          error.message,
+          "the request to the Anthropic Messages API did not complete",
+        );
+        assertNoKeyIn(inspect(error, { depth: 10 }), "the hostile fault");
         return true;
       },
     );
@@ -1033,7 +1114,8 @@ describe("createAnthropicProvider — cancellation", () => {
       provider.complete(request(), controller.signal),
       (error) => {
         assert.equal(error.name, "GenerationFaultError");
-        assert.equal(error.cause.name, "AbortError");
+        assert.ok(!("cause" in error));
+        assert.match(error.message, /\(AbortError\)$/);
         assertNoKeyIn(error.stack, "the cancellation stack");
         return true;
       },

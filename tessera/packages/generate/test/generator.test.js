@@ -31,6 +31,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { inspect } from "node:util";
 
 import { isUntrusted, untrusted } from "@tessera/types";
 
@@ -525,7 +526,7 @@ describe("generate — GenerationFaultError: the environment failed", () => {
   it("wraps a provider failure and keeps its text out of the message", async () => {
     // An arbitrary provider's error text is not something this package has
     // cleared for a log, and a transport error routinely carries a URL. The
-    // cause is attached; the message is written here.
+    // message is written here, and the error is not attached as a cause (AIS-5).
     const upstream = new Error(`connection reset while fetching ${CANARY}`);
     const { generator, writer } = harness({
       provider: stubProvider({ throws: upstream }),
@@ -537,7 +538,47 @@ describe("generate — GenerationFaultError: the environment failed", () => {
         assert.match(error.message, /did not complete the generation request/);
         assert.match(error.message, /stub-provider/);
         assert.equal(error.message.includes(CANARY), false, error.message);
-        assert.equal(error.cause, upstream, "the cause was not attached");
+        assert.ok(!("cause" in error), "the provider error became a cause");
+        assert.match(error.message, /\(Error\)$/);
+        return true;
+      },
+    );
+    assert.equal(writer.calls.length, 0);
+  });
+
+  it("never leaks a provider error's text or its cause chain (AIS-5)", async () => {
+    // A provider built on a real transport rejects with a fetch-shaped error:
+    // a URL in the message and the response text one level down in `cause`.
+    // Nothing that serialises the fault may reach either; the class name and
+    // the code are all that survive.
+    const inner = Object.assign(new Error(`response body: ${CANARY}`), {
+      code: "ECONNRESET",
+      body: CANARY,
+    });
+    const upstream = new TypeError(
+      `fetch failed for https://x.test/?q=${CANARY}`,
+      {
+        cause: inner,
+      },
+    );
+    const { generator, writer } = harness({
+      provider: stubProvider({ throws: upstream }),
+    });
+    await assert.rejects(
+      generator.generate(makeCtx(), GRAPH, "unit"),
+      (error) => {
+        assert.equal(error.name, "GenerationFaultError");
+        assert.ok(!("cause" in error));
+        assert.match(error.message, /\(TypeError, ECONNRESET\)$/);
+        for (const text of [
+          error.message,
+          String(error.stack),
+          inspect(error, { depth: 10, showHidden: true }),
+          JSON.stringify(error),
+        ]) {
+          assert.equal(text.includes(CANARY), false, text);
+          assert.equal(text.includes("x.test"), false, text);
+        }
         return true;
       },
     );
