@@ -28,6 +28,28 @@
 // when a human moves it, and nothing in this package can do that for them
 // (DEV-4, TM-1, TM-3).
 
+export {
+  DEFAULT_EGRESS_POLICY,
+  DEFAULT_EGRESS_TABLES,
+  EGRESS_FIELD_CLASSES,
+  EGRESS_PATTERN_CATEGORIES,
+  EgressRefusedError,
+  assertEgressCleared,
+  clearForEgress,
+  isEgressCleared,
+  validateEgressPolicy,
+} from "./egress.js";
+export type {
+  EgressClearance,
+  EgressFieldClass,
+  EgressPatternCategory,
+  EgressPolicy,
+  EgressRedactionCategory,
+  EgressReport,
+  EgressRuleSet,
+  WithheldArtifact,
+} from "./egress.js";
+
 export { GenerateInputError, GenerationFaultError } from "./errors.js";
 
 export {

@@ -497,10 +497,12 @@ describe("tess generate — refuses before it reads anything", () => {
   });
 
   it("takes the key from the environment and never prints it", async () => {
-    // This run gets PAST the usage gate, so it reaches the provider — and the
-    // host dispatcher rejects `api.anthropic.com`, which is the point: the
-    // vendor is never called from a test. What is asserted here is the code
-    // (a DEV-1 fault, not a finding) and the silence about the key.
+    // This run gets PAST the key check, so it reaches the provider — which
+    // refuses before building a request, because no egress policy has cleared
+    // the prompt (DESIGN §10.3: classification before egress, fail-closed). The
+    // vendor is never called, and the host dispatcher is never even asked.
+    // What is asserted here is the code (the operator's fix, not a fault) and
+    // the silence about the key.
     const { code, h } = await run(
       ["generate", ...ARGV, "--provider", "anthropic"],
       {
@@ -509,7 +511,8 @@ describe("tess generate — refuses before it reads anything", () => {
       },
     );
 
-    assert.equal(code, EXIT_CODES.fault);
+    assert.equal(code, EXIT_CODES.usage);
+    assert.match(h.stderr(), /egress classification/);
     assert.ok(!h.stdout().includes("sk-ant-secret-value"));
     assert.ok(!h.stderr().includes("sk-ant-secret-value"));
     // The config-precedence block prints the key's ORIGIN, redacted.

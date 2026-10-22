@@ -39,6 +39,7 @@
 import { TEST_KINDS, untrusted, unwrapUntrusted } from "@tessera/types";
 import type { TargetArtifactRef, TestKind, Untrusted } from "@tessera/types";
 
+import { assertEgressCleared } from "./egress.js";
 import { GenerateInputError, GenerationFaultError } from "./errors.js";
 import {
   MAX_FILENAME_CHARS,
@@ -398,6 +399,10 @@ export function createAnthropicProvider(
       request: GenerationRequest,
       signal: AbortSignal,
     ): Promise<ProviderCompletion> {
+      // DESIGN §10.3 backstop: this adapter is the one place a prompt leaves
+      // the machine, so it refuses — before building a request — any prompt
+      // that did not come out of `clearForEgress`.
+      assertEgressCleared(request.prompt, "anthropic");
       const body: Record<string, unknown> = {
         model: config.modelId,
         max_tokens: config.maxTokens,

@@ -49,6 +49,7 @@ import {
   ANTHROPIC_VERSION_HEADER,
   MODELS_WITHOUT_SAMPLING_PARAMS,
   SUFFIX_BY_KIND,
+  clearForEgress,
   createAnthropicProvider,
   createTemplateProvider,
   modelAcceptsSamplingParams,
@@ -73,21 +74,30 @@ const SAMPLING_MODEL_ID = "legacy-generation-model-1";
 const UNWRAP = "provider test — reading the completion to assert on it";
 
 /**
- * A `RenderedPrompt`. The two channels are given distinctive, non-overlapping
- * content so a test can prove they arrived separately (TM-2) rather than
- * re-joined into one string somewhere on the way out.
+ * A `RenderedPrompt` that passed egress classification — the Anthropic adapter
+ * refuses any other (DESIGN §10.3; `./egress.test.js` holds that refusal to
+ * account). The two channels are given distinctive, non-overlapping content so a
+ * test can prove they arrived separately (TM-2) rather than re-joined into one
+ * string somewhere on the way out.
  */
-function prompt(overrides = {}) {
-  return {
-    instruction:
-      "INSTRUCTION-CHANNEL: emit a JSON object with a `specs` array.",
-    data: "DATA-CHANNEL:\n<<<TESSERA-DATA>>>\ntable: incident\n<<<TESSERA-DATA>>>",
-    blocks: 1,
-    promptHash: "a".repeat(64),
-    instructionHash: "b".repeat(64),
-    promptVersion: "generate/1",
-    ...overrides,
-  };
+function prompt() {
+  return clearForEgress(
+    "unit",
+    {
+      nodes: [
+        {
+          table: "sys_script",
+          sysId: "0123456789abcdef0123456789abcdef",
+          name: "DATA-CHANNEL artifact",
+        },
+      ],
+      edges: [],
+      unanalyzable: [],
+      demanded: [],
+    },
+    { consent: true, allow: { tables: ["sys_script"], fields: ["name"] } },
+    "INSTRUCTION-CHANNEL: emit a JSON object with a `specs` array.",
+  ).prompt;
 }
 
 /** A recognisable instance-derived name, for the TM-1 assertion further down. */
