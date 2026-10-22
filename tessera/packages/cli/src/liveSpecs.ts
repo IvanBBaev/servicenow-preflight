@@ -5,8 +5,12 @@
 // statement about intent, not code. Projection needs the body — the ATF store
 // writes it verbatim into a "Run Server Side Script" step, where it executes
 // with the runner's authority. So this module is the one place a repo-authored
-// body is read and handed to a write path, and it holds that body to exactly
-// the bar a GENERATED body is held to: `createGeneratedCodeGate()` (TM-3).
+// body is read and handed to a write path, and it holds that body to BOTH
+// layers of the TM-3 gate (PA-10): the AST allowlist (layer 1, ES5 parse; only
+// allowlisted call targets, spelled members, no aliased functions) and the
+// lexical deny-list a generated body is held to (layer 2). The spec's declared
+// Script Include targets are the only classes the body may construct besides
+// the read-only Glide classes; the manifest naming them is reviewed content.
 //
 // A repo spec is not trusted merely because it is in the repo (TM-5: a hostile
 // or compromised commit is the threat model, not an exotic one). Every body is
@@ -22,7 +26,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { createGeneratedCodeGate, type GateViolation } from "@tessera/generate";
+import {
+  createAtfServerScriptGate,
+  type AtfServerScriptViolation,
+} from "@tessera/generate";
 import { readSpecInventory, type InventoryNote } from "@tessera/specs";
 import { untrusted, unwrapUntrusted, type TestSpec } from "@tessera/types";
 
@@ -41,7 +48,7 @@ function toPosix(relative: string): string {
 export interface RejectedSpec {
   readonly id: string;
   readonly path: string;
-  readonly violations: readonly GateViolation[];
+  readonly violations: readonly AtfServerScriptViolation[];
 }
 
 export type LiveSpecLoad =
@@ -74,7 +81,6 @@ function isInside(root: string, candidate: string): boolean {
 export async function loadLiveSpecs(testsRoot: string): Promise<LiveSpecLoad> {
   const root = path.resolve(testsRoot);
   const inventory = await readSpecInventory({ root });
-  const gate = createGeneratedCodeGate();
   const notes: InventoryNote[] = [...inventory.notes];
   const specs: TestSpec[] = [];
   const rejected: RejectedSpec[] = [];
@@ -103,6 +109,13 @@ export async function loadLiveSpecs(testsRoot: string): Promise<LiveSpecLoad> {
       );
     }
     const body = await readFile(file, "utf8");
+    // Both TM-3 layers, with this spec's own Script Include targets as the
+    // only constructible classes beyond the read-only Glide ones.
+    const gate = createAtfServerScriptGate({
+      targetClassNames: spec.targets
+        .filter((target) => target.table === "sys_script_include")
+        .map((target) => target.name),
+    });
     const verdict = gate.inspect(untrusted(body));
     if (!verdict.ok) {
       rejected.push({

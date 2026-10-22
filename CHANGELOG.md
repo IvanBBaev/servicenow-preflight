@@ -274,6 +274,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundled Tessera tree now vendors `acorn` at exactly 8.18.0; the staging
   script refuses any other third-party package, a range, a different installed
   version or a vendored package with dependencies of its own.
+- **`tess run --live` requires both TM-3 layers** (PA-10) — every repo `unit`
+  spec body must clear the AST allowlist and the lexical deny-list before
+  anything is projected; the spec's declared `sys_script_include` targets are
+  the only classes it may construct besides the read-only Glide ones. A body
+  that spelled nothing on the deny-list (an undenied write method, a
+  homoglyph, another Script Include) now refuses the run with exit 4.
 - The encoded-query builder rejects operator injection and validates the field
   and value charset; scope is resolved once per run.
 - The Table API client detects response security-trimming via `X-Total-Count`

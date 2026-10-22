@@ -488,7 +488,9 @@ USAGE
 
 LIVE (--live)
   Reads the unit specs the manifest under --tests-root declares, holds every
-  body to the TM-3 generated-code gate (one rejection refuses the WHOLE run,
+  body to both TM-3 gate layers — an ES5 AST allowlist (only read-only Glide
+  calls, ATF assertions, gs.info/debug and the spec's declared Script Include
+  targets) and the lexical deny-list (one rejection refuses the WHOLE run,
   exit 4, before anything is written), classifies the runner (§11), projects
   the specs as run-id-namespaced ATF tests on the runner, triggers them through
   the CI/CD API, folds the results into the §6a verdict and tears the
