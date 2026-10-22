@@ -65,7 +65,7 @@ import type {
 
 import type { CliContext } from "../context.js";
 import { EXIT_CODES, type ExitCode } from "../exitCodes.js";
-import { IMPACT_OPTIONS } from "../options.js";
+import { CONFIG_SECTIONS, IMPACT_OPTIONS } from "../options.js";
 import { createCliImpactAnalyzer } from "../impactComposition.js";
 import { bindRole, TopologyError } from "../topology.js";
 
@@ -139,6 +139,9 @@ export async function impactCommand(
       env: context.env,
       cwd: context.cwd,
       options: IMPACT_OPTIONS,
+      // Shared file-only sections (`egress`) pass through, still secret-scanned,
+      // and are ignored here: only `tess generate` reads and validates them.
+      sections: CONFIG_SECTIONS,
     });
   } catch (error) {
     if (error instanceof ConfigError) {

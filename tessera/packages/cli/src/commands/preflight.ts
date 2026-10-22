@@ -86,7 +86,11 @@ import type {
 import type { CliContext } from "../context.js";
 import { EXIT_CODES, type ExitCode } from "../exitCodes.js";
 import { checkIdempotency, createLedgeredWriter } from "../infraApply.js";
-import { ARTIFACT_LABEL_SEPARATOR, PREFLIGHT_CLI_OPTIONS } from "../options.js";
+import {
+  ARTIFACT_LABEL_SEPARATOR,
+  CONFIG_SECTIONS,
+  PREFLIGHT_CLI_OPTIONS,
+} from "../options.js";
 import { stageDocsDir } from "../stage.js";
 import {
   bindProbe,
@@ -299,6 +303,9 @@ export async function preflightCommand(
       env: context.env,
       cwd: context.cwd,
       options: PREFLIGHT_CLI_OPTIONS,
+      // Shared file-only sections (`egress`) pass through, still secret-scanned,
+      // and are ignored here: only `tess generate` reads and validates them.
+      sections: CONFIG_SECTIONS,
     });
   } catch (error) {
     if (error instanceof ConfigError) {

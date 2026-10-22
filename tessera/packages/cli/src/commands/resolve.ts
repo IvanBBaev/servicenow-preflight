@@ -39,7 +39,7 @@ import type { PipelineContext, TargetInput } from "@tessera/types";
 
 import type { CliContext } from "../context.js";
 import { EXIT_CODES, type ExitCode } from "../exitCodes.js";
-import { RESOLVE_OPTIONS } from "../options.js";
+import { CONFIG_SECTIONS, RESOLVE_OPTIONS } from "../options.js";
 import { bindRole, TopologyError } from "../topology.js";
 
 /**
@@ -84,6 +84,9 @@ export async function resolveCommand(
       env: context.env,
       cwd: context.cwd,
       options: RESOLVE_OPTIONS,
+      // Shared file-only sections (`egress`) pass through, still secret-scanned,
+      // and are ignored here: only `tess generate` reads and validates them.
+      sections: CONFIG_SECTIONS,
     });
   } catch (error) {
     if (error instanceof ConfigError) {

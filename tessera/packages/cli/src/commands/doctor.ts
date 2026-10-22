@@ -42,7 +42,7 @@ import type { TestKind } from "@tessera/types";
 
 import type { CliContext } from "../context.js";
 import { EXIT_CODES, type ExitCode } from "../exitCodes.js";
-import { DOCTOR_OPTIONS } from "../options.js";
+import { CONFIG_SECTIONS, DOCTOR_OPTIONS } from "../options.js";
 import { bindProbe, bindRole, TopologyError } from "../topology.js";
 
 /** One diagnosed role, ready to print. */
@@ -113,6 +113,9 @@ export async function doctorCommand(
       env: context.env,
       cwd: context.cwd,
       options: DOCTOR_OPTIONS,
+      // Shared file-only sections (`egress`) pass through, still secret-scanned,
+      // and are ignored here: only `tess generate` reads and validates them.
+      sections: CONFIG_SECTIONS,
     });
   } catch (error) {
     if (error instanceof ConfigError) {

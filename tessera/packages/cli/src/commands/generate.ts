@@ -122,7 +122,7 @@ import {
   type EgressConfig,
 } from "../egressConfig.js";
 import { EXIT_CODES, type ExitCode } from "../exitCodes.js";
-import { GENERATE_OPTIONS } from "../options.js";
+import { CONFIG_SECTIONS, GENERATE_OPTIONS } from "../options.js";
 import { createCliImpactAnalyzer } from "../impactComposition.js";
 import { bindRole, TopologyError } from "../topology.js";
 
@@ -303,7 +303,7 @@ export async function generateCommand(
       env: context.env,
       cwd: context.cwd,
       options: GENERATE_OPTIONS,
-      sections: [EGRESS_SECTION],
+      sections: CONFIG_SECTIONS,
     });
   } catch (error) {
     if (error instanceof ConfigError) return configError(error);

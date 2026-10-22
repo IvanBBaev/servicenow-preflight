@@ -32,8 +32,9 @@ import {
   type EgressRuleSet,
 } from "@tessera/generate";
 
-/** The top-level key in `tessera.config.json`. */
-export const EGRESS_SECTION = "egress";
+import { EGRESS_SECTION } from "./options.js";
+
+export { EGRESS_SECTION };
 
 /** `@tessera/generate`'s table-name rule, restated so the error carries a path. */
 const TABLE_PATTERN = /^[a-z0-9_]{1,80}$/i;

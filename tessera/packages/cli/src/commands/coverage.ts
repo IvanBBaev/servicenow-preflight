@@ -80,7 +80,7 @@ import type {
 
 import type { CliContext } from "../context.js";
 import { EXIT_CODES, type ExitCode } from "../exitCodes.js";
-import { COVERAGE_OPTIONS } from "../options.js";
+import { CONFIG_SECTIONS, COVERAGE_OPTIONS } from "../options.js";
 import { createCliImpactAnalyzer } from "../impactComposition.js";
 import { bindRole, TopologyError } from "../topology.js";
 
@@ -163,6 +163,9 @@ export async function coverageCommand(
       env: context.env,
       cwd: context.cwd,
       options: COVERAGE_OPTIONS,
+      // Shared file-only sections (`egress`) pass through, still secret-scanned,
+      // and are ignored here: only `tess generate` reads and validates them.
+      sections: CONFIG_SECTIONS,
     });
   } catch (error) {
     if (error instanceof ConfigError) {

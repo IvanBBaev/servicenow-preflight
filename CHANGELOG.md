@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-default `--base-url` runs only when `egress.baseUrlOverride` names that
   exact origin, and the override is logged on stderr. `@tessera/config` gains
   `ResolveInput.sections` for raw, secret-scanned, file-only sections.
+  Every config-resolving `tess` command declares the shared `egress`
+  section, so a `tessera.config.json` holding a policy no longer makes
+  `coverage`, `impact`, `resolve`, `doctor` or `preflight` fail with an
+  unknown key; they ignore it, and only `generate` validates it.
 - **Generated site check catalogue** — `npm run gen:site`
   (`scripts/gen-site.mjs`) writes `site/checks.generated.js` from the
   registry, and the docs board reads it (plus the check count) instead of a hand-kept copy;

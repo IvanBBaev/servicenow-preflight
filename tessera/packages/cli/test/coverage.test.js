@@ -276,6 +276,12 @@ async function harness(options = {}) {
   };
 
   const root = await tempRoot();
+  if (options.config !== undefined) {
+    await fs.writeFile(
+      path.join(root, "tessera.config.json"),
+      `${JSON.stringify(options.config, null, 2)}\n`,
+    );
+  }
   const testsRoot =
     options.specs === undefined
       ? undefined
@@ -891,4 +897,45 @@ describe("tess coverage — TM-1: no script text leaves the analyzer", () => {
       assert.doesNotMatch(h.stdout(), /gs\.getProperty/);
     });
   }
+});
+
+// ── the shared config file's `egress` section ──────────────────────────────
+
+describe("tess coverage — a tessera.config.json carrying an egress policy", () => {
+  // `egress` belongs to `tess generate`; the file is shared, so this command
+  // must pass the section through rather than refuse it as an unknown key,
+  // and must not validate it — a bad policy blocks only generate.
+  const POLICY = {
+    consent: true,
+    allow: { tables: ["sys_script_include"], fields: ["relation", "plan"] },
+  };
+
+  it("runs with a valid egress section present", async () => {
+    const { code, h } = await run(["coverage", ...SOURCE, ...SCOPE], {
+      specs: ONE_SPEC,
+      config: { egress: POLICY },
+    });
+    assert.equal(code, EXIT_CODES.ok, h.stderr());
+    assert.match(reportOf(h), /^impacted artifacts \(4, 3 with no spec\):$/m);
+    assert.doesNotMatch(h.stderr(), /unknown key|egress/);
+  });
+
+  it("ignores a malformed egress section (only generate validates it)", async () => {
+    const { code, h } = await run(["coverage", ...SOURCE, ...SCOPE], {
+      specs: ONE_SPEC,
+      config: { egress: { consent: "yes", allow: 7, bogus: true } },
+    });
+    assert.equal(code, EXIT_CODES.ok, h.stderr());
+    assert.doesNotMatch(h.stderr(), /egress/);
+  });
+
+  it("still secret-scans the section", async () => {
+    const { code, h } = await run(["coverage", ...SOURCE, ...SCOPE], {
+      specs: ONE_SPEC,
+      config: { egress: { ...POLICY, apiKey: "fake-fixture-value" } },
+    });
+    assert.equal(code, EXIT_CODES.usage);
+    assert.match(h.stderr(), /egress\.apiKey/);
+    assert.doesNotMatch(h.stderr(), /fake-fixture-value/);
+  });
 });

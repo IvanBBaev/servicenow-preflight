@@ -180,6 +180,12 @@ async function harness(options = {}) {
   };
 
   const root = await tempRoot();
+  if (options.config !== undefined) {
+    await fs.writeFile(
+      path.join(root, "tessera.config.json"),
+      `${JSON.stringify(options.config, null, 2)}\n`,
+    );
+  }
   const saved = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
   for (const key of ENV_KEYS) delete process.env[key];
   process.env.SN_AUTH = "basic";
@@ -752,5 +758,52 @@ describe("tess resolve --help", () => {
 
     assert.equal(code, EXIT_CODES.ok);
     assert.match(h.stdout(), /^ {2}resolve {5}What does this story or scope/m);
+  });
+});
+
+// ── the shared config file's `egress` section ──────────────────────────────
+
+describe("tess resolve — a tessera.config.json carrying an egress policy", () => {
+  // `egress` belongs to `tess generate`; the file is shared, so this command
+  // must pass the section through rather than refuse it as an unknown key,
+  // and must not validate it — a bad policy blocks only generate.
+  const POLICY = {
+    consent: true,
+    allow: { tables: ["sys_script_include"], fields: ["relation", "plan"] },
+  };
+
+  it("runs with a valid egress section present", async () => {
+    const { code, h } = await run(
+      ["resolve", ...SOURCE, "--story", STORY_NUMBER],
+      {
+        config: { egress: POLICY },
+      },
+    );
+    assert.equal(code, EXIT_CODES.ok, h.stderr());
+    assert.match(h.stdout(), /^resolved 2 artifact\(s\) from source$/m);
+    assert.doesNotMatch(h.stderr(), /unknown key|egress/);
+  });
+
+  it("ignores a malformed egress section (only generate validates it)", async () => {
+    const { code, h } = await run(
+      ["resolve", ...SOURCE, "--story", STORY_NUMBER],
+      {
+        config: { egress: { consent: "yes", allow: 7, bogus: true } },
+      },
+    );
+    assert.equal(code, EXIT_CODES.ok, h.stderr());
+    assert.doesNotMatch(h.stderr(), /egress/);
+  });
+
+  it("still secret-scans the section", async () => {
+    const { code, h } = await run(
+      ["resolve", ...SOURCE, "--story", STORY_NUMBER],
+      {
+        config: { egress: { ...POLICY, apiKey: "fake-fixture-value" } },
+      },
+    );
+    assert.equal(code, EXIT_CODES.usage);
+    assert.match(h.stderr(), /egress\.apiKey/);
+    assert.doesNotMatch(h.stderr(), /fake-fixture-value/);
   });
 });

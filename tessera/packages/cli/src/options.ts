@@ -88,6 +88,20 @@ import {
   ANTHROPIC_DEFAULT_MODEL_ID,
   DEFAULT_GENERATION_DEADLINE_MS,
 } from "@tessera/generate";
+
+/** The top-level key of the egress policy in `tessera.config.json`. */
+export const EGRESS_SECTION = "egress";
+
+/**
+ * Structured, file-only sections every command that resolves config declares.
+ *
+ * `tessera.config.json` is shared by every command, so a section one command
+ * owns must not make the others refuse the file as an "unknown key". Each
+ * command passes these through (`ResolveInput.sections`), where the document is
+ * still secret-scanned as a whole, and only the owner parses them: `egress`
+ * belongs to `tess generate`, and a malformed policy blocks nothing else.
+ */
+export const CONFIG_SECTIONS: readonly string[] = [EGRESS_SECTION];
 import {
   DEFAULT_ARTIFACT_TABLES,
   DEFAULT_UPDATE_SET_STORY_FIELD,
