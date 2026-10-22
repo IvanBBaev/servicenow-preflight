@@ -25,6 +25,7 @@ import { hardcodedIdentifiers } from "./hardcoded-identifiers.js";
 import { clientScriptSafety } from "./client-script-safety.js";
 import { propertyPrivacy } from "./property-privacy.js";
 import { inactiveArtifacts } from "./inactive-artifacts.js";
+import { notificationConditions } from "./notification-conditions.js";
 
 export { connectivityAuth } from "./connectivity-auth.js";
 export { updateSetState } from "./update-set-state.js";
@@ -52,6 +53,7 @@ export { hardcodedIdentifiers } from "./hardcoded-identifiers.js";
 export { clientScriptSafety } from "./client-script-safety.js";
 export { propertyPrivacy } from "./property-privacy.js";
 export { inactiveArtifacts } from "./inactive-artifacts.js";
+export { notificationConditions } from "./notification-conditions.js";
 export { testDrift } from "./test-drift.js";
 
 /**
@@ -161,4 +163,5 @@ export const defaultChecks: Check[] = [
   clientScriptSafety,
   propertyPrivacy,
   inactiveArtifacts,
+  notificationConditions,
 ];

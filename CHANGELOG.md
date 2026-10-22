@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`notification-conditions` check** — install hygiene (advisory): an
+  active `sysevent_email_action` in scope that is sent on update, has no
+  event, no condition and no advanced condition fires on every update of
+  its table → **warn** naming the Notification and the table (a mail-storm
+  and outbound-queue risk, not a security rule). Metadata columns only; the
+  advanced-condition script is tested for emptiness and never echoed.
 - **`inactive-artifacts` check** — install hygiene (advisory): counts the
   `active = false` Business Rules, Client Scripts, Script Includes, UI
   Actions, UI Policies, Scheduled Jobs and Notifications the app ships in

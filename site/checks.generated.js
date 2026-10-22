@@ -243,5 +243,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "Never — install hygiene stays advisory.",
     "warn": "Inactive artifacts ship with the app, no scope set, or an unreadable table.",
     "pass": "No inactive artifacts in any of the swept tables in scope."
+  },
+  {
+    "code": "28",
+    "name": "notification-conditions",
+    "tag": "scope",
+    "desc": "Every active 'send on update' Notification in scope is tied to an event or carries a condition, so none fires on every record update. Advisory — never fails.",
+    "fail": "Never — install hygiene stays advisory.",
+    "warn": "A Notification fires on every update of its table, no scope set, or an unreadable table.",
+    "pass": "Every active Notification in scope is event-driven or conditioned, or the scope ships none."
   }
 ];

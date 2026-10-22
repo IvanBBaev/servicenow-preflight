@@ -200,6 +200,9 @@ export {
   scriptHygiene,
   hardcodedIdentifiers,
   clientScriptSafety,
+  propertyPrivacy,
+  inactiveArtifacts,
+  notificationConditions,
   testDrift,
 } from "./checks/index.js";
 
