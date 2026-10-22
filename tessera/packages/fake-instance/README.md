@@ -161,7 +161,7 @@ alone. What would be sufficient:
   observed; ServiceNow may store an empty string as NULL, so they can differ.
 
 Flipping either default is then a separate, reviewed change that re-runs
-every dependent suite: ten other workspace packages construct the fake with
+every dependent suite: thirteen other workspace packages construct the fake with
 the defaults, and none of them opts into either knob today.
 
 **CI/CD API**
@@ -326,6 +326,7 @@ src/tables.ts     the stateful table model
 src/cicd.ts       CI/CD run lifecycle + suite-run rows
 src/faults.ts     fault registry and modes
 src/errors.ts     ServiceNow error bodies, transport/abort errors
+src/acl.ts        opt-in ACL/role model (write `acl`, row-level `readAcl`)
 src/fixtures.ts   fixture bundle validation and harvesting
 src/router.ts     the request-level surface
 src/instance.ts   composition root + fetch adapter
