@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`list` and `explain` subcommands** — `list [--format pretty|json]` prints
+  the check catalogue (one line per check: name, severity, rule, description;
+  `test-drift` marked `(drift only)`); `explain <check>` prints a check's rule
+  and title, tables, verdicts, flags and remediation. Both run offline with no
+  config or credentials. An unknown name is exit 2 with up to three
+  suggestions. Exported as `closestNames` and `RULE_TITLES`.
 - **Severity policy** — the config key `severity` and the repeatable
   `run --severity <check>=<fail|warn|off>` flag override how a check's non-pass
   result is reported (`fail`/`warn`, with a `[severity: … by policy]` suffix)

@@ -140,7 +140,17 @@ invalid `--format` value, malformed `--max-age`, missing required argument).
 snpf [run] [env] [options]     # run checks (default subcommand)
 snpf sync <env> [options]      # pull ATF metadata → state manifest
 snpf drift <src> <dst>         # compare two instances (promote gate)
+snpf list [--format json]      # the check catalogue: name, severity, rule, description
+snpf explain <check>           # one check: rule, tables, verdicts, remediation
 ```
+
+`list` and `explain` read only the built-in catalogue — no config, credentials or
+network. `list` prints one line per check (`test-drift` is marked `(drift only)`);
+`--format json` prints the full catalogue. `explain` shows the check's
+certification rule and its title, the tables it reads, the wording of each
+verdict and what to change on the instance to make it pass. An unknown name is
+exit `2` with up to three close matches (`Did you mean: table-crud-acl?`). Both
+accept only `--format pretty` or `json`.
 
 Both `--flag value` and `--flag=value` forms are accepted.
 
@@ -156,7 +166,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--allow-empty`              | `sync`: commit an empty snapshot over a non-empty manifest.                                                                   |
 | `--max-age <dur>`            | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                                |
 | `--allow-stage-skip`         | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                                   |
-| `--format <fmt>`             | `pretty` (default), `json`, `junit`, `sarif`.                                                                                 |
+| `--format <fmt>`             | `pretty` (default), `json`, `junit`, `sarif`, `markdown`, `github` (`list`/`explain`: `pretty` or `json`).                    |
 | `--json` / `-h`              | Shorthand for `--format json` / show help.                                                                                    |
 | `--baseline [path]`          | `run`: demote findings recorded in a baseline file to warnings (see [Baseline](#baseline-accepted-findings)).                 |
 | `--write-baseline [path]`    | `run`: record every non-pass result as a new baseline file.                                                                   |

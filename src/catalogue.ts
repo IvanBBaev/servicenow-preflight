@@ -38,3 +38,61 @@ export function findCheck(
 ): Check | undefined {
   return checks.find((check) => check.name === name);
 }
+
+/**
+ * Titles of the certification rules the checks map to, keyed by rule id —
+ * the `### ` headings of `ci/certification/CHECKLIST.md` (without the
+ * severity/frequency suffix).
+ */
+export const RULE_TITLES: Readonly<Record<string, string>> = {
+  "1.1": "Every custom table has CRUD ACLs bound to roles",
+  "1.2": "Client-callable Script Includes are ACL-protected",
+  "1.3": "Scripted REST resources require Authentication + REST_Endpoint ACLs",
+  "1.4": "No script-type columns exposed to non-admins",
+  "1.6": "No ACLs shipped onto out-of-scope / OOB tables",
+  "2.1": "UI Actions are gated by a condition and/or Required Roles",
+  "2.2": "UI Pages have read ACLs",
+  "2.6": "Service Portal widgets & pages have roles",
+  "4.10":
+    "Remove empty/commented Fix Scripts & duplicate-named Script Includes",
+  "5.1": "Remove mobile Application Menus & Modules from non-mobile apps",
+  "5.5": "Modules have roles",
+  "6.1": "All tables namespaced",
+  "6.2": 'Scheduled Jobs have empty "Run as"',
+};
+
+/** Levenshtein edit distance between two strings. */
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      row.push(Math.min(prev[j]! + 1, row[j - 1]! + 1, prev[j - 1]! + cost));
+    }
+    prev = row;
+  }
+  return prev[b.length]!;
+}
+
+/**
+ * Up to `max` candidates close to `name`: those it is a prefix of (at least
+ * three characters), or within edit distance 2. Closest first, then by name.
+ */
+export function closestNames(
+  name: string,
+  candidates: readonly string[],
+  max = 3,
+): string[] {
+  const needle = name.trim().toLowerCase();
+  if (needle.length === 0) return [];
+  return candidates
+    .map((c) => ({ c, d: editDistance(needle, c.toLowerCase()) }))
+    .filter(
+      ({ c, d }) =>
+        d <= 2 || (needle.length >= 3 && c.toLowerCase().startsWith(needle)),
+    )
+    .sort((x, y) => x.d - y.d || x.c.localeCompare(y.c))
+    .slice(0, max)
+    .map(({ c }) => c);
+}

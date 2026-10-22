@@ -149,8 +149,10 @@ export {
   formatGitHubAnnotationsAll,
 } from "./report/github.js";
 export {
+  closestNames,
   describeChecks,
   findCheck,
+  RULE_TITLES,
   type CheckDescriptor,
 } from "./catalogue.js";
 export {

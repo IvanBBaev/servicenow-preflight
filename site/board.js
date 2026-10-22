@@ -747,6 +747,14 @@
       desc: "Compare two instances — the promote gate.",
     },
     {
+      flag: "list",
+      desc: "List every check — name, severity, rule, description (json too).",
+    },
+    {
+      flag: "explain <check>",
+      desc: "One check's rule, tables, verdicts and remediation · offline.",
+    },
+    {
       flag: "-i, --instance <url>",
       desc: "Target instance URL (single-instance).",
     },

@@ -29,6 +29,13 @@ import {
 } from "./state/drift.js";
 import { defaultChecks, testDrift } from "./checks/index.js";
 import {
+  closestNames,
+  describeChecks,
+  findCheck,
+  RULE_TITLES,
+  type CheckDescriptor,
+} from "./catalogue.js";
+import {
   applyPolicy,
   parseSeverityFlag,
   policySkips,
@@ -63,10 +70,19 @@ const FORMATS: readonly OutputFormat[] = [
   "github",
 ];
 
-/** Subcommand: run checks, sync a manifest, or compare two instances. */
-type Subcommand = "run" | "sync" | "drift";
+/**
+ * Subcommand: run checks, sync a manifest, compare two instances, or browse
+ * the check catalogue (`list` / `explain`).
+ */
+type Subcommand = "run" | "sync" | "drift" | "list" | "explain";
 
-const SUBCOMMANDS: readonly Subcommand[] = ["run", "sync", "drift"];
+const SUBCOMMANDS: readonly Subcommand[] = [
+  "run",
+  "sync",
+  "drift",
+  "list",
+  "explain",
+];
 
 interface ParsedArgs {
   command: Subcommand;
@@ -359,6 +375,13 @@ Usage:
   servicenow-preflight [run] [env] [options]   Run checks against an instance
   servicenow-preflight sync <env> [options]    Pull ATF metadata → state manifest
   servicenow-preflight drift <src> <dst>       Compare two instances (promote gate)
+  servicenow-preflight list [--format pretty|json]
+                                               List every check (name, severity,
+                                               rule, description)
+  servicenow-preflight explain <check> [--format pretty|json]
+                                               Show one check's rule, tables,
+                                               verdicts and remediation
+  (list and explain need no config, credentials or network.)
 
 Multi-instance (registry at .preflight/instances.json):
   <env>                  A registry instance name (dev | staging | test | prod)
@@ -970,6 +993,90 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
   process.exitCode = finalReport.ok ? 0 : 1;
 }
 
+/** `list` / `explain` print only pretty or json; any other format is exit 2. */
+function catalogueFormat(args: ParsedArgs): "pretty" | "json" {
+  if (args.format === "pretty" || args.format === "json") return args.format;
+  throw new UsageError(
+    `${args.command} supports --format pretty or json, not ${args.format}.`,
+  );
+}
+
+/** One-line catalogue row: `name severity rule description`. */
+function listLine(d: CheckDescriptor, nameWidth: number): string {
+  const drift = d.inDefaultSuite ? "" : " (drift only)";
+  return `${d.name.padEnd(nameWidth)}  ${(d.meta.severity ?? "-").padEnd(
+    8,
+  )}  ${(d.meta.rule ?? "-").padEnd(4)}  ${d.description}${drift}\n`;
+}
+
+/** `list`: the check catalogue — the default suite, then `test-drift`. */
+function commandList(args: ParsedArgs): void {
+  const format = catalogueFormat(args);
+  if (args.positionals.length > 0) {
+    throw new UsageError(
+      `list takes no positional arguments, got: ${args.positionals.join(", ")}.`,
+    );
+  }
+  const descriptors = describeChecks([...defaultChecks, testDrift]);
+  if (format === "json") {
+    process.stdout.write(`${JSON.stringify(descriptors, null, 2)}\n`);
+    return;
+  }
+  const width = Math.max(...descriptors.map((d) => d.name.length));
+  process.stdout.write(descriptors.map((d) => listLine(d, width)).join(""));
+}
+
+/** `explain <check>`: everything the catalogue knows about one check. */
+function commandExplain(args: ParsedArgs): void {
+  const format = catalogueFormat(args);
+  const [name, ...rest] = args.positionals;
+  if (name === undefined || rest.length > 0) {
+    throw new UsageError(
+      'explain takes exactly one check name, e.g. "servicenow-preflight explain table-crud-acl".',
+    );
+  }
+  const check = findCheck(name);
+  if (!check) {
+    const all = [...defaultChecks, testDrift].map((c) => c.name);
+    const suggestions = closestNames(name, all);
+    const hint =
+      suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
+    throw new UsageError(
+      `Unknown check "${name}". Run "servicenow-preflight list".${hint}`,
+    );
+  }
+  const [d] = describeChecks([check]) as [CheckDescriptor];
+  if (format === "json") {
+    process.stdout.write(`${JSON.stringify(d, null, 2)}\n`);
+    return;
+  }
+  const m = d.meta;
+  const lines = [`${d.name}${d.inDefaultSuite ? "" : " (drift only)"}`, ""];
+  lines.push(d.description, "");
+  if (m.rule !== undefined) {
+    const title = RULE_TITLES[m.rule];
+    lines.push(`Rule:        ${m.rule}${title ? ` — ${title}` : ""}`);
+  }
+  lines.push(`Severity:    ${m.severity ?? "-"}`);
+  lines.push(
+    `Tables:      ${m.tables && m.tables.length > 0 ? m.tables.join(", ") : "-"}`,
+  );
+  const flags = [m.offline ? "offline" : "", m.serial ? "serial" : ""].filter(
+    Boolean,
+  );
+  lines.push(`Flags:       ${flags.length > 0 ? flags.join(", ") : "-"}`);
+  if (m.verdicts) {
+    lines.push("", "Verdicts:");
+    lines.push(`  pass  ${m.verdicts.pass}`);
+    lines.push(`  warn  ${m.verdicts.warn}`);
+    lines.push(`  fail  ${m.verdicts.fail}`);
+  }
+  if (m.remediation !== undefined) {
+    lines.push("", "Remediation:", `  ${m.remediation}`);
+  }
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.version) {
@@ -993,6 +1100,12 @@ async function main(): Promise<void> {
     );
   }
   switch (args.command) {
+    case "list":
+      commandList(args);
+      return;
+    case "explain":
+      commandExplain(args);
+      return;
     case "sync":
       await commandSync(args, cwd);
       return;
