@@ -17,6 +17,7 @@ export const COMMANDS = [
   "impact",
   "coverage",
   "generate",
+  "review",
   "doctor",
   "run",
   "status",

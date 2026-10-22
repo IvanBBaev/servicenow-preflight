@@ -37,7 +37,12 @@ import {
   runOwnershipMarker,
 } from "@tessera/teststore-atf";
 
-import { EXIT_CODES, LIVE_RESULT_KIND, main } from "../build/index.js";
+import {
+  EXIT_CODES,
+  LIVE_RESULT_KIND,
+  main,
+  specBodySha256,
+} from "../build/index.js";
 
 // ── fixtures: the instance ──────────────────────────────────────────────────
 
@@ -116,6 +121,12 @@ gr.query();
 while (gr.next()) { gr.deleteRecord(); }
 `;
 
+/** A review record for `body` (PA-10 fix 3): what `tess review` would stamp. */
+const reviewOf = (body) => ({
+  bodySha256: specBodySha256(body),
+  reviewer: "test-reviewer",
+});
+
 async function writeTestsRoot(root, body) {
   const testsRoot = path.join(root, "tests");
   const file = path.join(testsRoot, SPEC_PATH);
@@ -138,6 +149,7 @@ async function writeTestsRoot(root, body) {
                 name: TARGET_NAME,
               },
             ],
+            review: reviewOf(body),
           },
         ],
       },
@@ -371,6 +383,78 @@ describe("tess run --live (against the fake runner)", () => {
       false,
       "a refusal leaves no .tessera/",
     );
+  });
+
+  it("PA-10 fix 3: a body edited after its review refuses the run (exit 4) with ZERO requests", async () => {
+    const h = await harness();
+    let code;
+    try {
+      // A gate-clean edit: the TM-3 layers pass it, only the review catches it.
+      await fs.appendFile(
+        path.join(h.testsRoot, SPEC_PATH),
+        "// edited after review\n",
+      );
+      code = await main(liveArgv(h), h.context);
+    } finally {
+      h.restore();
+    }
+    assert.equal(code, EXIT_CODES.refused, `${h.stdout()}\n${h.stderr()}`);
+    assert.match(h.stderr(), /REFUSED \(TM-5 review\): 1 unit spec/);
+    assert.match(
+      h.stderr(),
+      /body changed since it was reviewed by test-reviewer/,
+    );
+    assert.match(h.stderr(), RegExp(specBodySha256(GOOD_BODY)));
+    assert.deepEqual(h.fake.requests(), []);
+    assert.equal(
+      existsSync(h.ledgerRoot),
+      false,
+      "a refusal leaves no .tessera/",
+    );
+  });
+
+  it("PA-10 fix 3: a manifest with no review record fails closed until `tess review` records one", async () => {
+    const h = await harness();
+    let first;
+    let reviewed;
+    let second;
+    try {
+      // A manifest written before review records existed.
+      const manifestPath = path.join(h.testsRoot, ".manifest.json");
+      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+      for (const entry of manifest.specs) delete entry.review;
+      await fs.writeFile(manifestPath, JSON.stringify(manifest));
+
+      first = await main(liveArgv(h), h.context);
+      assert.equal(first, EXIT_CODES.refused, h.stderr());
+      assert.match(h.stderr(), /REFUSED \(TM-5 review\)/);
+      assert.match(h.stderr(), /no review record/);
+      assert.match(h.stderr(), /tess review --tests-root .* --reviewer <id>/);
+      assert.deepEqual(h.fake.requests(), []);
+
+      h.clear();
+      reviewed = await main(
+        [
+          "review",
+          "--tests-root",
+          h.testsRoot,
+          "--spec",
+          `sys_script_include/${TARGET_ID}`,
+          "--reviewer",
+          "alice",
+        ],
+        h.context,
+      );
+      assert.equal(reviewed, EXIT_CODES.ok, h.stderr());
+      assert.deepEqual(h.fake.requests(), [], "review contacts no instance");
+
+      h.clear();
+      second = await main(liveArgv(h), h.context);
+    } finally {
+      h.restore();
+    }
+    assert.equal(second, EXIT_CODES.ok, `${h.stdout()}\n${h.stderr()}`);
+    assert.match(h.stdout(), /VERDICT: GO/);
   });
 
   it("--json carries the persisted record; --allow-skipped is accepted", async () => {

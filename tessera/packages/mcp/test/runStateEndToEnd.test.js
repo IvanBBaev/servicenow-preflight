@@ -43,7 +43,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { main } from "@tessera/cli";
+import { main, specBodySha256 } from "@tessera/cli";
 import {
   createFakeInstance,
   W2_AUTHORING_CHANNEL_ACL_RULES,
@@ -128,6 +128,12 @@ const GOOD_BODY = `(function (outputs, steps, params, stepResult, assertEqual) {
 })(outputs, steps, params, stepResult, assertEqual);
 `;
 
+/** A review record for `body` (PA-10 fix 3): what `tess review` would stamp. */
+const reviewOf = (body) => ({
+  bodySha256: specBodySha256(body),
+  reviewer: "test-reviewer",
+});
+
 async function writeTestsRoot(root) {
   const testsRoot = path.join(root, "tests");
   const file = path.join(testsRoot, SPEC_PATH);
@@ -150,6 +156,7 @@ async function writeTestsRoot(root) {
                 name: TARGET_NAME,
               },
             ],
+            review: reviewOf(GOOD_BODY),
           },
         ],
       },

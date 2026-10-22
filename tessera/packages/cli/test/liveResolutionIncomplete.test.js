@@ -38,7 +38,7 @@ import {
   AUTHORING_CHANNEL_VERSION_PROPERTY,
 } from "@tessera/teststore-atf";
 
-import { EXIT_CODES, main } from "../build/index.js";
+import { EXIT_CODES, main, specBodySha256 } from "../build/index.js";
 
 const tempRoots = [];
 after(async () => {
@@ -92,6 +92,12 @@ const ENV_KEYS = [
 /** The scope adapter's (only) artifact table — the one both gaps hit. */
 const DENIED_TABLE = "sys_script_include";
 
+/** A review record for `body` (PA-10 fix 3): what `tess review` would stamp. */
+const reviewOf = (body) => ({
+  bodySha256: specBodySha256(body),
+  reviewer: "test-reviewer",
+});
+
 async function writeTestsRoot(root) {
   const testsRoot = path.join(root, "tests");
   const file = path.join(testsRoot, SPEC_PATH);
@@ -113,6 +119,7 @@ async function writeTestsRoot(root) {
               name: TARGET_NAME,
             },
           ],
+          review: reviewOf(BODY),
         },
       ],
     }),

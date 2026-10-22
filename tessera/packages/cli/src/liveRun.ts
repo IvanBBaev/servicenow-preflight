@@ -10,7 +10,9 @@
 //
 //  1. **The TM-3 projection gate** (`loadLiveSpecs`) — before anything touches
 //     the filesystem or an instance. A hostile repo spec refuses the whole run
-//     with exit 4 and nothing written, not even a `.tessera/` directory.
+//     with exit 4 and nothing written, not even a `.tessera/` directory. So
+//     does a unit spec whose body has no matching review record (PA-10 fix 3,
+//     `specReview.ts`).
 //  2. **§11 classification of the runner** — the guard on a probe bound to the
 //     runner PROFILE (ARCH-7/18), journalling into the same §4b ledger the run
 //     writes. `runPipeline` re-asserts writability at its first statement; a
@@ -30,7 +32,7 @@
 // Exit codes are the full Phase-1 set here (the skeleton's freeze is about
 // CI jobs pinned to `--skeleton`, and no job can be pinned to a flag that did
 // not exist): 0 GO, 1 NO_GO, 3 a stage fault with no NO_GO evidence,
-// 4 a §11 or TM-3 refusal, 5 INCONCLUSIVE.
+// 4 a §11, TM-3 or review refusal, 5 INCONCLUSIVE.
 
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -66,6 +68,7 @@ import {
   type RefusedArtifactTable,
 } from "./liveArtifactTables.js";
 import { formatRejectedSpecs, loadLiveSpecs } from "./liveSpecs.js";
+import { formatUnreviewedSpecs } from "./specReview.js";
 import { composeRealPipeline } from "./registries.js";
 import { stage, type Harness } from "./stage.js";
 import {
@@ -407,6 +410,23 @@ export async function runLive(
       `REFUSED (TM-3): ${load.rejected.length} spec(s) under ${options.testsRoot} failed the generated-code gate; nothing was projected and nothing was written`,
     );
     for (const line of formatRejectedSpecs(load.rejected)) context.stderr(line);
+    context.stderr("");
+    return EXIT_CODES.refused;
+  }
+  if (load.kind === "unreviewed") {
+    // PA-10 fix 3: a gate-clean body nobody reviewed is still refused. A
+    // manifest written before review records existed lands here too — it fails
+    // closed for `run --live` only; every read-side command keeps working.
+    context.stderr("");
+    context.stderr(
+      `REFUSED (TM-5 review): ${load.unreviewed.length} unit spec(s) under ${options.testsRoot} have no review record matching their current body; nothing was projected and nothing was written`,
+    );
+    for (const line of formatUnreviewedSpecs(
+      load.unreviewed,
+      options.testsRoot,
+    )) {
+      context.stderr(line);
+    }
     context.stderr("");
     return EXIT_CODES.refused;
   }

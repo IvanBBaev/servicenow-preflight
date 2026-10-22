@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tessera reviewed-body binding for `run --live`** — a promoted unit
+  spec's `.manifest.json` entry now carries
+  `"review": { "bodySha256": "<hex>", "reviewer": "<id>" }`, written by the
+  new `tess review --tests-root <dir> --spec <id>... --reviewer <id>`. The
+  digest is the lowercase hex SHA-256 of the body's exact UTF-8 text (no
+  newline, BOM, whitespace or Unicode normalisation), and `--reviewer` is
+  required and never defaulted from git config or `$USER`. `tess review`
+  holds each body to the TM-3 gate first and records nothing if one fails
+  (exit `4`). `tess run --live` refuses (exit `4`, `REFUSED (TM-5 review)`,
+  nothing projected or written) any unit spec with no record, a malformed
+  record or a body whose digest no longer matches. Manifests written before
+  this change therefore fail closed for `run --live` only; every other
+  command still reads them. `@tessera/specs` gains `SpecReviewRecord` and
+  `SpecInventory.reviews`.
 - **Tessera egress policy on the CLI** — `tess generate --provider anthropic`
   now requires an `egress` section in `tessera.config.json` with
   `"consent": true` (the JSON literal; a string or number is a validation

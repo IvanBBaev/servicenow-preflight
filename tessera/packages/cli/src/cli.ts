@@ -31,6 +31,7 @@ import { generateCommand } from "./commands/generate.js";
 import { impactCommand } from "./commands/impact.js";
 import { preflightCommand } from "./commands/preflight.js";
 import { resolveCommand } from "./commands/resolve.js";
+import { reviewCommand } from "./commands/review.js";
 import { runCommand } from "./commands/run.js";
 import {
   cleanupCommand,
@@ -178,6 +179,11 @@ export async function main(
       // either — a proposed spec has not been run, so it settles nothing.
       case "generate":
         return await generateCommand(split.rest, context);
+      // `review` stamps a reviewed-body digest onto a promoted manifest entry
+      // (PA-10 fix 3). Local disk only; a TM-3 refusal is returned (exit 4),
+      // and an unreadable registry lands on the fault branch below.
+      case "review":
+        return await reviewCommand(split.rest, context);
       case "doctor":
         return await doctorCommand(split.rest, context);
       case "run":

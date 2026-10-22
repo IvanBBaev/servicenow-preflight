@@ -33,7 +33,14 @@ import {
   liveRunRecord,
   loadLiveSpecs,
   main,
+  specBodySha256,
 } from "../build/index.js";
+
+/** A review record for `body` (PA-10 fix 3): what `tess review` would stamp. */
+const reviewOf = (body) => ({
+  bodySha256: specBodySha256(body),
+  reviewer: "test-reviewer",
+});
 
 const tempRoots = [];
 after(async () => {
@@ -61,7 +68,13 @@ describe("loadLiveSpecs marks the inventory incomplete when it drops a spec", ()
     }
     await fs.writeFile(
       path.join(testsRoot, ".manifest.json"),
-      JSON.stringify({ version: 1, specs: entries }),
+      JSON.stringify({
+        version: 1,
+        specs: entries.map((entry) => ({
+          ...entry,
+          review: reviewOf("gs.info('x');\n"),
+        })),
+      }),
     );
     return testsRoot;
   }
@@ -180,6 +193,7 @@ async function writeTestsRoot(root, { escape }) {
       path: SPEC_PATH,
       kind: "unit",
       targets: [target],
+      review: reviewOf(BODY),
     },
   ];
   if (escape) {

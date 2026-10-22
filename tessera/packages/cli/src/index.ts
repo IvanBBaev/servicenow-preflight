@@ -33,6 +33,7 @@ export {
 } from "./commands/preflight.js";
 export type { PlanIdentity, PreflightVerdict } from "./commands/preflight.js";
 export { resolveCommand } from "./commands/resolve.js";
+export { REVIEW_RESULT_KIND, reviewCommand } from "./commands/review.js";
 export { parseRunArgs, runCommand } from "./commands/run.js";
 export type { RunOptions, RunParse } from "./commands/run.js";
 export {
@@ -81,6 +82,12 @@ export type {
 } from "./benchmarkRun.js";
 export { formatRejectedSpecs, loadLiveSpecs } from "./liveSpecs.js";
 export type { LiveSpecLoad, RejectedSpec } from "./liveSpecs.js";
+export {
+  formatUnreviewedSpecs,
+  specBodySha256,
+  verifySpecReview,
+} from "./specReview.js";
+export type { UnreviewedReason, UnreviewedSpec } from "./specReview.js";
 export { defaultContext, describe, instanceFromEnv } from "./context.js";
 export type { CliContext } from "./context.js";
 export { EXIT_CODES, runExitDisposition } from "./exitCodes.js";

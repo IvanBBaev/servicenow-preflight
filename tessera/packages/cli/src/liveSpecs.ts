@@ -19,6 +19,13 @@
 // first write — a partial projection would be a run over a subset the operator
 // did not choose (delegated decision 2026-09-23, TODO "run --live").
 //
+// A body that clears the gate must ALSO be the body a human reviewed (PA-10
+// fix 3, TM-5): its SHA-256 must equal the `review.bodySha256` that
+// `tess review` recorded on its manifest entry. A unit spec with no record, an
+// unreadable record or a changed body refuses the whole run the same way — see
+// `specReview.ts` for the canonical form. A TM-3 rejection is reported first:
+// a body the gate refuses would not be reviewable anyway.
+//
 // Only `unit` specs are projected: the ATF store authors "Run Server Side
 // Script" steps and nothing else (ADR-007), so an e2e spec has no projection
 // and is reported, not silently dropped.
@@ -32,6 +39,8 @@ import {
 } from "@tessera/generate";
 import { readSpecInventory, type InventoryNote } from "@tessera/specs";
 import { untrusted, unwrapUntrusted, type TestSpec } from "@tessera/types";
+
+import { verifySpecReview, type UnreviewedSpec } from "./specReview.js";
 
 /** The unwrap boundary: what a cleared body is about to cross. */
 const PROJECTION_BOUNDARY =
@@ -63,10 +72,30 @@ export type LiveSpecLoad =
   | {
       readonly kind: "rejected";
       readonly rejected: readonly RejectedSpec[];
+    }
+  | {
+      /** Every body cleared TM-3, but at least one has no matching review. */
+      readonly kind: "unreviewed";
+      readonly unreviewed: readonly UnreviewedSpec[];
     };
 
+/**
+ * Both TM-3 layers over one unit body, with this spec's own Script Include
+ * targets as the only constructible classes beyond the read-only Glide ones.
+ * Shared by the live loader and `tess review`, so a body is reviewed against
+ * exactly the gate it will later be projected through.
+ */
+export function gateUnitSpecBody(spec: TestSpec, body: string) {
+  const gate = createAtfServerScriptGate({
+    targetClassNames: spec.targets
+      .filter((target) => target.table === "sys_script_include")
+      .map((target) => target.name),
+  });
+  return gate.inspect(untrusted(body));
+}
+
 /** Containment by path segments, as `@tessera/specs` checks it. */
-function isInside(root: string, candidate: string): boolean {
+export function isInside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   if (relative === "" || path.isAbsolute(relative)) return false;
   return relative.split(path.sep)[0] !== "..";
@@ -84,6 +113,7 @@ export async function loadLiveSpecs(testsRoot: string): Promise<LiveSpecLoad> {
   const notes: InventoryNote[] = [...inventory.notes];
   const specs: TestSpec[] = [];
   const rejected: RejectedSpec[] = [];
+  const unreviewed: UnreviewedSpec[] = [];
   let incomplete = inventory.incomplete;
 
   for (const spec of inventory.specs) {
@@ -109,20 +139,22 @@ export async function loadLiveSpecs(testsRoot: string): Promise<LiveSpecLoad> {
       );
     }
     const body = await readFile(file, "utf8");
-    // Both TM-3 layers, with this spec's own Script Include targets as the
-    // only constructible classes beyond the read-only Glide ones.
-    const gate = createAtfServerScriptGate({
-      targetClassNames: spec.targets
-        .filter((target) => target.table === "sys_script_include")
-        .map((target) => target.name),
-    });
-    const verdict = gate.inspect(untrusted(body));
+    const verdict = gateUnitSpecBody(spec, body);
     if (!verdict.ok) {
       rejected.push({
         id: spec.ref.id,
         path: spec.ref.path,
         violations: verdict.violations,
       });
+      continue;
+    }
+    const review = verifySpecReview(
+      spec.ref,
+      inventory.reviews.get(spec.ref.id),
+      body,
+    );
+    if (review !== undefined) {
+      unreviewed.push(review);
       continue;
     }
     specs.push({
@@ -144,6 +176,7 @@ export async function loadLiveSpecs(testsRoot: string): Promise<LiveSpecLoad> {
   }
 
   if (rejected.length > 0) return { kind: "rejected", rejected };
+  if (unreviewed.length > 0) return { kind: "unreviewed", unreviewed };
   return { kind: "loaded", specs, notes, incomplete };
 }
 

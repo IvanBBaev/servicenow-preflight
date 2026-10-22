@@ -18,7 +18,17 @@ import { inspectGeneratedSource } from "@tessera/generate";
 import { S5_GENERATED_TEST_SCRIPT, S5_TARGET_NAME } from "@tessera/phase05";
 import { untrusted } from "@tessera/types";
 
-import { formatRejectedSpecs, loadLiveSpecs } from "../build/index.js";
+import {
+  formatRejectedSpecs,
+  loadLiveSpecs,
+  specBodySha256,
+} from "../build/index.js";
+
+/** A review record for `body` (PA-10 fix 3): what `tess review` would stamp. */
+const reviewOf = (body) => ({
+  bodySha256: specBodySha256(body),
+  reviewer: "test-reviewer",
+});
 
 const tempRoots = [];
 after(async () => {
@@ -39,7 +49,15 @@ async function root(body, targets) {
     path.join(testsRoot, ".manifest.json"),
     JSON.stringify({
       version: 1,
-      specs: [{ id: "U", path: "u.unit.ts", kind: "unit", targets }],
+      specs: [
+        {
+          id: "U",
+          path: "u.unit.ts",
+          kind: "unit",
+          targets,
+          review: reviewOf(body),
+        },
+      ],
     }),
   );
   return testsRoot;

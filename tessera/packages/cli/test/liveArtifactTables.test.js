@@ -41,6 +41,7 @@ import {
   createRealRegistries,
   EXIT_CODES,
   main,
+  specBodySha256,
 } from "../build/index.js";
 import {
   createClassifyingReader,
@@ -111,6 +112,12 @@ const NAMESPACE_404 = {
   },
 };
 
+/** A review record for `body` (PA-10 fix 3): what `tess review` would stamp. */
+const reviewOf = (body) => ({
+  bodySha256: specBodySha256(body),
+  reviewer: "test-reviewer",
+});
+
 async function writeTestsRoot(root) {
   const testsRoot = path.join(root, "tests");
   const file = path.join(testsRoot, SPEC_PATH);
@@ -132,6 +139,7 @@ async function writeTestsRoot(root) {
               name: TARGET_NAME,
             },
           ],
+          review: reviewOf(BODY),
         },
       ],
     }),

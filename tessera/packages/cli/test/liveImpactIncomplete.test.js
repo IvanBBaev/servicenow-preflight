@@ -37,7 +37,13 @@ import {
   AUTHORING_CHANNEL_VERSION_PROPERTY,
 } from "@tessera/teststore-atf";
 
-import { EXIT_CODES, main } from "../build/index.js";
+import { EXIT_CODES, main, specBodySha256 } from "../build/index.js";
+
+/** A review record for `body` (PA-10 fix 3): what `tess review` would stamp. */
+const reviewOf = (body) => ({
+  bodySha256: specBodySha256(body),
+  reviewer: "test-reviewer",
+});
 
 const tempRoots = [];
 after(async () => {
@@ -195,9 +201,16 @@ async function writeTestsRoot(
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, body);
   }
+  const bodyOf = new Map(bodies);
   await fs.writeFile(
     path.join(testsRoot, ".manifest.json"),
-    JSON.stringify({ version: 1, specs }),
+    JSON.stringify({
+      version: 1,
+      specs: specs.map((spec) => ({
+        ...spec,
+        review: reviewOf(bodyOf.get(spec.path)),
+      })),
+    }),
   );
   return testsRoot;
 }

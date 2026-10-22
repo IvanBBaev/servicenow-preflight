@@ -68,6 +68,10 @@ COMMANDS
   generate    Propose specs for the artifacts that have none. Writes ONLY to
               <tests-root>/proposed/; the live manifest is never touched, so
               nothing it produces runs until a human promotes it (DEV-4).
+  review      Record that a named reviewer read a promoted unit spec: stamps
+              the SHA-256 of its exact body and the --reviewer id onto its
+              .manifest.json entry. \`run --live\` refuses any unit spec whose
+              body no longer matches its review (PA-10). Local disk only.
   doctor      Read-only readiness diagnosis of one or two instances. Writes
               nothing, ever — so it may probe any role, target included (ARCH-8).
   run         A gated test run. --live projects the repo's unit specs onto the
@@ -99,9 +103,10 @@ TOPOLOGY (ARCH-29/DEV-5)
 CONFIGURATION
   Every option of preflight, resolve, impact, coverage, generate and doctor
   resolves through four layers, highest first: flag > env > tessera.config.json
-  > default. \`run\`, \`status\`, \`confirm\`, \`cleanup\` and \`benchmark\` take
-  argv only: the
-  skeleton's flags are frozen Phase-0.5 dev switches, and the rest are
+  > default. \`run\`, \`review\`, \`status\`, \`confirm\`, \`cleanup\` and
+  \`benchmark\` take argv only: the
+  skeleton's flags are frozen Phase-0.5 dev switches, a reviewer identity is
+  stated per review and never defaulted, and the rest are
   addressed by run id, which has no business in an env var or a config file.
   The resolved set is logged with the layer that won, so "why is it that value"
   is answerable from the output. Secrets are never read from a config file — env
@@ -114,7 +119,7 @@ EXIT CODES
 
   5 is reachable from preflight, resolve, impact, coverage, generate, doctor,
   confirm, benchmark and \`run --live\`; status and cleanup answer 0, 2, 3 or
-  4 only.
+  4 only, and so does review.
   It is NOT reachable from \`run --skeleton\`, whose mapping is frozen at Phase
   0.5's two outcomes — 0 for GO, 1 for everything else — so an INCONCLUSIVE
   verdict there arrives as a 1 and never as a 5. A CI job branching on 5 must
@@ -491,7 +496,13 @@ LIVE (--live)
   body to both TM-3 gate layers — an ES5 AST allowlist (only read-only Glide
   calls, ATF assertions, gs.info/debug and the spec's declared Script Include
   targets) and the lexical deny-list (one rejection refuses the WHOLE run,
-  exit 4, before anything is written), classifies the runner (§11), projects
+  exit 4, before anything is written). Every unit spec must also carry a
+  review record (\`tess review\`) whose SHA-256 matches its CURRENT body; a
+  spec with no record, an unreadable record or a changed body refuses the
+  whole run the same way (exit 4, "REFUSED (TM-5 review)"). A manifest
+  written before review records existed therefore fails closed here until
+  its specs are re-reviewed; no other command needs the records. It then
+  classifies the runner (§11), projects
   the specs as run-id-namespaced ATF tests on the runner, triggers them through
   the CI/CD API, folds the results into the §6a verdict and tears the
   projection down (DEV-13). Impact analysis runs; generation does not — a
@@ -519,8 +530,8 @@ ${wrapList(LIVE_ARTIFACT_TABLES, "    ", 80)}
   Lifecycle is ephemeral only (DEV-20); the Tier-2 fake flags are refused.
 
   Exit codes under --live are the full set: 0 GO, 1 NO_GO, 2 usage,
-  3 infrastructure fault with no NO_GO evidence, 4 §11 or TM-3 refusal,
-  5 INCONCLUSIVE.
+  3 infrastructure fault with no NO_GO evidence, 4 §11, TM-3 or review
+  refusal, 5 INCONCLUSIVE.
 
 SKELETON (--skeleton)
 
@@ -588,6 +599,46 @@ EXIT CODES
   an "exit:" line that says when the code collapsed a distinction, and --json
   carries the same answer as verdict.exitCode / verdict.exitCodeCollapsed —
   branch on those, or move the job to --live, where 1 and 5 are distinct.
+`;
+
+const REVIEW_HELP = `tess review — record that a named reviewer read a unit spec's exact body
+
+USAGE
+  tess review --tests-root <dir> --spec <id> [--spec <id>]... --reviewer <id>
+              [--json]
+
+WHAT IT DOES
+  The confirm step after promotion (PA-10). Promotion itself stays a human
+  edit: you move an entry from .manifest.proposed.json into .manifest.json
+  (DEV-4). Then, having READ each body, you run this. For every --spec it
+  holds the body to the same TM-3 gate \`run --live\` applies, and writes
+    "review": { "bodySha256": "<hex>", "reviewer": "<id>" }
+  onto that spec's .manifest.json entry. Commit the manifest with the review.
+
+  The digest is the lowercase hex SHA-256 of the file's exact text as UTF-8 —
+  no newline, BOM, whitespace or Unicode normalisation — so it covers exactly
+  what the ATF step executes. Any edit, a CRLF conversion included, voids the
+  review: \`run --live\` then refuses the spec until it is reviewed again.
+
+  The reviewer is an attestation recorded in a reviewed file, not
+  authentication; git history over .manifest.json is the control on it.
+
+  --tests-root <dir>         The repo's spec tree (manifest). Required.
+  --spec <id>                A registered unit spec you reviewed. Repeatable;
+                             at least one. Unknown ids and e2e/ui specs are
+                             usage errors, and nothing is written.
+  --reviewer <id>            Who reviewed the bodies. Required, and never
+                             defaulted from git config or $USER. 1-128
+                             characters of A-Z a-z 0-9 . _ @ + -, starting
+                             with a letter or digit.
+  --json                     Machine-readable result on stdout.
+
+  Local disk only: it opens no instance connection. A body the gate refuses
+  is not recorded, and neither is any other spec named in the same call.
+
+EXIT CODES
+  0 recorded            3 the manifest could not be read or written
+  2 usage               4 TM-3 refusal — nothing was written
 `;
 
 const STATUS_HELP = `tess status — where is a run now?
@@ -789,6 +840,8 @@ export function commandHelp(command: CommandName): string {
       return COVERAGE_HELP;
     case "generate":
       return GENERATE_HELP;
+    case "review":
+      return REVIEW_HELP;
     case "doctor":
       return DOCTOR_HELP;
     case "run":
