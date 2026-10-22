@@ -495,7 +495,8 @@ function settleNotes(notes: readonly InventoryNote[]): InventoryNote[] {
   // no message is ever emitted at two levels (every info wording is distinct
   // from every warning wording). The level stays in the key so that remains
   // true by construction rather than by wording.
-  for (const item of notes) unique.set(`${item.level} ${item.message}`, item);
+  for (const item of notes)
+    unique.set(`${item.level}\u0000${item.message}`, item);
   return [...unique.values()].sort(
     (left, right) =>
       compare(left.level, right.level) || compare(left.message, right.message),
