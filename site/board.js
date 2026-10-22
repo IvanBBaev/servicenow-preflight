@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the twenty-four checks --------------------------------- */
+  /* ---- Content model: the twenty-five checks --------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -247,6 +247,15 @@
       warn: "A hard-coded sys_id or URL, no scope, or an ambiguous zero-row read.",
       pass: "No hard-coded sys_id or URL in any in-scope script, or the scope ships none.",
     },
+    {
+      code: "25",
+      name: "client-script-safety",
+      tag: "scope",
+      desc: "No eval, Function constructor or client GlideRecord in client scripts, and no GlideScopedEvaluator.evaluateScript on the server.",
+      fail: "eval, new Function, client GlideRecord or GlideScopedEvaluator.evaluateScript found, or a script table read was security-trimmed.",
+      warn: "No scope set, or an ambiguous zero-row read.",
+      pass: "No unsafe dynamic code or client GlideRecord in any in-scope script, or the scope ships none.",
+    },
   ];
 
   var SCENARIOS = {
@@ -275,8 +284,10 @@
       "warn",
       "warn",
       "warn",
+      "warn",
     ],
     configured: [
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -327,6 +338,7 @@
       "warn",
       "warn",
       "warn",
+      "fail",
     ],
   };
 

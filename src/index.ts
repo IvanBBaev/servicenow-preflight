@@ -199,6 +199,7 @@ export {
   moduleRoles,
   scriptHygiene,
   hardcodedIdentifiers,
+  clientScriptSafety,
   testDrift,
 } from "./checks/index.js";
 

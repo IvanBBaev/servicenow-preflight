@@ -22,6 +22,7 @@ import { scriptFieldExposure } from "./script-field-exposure.js";
 import { scheduledJobRunAs } from "./scheduled-job-run-as.js";
 import { mobileMenuHygiene } from "./mobile-menu-hygiene.js";
 import { hardcodedIdentifiers } from "./hardcoded-identifiers.js";
+import { clientScriptSafety } from "./client-script-safety.js";
 
 export { connectivityAuth } from "./connectivity-auth.js";
 export { updateSetState } from "./update-set-state.js";
@@ -46,6 +47,7 @@ export { scriptFieldExposure } from "./script-field-exposure.js";
 export { scheduledJobRunAs } from "./scheduled-job-run-as.js";
 export { mobileMenuHygiene } from "./mobile-menu-hygiene.js";
 export { hardcodedIdentifiers } from "./hardcoded-identifiers.js";
+export { clientScriptSafety } from "./client-script-safety.js";
 export { testDrift } from "./test-drift.js";
 
 /**
@@ -149,4 +151,5 @@ export const defaultChecks: Check[] = [
   moduleRoles,
   scriptHygiene,
   hardcodedIdentifiers,
+  clientScriptSafety,
 ];
