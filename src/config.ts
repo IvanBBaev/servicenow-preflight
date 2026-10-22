@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { resolve, isAbsolute } from "node:path";
 import type { CheckSelection, PreflightAuth, SnTls } from "./types.js";
 import { isSafeIdentifier } from "./http/query.js";
+import type { SeverityPolicy } from "./policy.js";
 
 /**
  * Configuration loading for the preflight run.
@@ -64,6 +65,13 @@ export interface PreflightConfig {
    * `false` or absent disables it. The `--baseline` flag wins over this key.
    */
   baseline?: string | boolean;
+  /**
+   * Severity policy (see `src/policy.ts`): per-check `"fail"` / `"warn"` /
+   * `"off"` overrides of how a non-pass result is reported. `--severity`
+   * entries win over this key for the same check. Unknown check names are a
+   * usage error.
+   */
+  severity?: SeverityPolicy;
 }
 
 /** What {@link loadConfig} resolves: the file config plus resolved auth. */
@@ -540,6 +548,30 @@ function assertBaselineConfigType(config: PreflightConfig): void {
   );
 }
 
+/**
+ * Fail closed on a malformed `severity` policy: it must be an object whose
+ * values are `"fail"`, `"warn"` or `"off"`. Check names are validated later,
+ * against the loaded check set (`validatePolicy`).
+ */
+function assertSeverityConfigType(config: PreflightConfig): void {
+  const value: unknown = config.severity;
+  if (value === undefined) return;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new UsageError(
+      `Config severity must be an object mapping check names to "fail", "warn" or "off", got ${describeJson(value)}.`,
+    );
+  }
+  for (const [name, level] of Object.entries(value)) {
+    if (level !== "fail" && level !== "warn" && level !== "off") {
+      throw new UsageError(
+        `Config severity["${name}"] must be "fail", "warn" or "off", got ${
+          typeof level === "string" ? `"${level}"` : describeJson(level)
+        }.`,
+      );
+    }
+  }
+}
+
 /** Options for {@link loadConfig}. */
 export interface LoadConfigOptions {
   /** Explicit config file path (overrides auto-discovery). */
@@ -603,6 +635,7 @@ export async function loadConfig(
   // before it can reach the client as a silent bypass or a mid-request crash.
   assertProxyConfigTypes(config);
   assertBaselineConfigType(config);
+  assertSeverityConfigType(config);
 
   // Fail closed at load time on config values that would inject into an encoded
   // query (SR-1), after env fallbacks so env-supplied values are covered too.

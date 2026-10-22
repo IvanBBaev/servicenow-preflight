@@ -164,6 +164,14 @@ export {
   type BaselineEntry,
 } from "./baseline.js";
 export {
+  applyPolicy,
+  parseSeverityFlag,
+  policySkips,
+  validatePolicy,
+  type SeverityOverride,
+  type SeverityPolicy,
+} from "./policy.js";
+export {
   defaultChecks,
   instanceUrlConfigured,
   connectivityAuth,

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Severity policy** — the config key `severity` and the repeatable
+  `run --severity <check>=<fail|warn|off>` flag override how a check's non-pass
+  result is reported (`fail`/`warn`, with a `[severity: … by policy]` suffix)
+  or skip it (`off`). Unknown check names are a usage error (exit 2) before any
+  network call; the CLI entry wins over the config entry. Applied before the
+  baseline. Exported as `applyPolicy`, `parseSeverityFlag`, `validatePolicy`
+  and `policySkips`.
 - **Baseline of accepted findings** — `run --write-baseline [path]` records
   every non-pass result in `.preflight/baseline.json` (per registry instance
   `baseline.<env>.json`; `--force` to overwrite), and `run --baseline [path]`

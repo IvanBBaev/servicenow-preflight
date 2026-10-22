@@ -777,6 +777,10 @@
       flag: "--write-baseline [path]",
       desc: "Record every non-pass result as a baseline (--force overwrites).",
     },
+    {
+      flag: "--severity <check>=<level>",
+      desc: "Report a check as fail or warn, or skip it (off) · repeatable.",
+    },
   ];
   var ENVS = [
     {

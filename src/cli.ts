@@ -27,7 +27,14 @@ import {
   promotionOrderResult,
   type DriftManifestRef,
 } from "./state/drift.js";
-import { testDrift } from "./checks/index.js";
+import { defaultChecks, testDrift } from "./checks/index.js";
+import {
+  applyPolicy,
+  parseSeverityFlag,
+  policySkips,
+  validatePolicy,
+  type SeverityPolicy,
+} from "./policy.js";
 import {
   applyBaseline,
   baselineFromReport,
@@ -90,6 +97,8 @@ interface ParsedArgs {
   baseline?: string | true;
   /** `run`: write a baseline from the run's non-pass results (path or default). */
   writeBaseline?: string | true;
+  /** `run`: `--severity <check>=<level>` overrides (repeatable). */
+  severity?: SeverityPolicy;
   /** Allow `--write-baseline` to overwrite an existing file. */
   force: boolean;
   help: boolean;
@@ -243,6 +252,11 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--baseline":
         args.baseline = takeOptionalValue();
         break;
+      case "--severity": {
+        const [name, level] = parseSeverityFlag(takeValue(arg));
+        args.severity = { ...args.severity, [name]: level };
+        break;
+      }
       case "--write-baseline":
         args.writeBaseline = takeOptionalValue();
         break;
@@ -289,6 +303,11 @@ function parseArgs(argv: string[]): ParsedArgs {
           args.format = parseFormat(arg.slice("--format=".length));
         } else if (arg?.startsWith("--max-age=")) {
           args.maxAgeMs = parseDuration(arg.slice("--max-age=".length));
+        } else if (arg?.startsWith("--severity=")) {
+          const [name, level] = parseSeverityFlag(
+            arg.slice("--severity=".length),
+          );
+          args.severity = { ...args.severity, [name]: level };
         } else if (arg?.startsWith("--baseline=")) {
           args.baseline = pathValue(
             "--baseline",
@@ -377,6 +396,10 @@ Options:
                          baseline.<env>.json per registry instance); exits
                          with the run's normal code
       --force            --write-baseline: overwrite an existing file
+      --severity <check>=<fail|warn|off>
+                         run: report that check's non-pass result as fail or
+                         warn, or skip it (off). Repeatable; wins over the
+                         config file's "severity" entry for the same check
   -h, --help             Show this help
   -v, --version          Print the version and exit
 
@@ -674,9 +697,22 @@ async function runOneInstance(
     ? await loadManifest(target.name, cwd)
     : undefined;
 
+  // Severity policy: CLI entries win over config entries for the same check.
+  // Validated before any client is built, so a typo is exit 2 up front.
+  const policy: SeverityPolicy = {
+    ...loaded.config.severity,
+    ...args.severity,
+  };
+  validatePolicy(
+    policy,
+    defaultChecks.map((c) => c.name),
+  );
+  const offByPolicy = policySkips(policy);
+  const baseSkip = args.skip ?? loaded.config.select?.skip;
   const select = {
     only: args.only ?? loaded.config.select?.only,
-    skip: args.skip ?? loaded.config.select?.skip,
+    skip:
+      offByPolicy.length > 0 ? [...(baseSkip ?? []), ...offByPolicy] : baseSkip,
   };
 
   // Resolve the baseline before any network call, so a missing or malformed
@@ -726,7 +762,9 @@ async function runOneInstance(
     options: loaded.config.options,
   };
 
-  const report = await runPreflight(ctx);
+  // Post-processing order: runPreflight → policy → baseline. Policy expresses
+  // intent; the baseline accepts the resulting state.
+  const report = applyPolicy(await runPreflight(ctx), policy);
 
   if (writePath) {
     const b = baselineFromReport(report, target.name, new Date());
@@ -738,7 +776,6 @@ async function runOneInstance(
     );
     return report;
   }
-  // Post-processing order: runPreflight → baseline.
   return baseline ? applyBaseline(report, baseline, new Date()) : report;
 }
 
@@ -947,10 +984,12 @@ async function main(): Promise<void> {
   const cwd = process.cwd();
   if (
     args.command !== "run" &&
-    (args.baseline !== undefined || args.writeBaseline !== undefined)
+    (args.baseline !== undefined ||
+      args.writeBaseline !== undefined ||
+      args.severity !== undefined)
   ) {
     throw new UsageError(
-      `--baseline / --write-baseline apply to run only, not ${args.command}.`,
+      `--baseline / --write-baseline / --severity apply to run only, not ${args.command}.`,
     );
   }
   switch (args.command) {

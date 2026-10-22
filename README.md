@@ -144,23 +144,24 @@ snpf drift <src> <dst>         # compare two instances (promote gate)
 
 Both `--flag value` and `--flag=value` forms are accepted.
 
-| Flag                      | Description                                                                                                   |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--instance <url>`  | Target instance URL (single-instance, no registry).                                                           |
-| `-e`, `--env <name>`      | Select a registry instance (same as positional).                                                              |
-| `--all`                   | `run`: sweep every instance in the registry.                                                                  |
-| `--registry <path>`       | Registry file (default `.preflight/instances.json`); see below.                                               |
-| `--config <path>`         | Config file (default: auto-discovered).                                                                       |
-| `--only` / `--skip <csv>` | Run only / skip these checks (comma-separated names).                                                         |
-| `--with-last-run`         | `sync`: also pull each test's most recent result.                                                             |
-| `--allow-empty`           | `sync`: commit an empty snapshot over a non-empty manifest.                                                   |
-| `--max-age <dur>`         | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                |
-| `--allow-stage-skip`      | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                   |
-| `--format <fmt>`          | `pretty` (default), `json`, `junit`, `sarif`.                                                                 |
-| `--json` / `-h`           | Shorthand for `--format json` / show help.                                                                    |
-| `--baseline [path]`       | `run`: demote findings recorded in a baseline file to warnings (see [Baseline](#baseline-accepted-findings)). |
-| `--write-baseline [path]` | `run`: record every non-pass result as a new baseline file.                                                   |
-| `--force`                 | `--write-baseline`: overwrite an existing baseline file.                                                      |
+| Flag                         | Description                                                                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--instance <url>`     | Target instance URL (single-instance, no registry).                                                                           |
+| `-e`, `--env <name>`         | Select a registry instance (same as positional).                                                                              |
+| `--all`                      | `run`: sweep every instance in the registry.                                                                                  |
+| `--registry <path>`          | Registry file (default `.preflight/instances.json`); see below.                                                               |
+| `--config <path>`            | Config file (default: auto-discovered).                                                                                       |
+| `--only` / `--skip <csv>`    | Run only / skip these checks (comma-separated names).                                                                         |
+| `--with-last-run`            | `sync`: also pull each test's most recent result.                                                                             |
+| `--allow-empty`              | `sync`: commit an empty snapshot over a non-empty manifest.                                                                   |
+| `--max-age <dur>`            | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                                |
+| `--allow-stage-skip`         | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                                   |
+| `--format <fmt>`             | `pretty` (default), `json`, `junit`, `sarif`.                                                                                 |
+| `--json` / `-h`              | Shorthand for `--format json` / show help.                                                                                    |
+| `--baseline [path]`          | `run`: demote findings recorded in a baseline file to warnings (see [Baseline](#baseline-accepted-findings)).                 |
+| `--write-baseline [path]`    | `run`: record every non-pass result as a new baseline file.                                                                   |
+| `--force`                    | `--write-baseline`: overwrite an existing baseline file.                                                                      |
+| `--severity <check>=<level>` | `run`: report a check's non-pass result as `fail` or `warn`, or skip it (`off`). Repeatable; wins over the config `severity`. |
 
 `--instance`, `--only` and `--skip` override the matching config-file values. The
 `scope` and `updateSetId` a run targets come from the config file (or the
@@ -258,14 +259,45 @@ checks to run, and per-check options — but **never credentials**.
 }
 ```
 
-| Field         | Type                                   | Used by                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `instanceUrl` | `string`                               | Target instance (CLI `--instance` overrides).                                                                                                                                                                                                                                                                                                                                 |
-| `scope`       | `string`                               | `default-set-leakage`, `i18n-completeness`, `acl-role-sanity`, and the thirteen certification checks (`client-callable-acl`, `rest-endpoint-security`, `script-field-exposure`, `scheduled-job-run-as`, `mobile-menu-hygiene`, `table-crud-acl`, `ui-page-acl`, `ui-action-gating`, `table-namespace`, `portal-roles`, `acl-out-of-scope`, `module-roles`, `script-hygiene`). |
-| `updateSetId` | `string` (sys_id)                      | `update-set-state`; also focuses `remote-set-preview` on that set's retrieved copy.                                                                                                                                                                                                                                                                                           |
-| `select`      | `{ only?: string[]; skip?: string[] }` | Check selection (CLI flags override).                                                                                                                                                                                                                                                                                                                                         |
-| `options`     | `object`                               | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).                                                                                                                                                                                                                                                                                              |
-| `baseline`    | `string \| boolean`                    | Apply a baseline file: `true` = the default path, a string = that file (CLI `--baseline` overrides).                                                                                                                                                                                                                                                                          |
+| Field         | Type                                     | Used by                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instanceUrl` | `string`                                 | Target instance (CLI `--instance` overrides).                                                                                                                                                                                                                                                                                                                                 |
+| `scope`       | `string`                                 | `default-set-leakage`, `i18n-completeness`, `acl-role-sanity`, and the thirteen certification checks (`client-callable-acl`, `rest-endpoint-security`, `script-field-exposure`, `scheduled-job-run-as`, `mobile-menu-hygiene`, `table-crud-acl`, `ui-page-acl`, `ui-action-gating`, `table-namespace`, `portal-roles`, `acl-out-of-scope`, `module-roles`, `script-hygiene`). |
+| `updateSetId` | `string` (sys_id)                        | `update-set-state`; also focuses `remote-set-preview` on that set's retrieved copy.                                                                                                                                                                                                                                                                                           |
+| `select`      | `{ only?: string[]; skip?: string[] }`   | Check selection (CLI flags override).                                                                                                                                                                                                                                                                                                                                         |
+| `options`     | `object`                                 | Per-check options (`atfSuites`, `requiredApps`, `languages`, `baseLanguage`, …).                                                                                                                                                                                                                                                                                              |
+| `baseline`    | `string \| boolean`                      | Apply a baseline file: `true` = the default path, a string = that file (CLI `--baseline` overrides).                                                                                                                                                                                                                                                                          |
+| `severity`    | `{ [check]: "fail" \| "warn" \| "off" }` | Severity policy (see [below](#severity-policy)); CLI `--severity` overrides per check.                                                                                                                                                                                                                                                                                        |
+
+### Severity policy
+
+Teams disagree with the defaults: a Store-bound app may want the advisory
+`scheduled-job-run-as` to **fail**, an internal app may want `table-namespace`
+to only **warn**. The `severity` key overrides how a check's non-pass result is
+reported, without skipping the check:
+
+```json
+{
+  "severity": {
+    "scheduled-job-run-as": "fail",
+    "table-namespace": "warn",
+    "mobile-menu-hygiene": "off"
+  }
+}
+```
+
+- `"fail"` / `"warn"` — a non-pass result of that check is reported with that
+  status; a rewritten row's message ends in `[severity: fail by policy]` (or
+  `warn`). `pass` results are never changed.
+- `"off"` — the check is skipped, exactly like `select.skip` (so a run that
+  ends up verifying nothing still fails).
+- A name that is not a known check is a usage error (exit 2) listing it, raised
+  before any network call. A check excluded by `--only` still counts as known.
+- `--severity <check>=<level>` on the command line (repeatable) wins over the
+  config entry for the same check, e.g.
+  `snpf run --severity table-namespace=fail`.
+- The policy is applied before the [baseline](#baseline-accepted-findings):
+  the policy states intent, the baseline accepts the resulting state.
 
 ### Baseline (accepted findings)
 
