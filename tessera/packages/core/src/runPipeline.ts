@@ -565,7 +565,7 @@ function describeReporter(reporter: Reporter, index: number): string {
     : `reporters[${index}] (${name})`;
 }
 
-function artifactKey(ref: TargetArtifactRef): string {
+function artifactKey(ref: Pick<TargetArtifactRef, "table" | "sysId">): string {
   return `${ref.table}\u0000${ref.sysId}`;
 }
 

@@ -20,6 +20,7 @@ import path from "node:path";
 import { createFakeInstance } from "@tessera/fake-instance";
 import { createSnRecordReader } from "@tessera/resolvers";
 import { reloadCredentialsFromEnv } from "@tessera/sn-client";
+import { untrusted } from "@tessera/types";
 
 import { createImpactAnalyzer, isIncomplete } from "../build/index.js";
 
@@ -30,15 +31,18 @@ const SCOPE_SYS_ID = hex("aaaa01");
 const SCOPE_NAME = "x_acme_inv";
 const TARGET_TABLE = "x_acme_inv_amount";
 
+const INCLUDE_NAME = "AmountCalculator";
+const TRANSFORM_NAME = "Amount import script";
+// The resolved refs carry branded names, as a resolver hands them over (TM-1).
 const INCLUDE = {
   table: "sys_script_include",
   sysId: hex("ca1c"),
-  name: "AmountCalculator",
+  name: untrusted(INCLUDE_NAME),
 };
 const TRANSFORM = {
   table: "sys_transform_script",
   sysId: hex("7a75"),
-  name: "Amount import script",
+  name: untrusted(TRANSFORM_NAME),
 };
 const MAP_ID = hex("3a9");
 // `ORDERBYsys_id` (the transport's stable paging order) puts RULE_Z last —
@@ -78,8 +82,8 @@ const SEED = {
   sys_script_include: [
     {
       sys_id: INCLUDE.sysId,
-      sys_name: INCLUDE.name,
-      name: INCLUDE.name,
+      sys_name: INCLUDE_NAME,
+      name: INCLUDE_NAME,
       sys_scope: SCOPE_SYS_ID,
       script: "var AmountCalculator = Class.create();",
     },
@@ -88,7 +92,7 @@ const SEED = {
   sys_transform_script: [
     {
       sys_id: TRANSFORM.sysId,
-      sys_name: TRANSFORM.name,
+      sys_name: TRANSFORM_NAME,
       sys_scope: SCOPE_SYS_ID,
       map: MAP_ID,
       script: "",

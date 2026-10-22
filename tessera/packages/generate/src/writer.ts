@@ -59,8 +59,8 @@ import {
 import path from "node:path";
 
 import { PROPOSED_SPECS_DIRNAME } from "@tessera/specs";
-import { unwrapUntrusted } from "@tessera/types";
-import type { TargetArtifactRef, TestKind } from "@tessera/types";
+import { isUntrusted, unwrapUntrusted } from "@tessera/types";
+import type { TargetArtifactRef, TestKind, Untrusted } from "@tessera/types";
 
 import { GenerateInputError, GenerationFaultError } from "./errors.js";
 import {
@@ -81,6 +81,16 @@ import type { GenerationCandidate } from "./provider.js";
  */
 const WRITE_BOUNDARY =
   "proposed-spec write — the cleared source is written verbatim to a file under proposed/ that no manifest arms and nothing executes; it is never interpolated, evaluated or rendered (TM-1/DEV-4)";
+
+/**
+ * The second unwrap boundary. A candidate's target names are model-authored
+ * and arrive branded (AIS-4); the proposed manifest is a JSON file, so each
+ * name is copied there as plain text in a labelled `targets[].name` data
+ * field, after the same character and length caps the parser applies. It is
+ * never interpolated into the spec body, and every print site escapes it.
+ */
+const MANIFEST_NAME_BOUNDARY =
+  "proposed-manifest targets[].name — a labelled JSON data field after the field-safety caps; never part of a spec body, escaped wherever printed";
 
 /**
  * Where generated specs land. A sibling of the live tree, never inside it.
@@ -726,16 +736,31 @@ export async function writeProposedSpecs(
         `${label} names more than ${MAX_TARGETS_PER_SPEC} targets, or its targets are not a list`,
       );
     }
+    const manifestTargets: TargetArtifactRef[] = [];
     for (const target of candidate.targets) {
+      // A name that is not a minted box did not come through the parser, and
+      // is refused rather than trusted (fail closed, AIS-4).
+      const rawName: unknown = isUntrusted(target?.name)
+        ? unwrapUntrusted(
+            target.name as Untrusted<unknown>,
+            MANIFEST_NAME_BOUNDARY,
+          )
+        : undefined;
       if (
         !isSafeField(String(target?.table), MAX_TABLE_CHARS) ||
         !isSafeField(String(target?.sysId), MAX_SYS_ID_CHARS) ||
-        !isSafeField(String(target?.name), MAX_TARGET_NAME_CHARS)
+        typeof rawName !== "string" ||
+        !isSafeField(rawName, MAX_TARGET_NAME_CHARS)
       ) {
         throw new GenerateInputError(
-          `${label} has a target whose table, sys_id or name holds a control, bidi or zero-width character, or is longer than its cap (${MAX_TABLE_CHARS}/${MAX_SYS_ID_CHARS}/${MAX_TARGET_NAME_CHARS} chars)`,
+          `${label} has a target whose table, sys_id or name holds a control, bidi or zero-width character, is longer than its cap (${MAX_TABLE_CHARS}/${MAX_SYS_ID_CHARS}/${MAX_TARGET_NAME_CHARS} chars), or whose name is not branded untrusted text`,
         );
       }
+      manifestTargets.push({
+        table: target.table,
+        sysId: target.sysId,
+        name: rawName,
+      });
     }
 
     const absolutePath = path.resolve(proposedDir, candidate.filename);
@@ -786,11 +811,7 @@ export async function writeProposedSpecs(
       // QA-16: the declared link, copied through verbatim. The `name` field is
       // model-authored prose and stays in a labelled data position — a manifest
       // field a reader can see is data — rather than in the spec body.
-      targets: candidate.targets.map((target) => ({
-        table: target.table,
-        sysId: target.sysId,
-        name: target.name,
-      })),
+      targets: manifestTargets,
     };
     entries.push(entry);
     planned.push({ absolutePath, text, entry });

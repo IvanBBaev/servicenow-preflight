@@ -29,6 +29,7 @@ export type {
   ImpactConfidence,
   ImpactEdge,
   ImpactGraph,
+  InstanceArtifactRef,
   Lifecycle,
   PipelineContext,
   PipelineTopology,
@@ -49,6 +50,11 @@ export type {
   TestSpecRef,
   UnanalyzableArtifact,
 } from "./run.js";
+export {
+  escapeForTerminal,
+  hasUnsafeTextCharacter,
+  stripUnsafeTextCharacters,
+} from "./terminal.js";
 export {
   isUntrusted,
   mapUntrusted,

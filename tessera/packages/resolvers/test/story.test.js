@@ -33,6 +33,17 @@ import {
   isIncomplete,
   parseUpdateXmlName,
 } from "../build/index.js";
+import { isUntrusted, unwrapUntrusted } from "@tessera/types";
+
+/** A resolved name, after checking it arrived branded (AIS-4). */
+const nameOf = (ref) => {
+  assert.equal(isUntrusted(ref.name), true, "a resolved name must be branded");
+  return unwrapUntrusted(ref.name, "test: read a resolved artifact name");
+};
+
+/** An artifact list as plain wire-shaped rows, names checked and unwrapped. */
+const plainArtifacts = (artifacts) =>
+  artifacts.map((a) => ({ ...a, ref: { ...a.ref, name: nameOf(a.ref) } }));
 
 /** A 32-character lowercase-hex sys_id that stays readable in a diff. */
 const hex = (prefix) => prefix.padEnd(32, "0");
@@ -471,7 +482,7 @@ describe("the update-set members", () => {
   it("turns a member name into the record it changed", async () => {
     const { report } = await run();
 
-    assert.deepEqual(report.artifacts, [
+    assert.deepEqual(plainArtifacts(report.artifacts), [
       {
         ref: {
           table: "sys_script",
@@ -488,7 +499,7 @@ describe("the update-set members", () => {
       sys_update_xml: answered([member({ target_name: "" })]),
     });
 
-    assert.equal(report.artifacts[0].ref.name, `sys_script/${RULE_ID}`);
+    assert.equal(nameOf(report.artifacts[0].ref), `sys_script/${RULE_ID}`);
   });
 
   it("skips deletions and counts them, whatever their case", async () => {
@@ -803,7 +814,7 @@ describe("against a live fake instance", () => {
         report.artifacts.map((artifact) => [
           artifact.ref.table,
           artifact.ref.sysId,
-          artifact.ref.name,
+          nameOf(artifact.ref),
           artifact.resolvedBy,
         ]),
         [

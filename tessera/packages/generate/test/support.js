@@ -30,7 +30,7 @@
 //    exercised in microseconds and the timeout path is a fact rather than a
 //    flake.
 
-import { untrusted } from "@tessera/types";
+import { isUntrusted, untrusted, unwrapUntrusted } from "@tessera/types";
 
 export const RUN_ID = "run-2026-08-25-000042";
 
@@ -63,14 +63,39 @@ export function target(label, overrides = {}) {
   };
 }
 
+/**
+ * The graph-side `InstanceArtifactRef` (AIS-4): the same triple with its
+ * instance-authored `name` branded `Untrusted<string>`. Idempotent — a name
+ * that is already a minted box is kept, so the same identity stays the same
+ * box — and a non-string name (the "missing name" fixtures) is passed through
+ * untouched, so a test can still hand a unit the malformed shape it is about.
+ */
+export function branded(ref) {
+  if (typeof ref !== "object" || ref === null) return ref;
+  if (isUntrusted(ref.name) || typeof ref.name !== "string") return ref;
+  return { ...ref, name: untrusted(ref.name) };
+}
+
+/** Assertion-side projection of a branded ref back to the plain triple. */
+export function plain(ref) {
+  if (typeof ref !== "object" || ref === null) return ref;
+  if (!isUntrusted(ref.name)) return ref;
+  return { ...ref, name: unwrapUntrusted(ref.name, "test assertion") };
+}
+
 /** An `ImpactEdge`. `via`/`confidence` are never inspected by either unit. */
 export function edge(from, to) {
-  return { from, to, via: "where_used", confidence: "high" };
+  return {
+    from: branded(from),
+    to: branded(to),
+    via: "where_used",
+    confidence: "high",
+  };
 }
 
 /** A QA-9 entry: an artifact static analysis could not trace, but which counts. */
 export function unanalyzed(artifact) {
-  return { artifact, reason: "dynamic table name" };
+  return { artifact: branded(artifact), reason: "dynamic table name" };
 }
 
 /** A `PlannedSpec` for `graph.demanded`; only its `target` is read by either unit. */
@@ -85,10 +110,12 @@ export function demand(artifact, id = "demanded-1") {
 /**
  * An `ImpactGraph` whose `nodes` are the given targets, with the other three
  * lists empty unless a test says otherwise. Always complete: see the header.
+ * Node names are branded (AIS-4); `demanded[].target` stays the plain
+ * checklist wire shape, exactly as the real graph carries it.
  */
 export function graphWith(targets, extras = {}) {
   return {
-    nodes: targets,
+    nodes: targets.map(branded),
     edges: extras.edges ?? [],
     unanalyzable: extras.unanalyzable ?? [],
     demanded: extras.demanded ?? [],

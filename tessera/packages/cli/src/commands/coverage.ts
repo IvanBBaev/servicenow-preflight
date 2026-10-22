@@ -72,6 +72,7 @@ import {
   type SpecInventory,
 } from "@tessera/specs";
 import type {
+  InstanceArtifactRef,
   PipelineContext,
   TargetArtifactRef,
   TargetInput,
@@ -82,6 +83,7 @@ import type { CliContext } from "../context.js";
 import { EXIT_CODES, type ExitCode } from "../exitCodes.js";
 import { CONFIG_SECTIONS, COVERAGE_OPTIONS } from "../options.js";
 import { createCliImpactAnalyzer } from "../impactComposition.js";
+import { printedName, wireRef } from "../instanceNames.js";
 import { bindRole, TopologyError } from "../topology.js";
 
 /**
@@ -118,13 +120,13 @@ function pad(value: string, width: number): string {
 }
 
 /** `<table>/<sys_id>` — the label is what a human recognises, this is what they can open. */
-function address(ref: TargetArtifactRef): string {
+function address(ref: Pick<TargetArtifactRef, "table" | "sysId">): string {
   return `${ref.table}/${ref.sysId}`;
 }
 
 /** The three identity fields, and never a fourth: see the TM-1 note above. */
-function refJson(ref: TargetArtifactRef): Record<string, string> {
-  return { table: ref.table, sysId: ref.sysId, name: ref.name };
+function refJson(ref: InstanceArtifactRef): Record<string, string> {
+  return { ...wireRef(ref) };
 }
 
 /**
@@ -438,7 +440,7 @@ export async function coverageCommand(
     for (const entry of intent.entries) {
       const mark = entry.specs.length === 0 ? GAP_LABEL : SPEC_LABEL;
       context.stdout(
-        `  ${pad(mark, MARK_WIDTH)}  ${address(entry.artifact)}  ${entry.artifact.name}${entry.analyzable ? "" : UNANALYZABLE_MARK}`,
+        `  ${pad(mark, MARK_WIDTH)}  ${address(entry.artifact)}  ${printedName(entry.artifact)}${entry.analyzable ? "" : UNANALYZABLE_MARK}`,
       );
       // Indented under the artifact they declare, because the row above is the
       // subject: the question is "what does this artifact have", not "where do

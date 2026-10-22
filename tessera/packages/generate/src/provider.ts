@@ -37,7 +37,7 @@
 // id changes.
 
 import { TEST_KINDS, untrusted, unwrapUntrusted } from "@tessera/types";
-import type { TargetArtifactRef, TestKind, Untrusted } from "@tessera/types";
+import type { InstanceArtifactRef, TestKind, Untrusted } from "@tessera/types";
 
 import { assertEgressCleared } from "./egress.js";
 import { GenerateInputError, GenerationFaultError } from "./errors.js";
@@ -75,9 +75,10 @@ export interface GenerationRequest {
   /**
    * The artifacts the batch is expected to bind to. Structural identity, used
    * by the offline provider to produce a spec and by the quality bar to check
-   * that a model did not invent a target.
+   * that a model did not invent a target. Every `name` is branded (AIS-4): it
+   * is instance text, typed into a form by somebody this package never met.
    */
-  readonly targets: readonly TargetArtifactRef[];
+  readonly targets: readonly InstanceArtifactRef[];
 }
 
 /**
@@ -108,7 +109,12 @@ export interface GenerationCandidate {
   readonly id: string;
   readonly kind: TestKind;
   readonly filename: string;
-  readonly targets: readonly TargetArtifactRef[];
+  /**
+   * Model-authored, so every `name` comes back branded (AIS-4): a model that
+   * echoes an instance name echoes instance text, and one that invents a name
+   * is no more trustworthy for it.
+   */
+  readonly targets: readonly InstanceArtifactRef[];
   readonly source: Untrusted<string>;
 }
 
@@ -147,7 +153,10 @@ function shortId(sysId: string): string {
  * the one place where an un-labelled copy of it would look like something a
  * person wrote (TM-1). Nothing here needs it — the join is on identity (QA-16).
  */
-function templateSource(kind: TestKind, target: TargetArtifactRef): string {
+function templateSource(
+  kind: TestKind,
+  target: Pick<InstanceArtifactRef, "table" | "sysId">,
+): string {
   return [
     "// PROPOSED spec — generated, not armed.",
     "// Nothing runs this until a human moves its entry into .manifest.json.",
@@ -164,6 +173,15 @@ function templateSource(kind: TestKind, target: TargetArtifactRef): string {
     "",
   ].join("\n");
 }
+
+/**
+ * The template copies a target's name into its `targets[]` echo and nowhere
+ * else. The copy goes straight into a completion that is branded as a whole,
+ * and `parseCandidates` brands the name again on the way out — so the text is
+ * out of the box only for the length of one `JSON.stringify`.
+ */
+const TEMPLATE_ECHO_BOUNDARY =
+  "template targets[] echo, inside a completion branded as a whole";
 
 export interface TemplateProviderOptions {
   readonly config?: PinnedGenConfig;
@@ -208,7 +226,11 @@ export function createTemplateProvider(
         kind: request.kind,
         filename: `${tableSlug(target.table)}.${shortId(target.sysId)}${SUFFIX_BY_KIND[request.kind]}`,
         targets: [
-          { table: target.table, sysId: target.sysId, name: target.name },
+          {
+            table: target.table,
+            sysId: target.sysId,
+            name: unwrapUntrusted(target.name, TEMPLATE_ECHO_BOUNDARY),
+          },
         ],
         source: templateSource(request.kind, target),
       }));
@@ -704,7 +726,7 @@ export function parseCandidates(
       );
     }
 
-    const targets: TargetArtifactRef[] = [];
+    const targets: InstanceArtifactRef[] = [];
     for (const target of value.targets as readonly unknown[]) {
       if (
         !isRecord(target) ||
@@ -728,7 +750,7 @@ export function parseCandidates(
       targets.push({
         table: target.table,
         sysId: target.sysId,
-        name: target.name,
+        name: untrusted(target.name),
       });
     }
 

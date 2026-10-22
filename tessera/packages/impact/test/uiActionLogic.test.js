@@ -17,6 +17,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
+import { isUntrusted, untrusted, unwrapUntrusted } from "@tessera/types";
+
 import {
   SUBJECT_TABLES,
   UI_ACTION_TABLE,
@@ -24,6 +26,16 @@ import {
   createUiActionLookup,
   isIncomplete,
 } from "../build/index.js";
+
+/** Read a branded artifact name back out, for assertions and seeds only. */
+const nameOf = (ref) => unwrapUntrusted(ref.name, "test assertion");
+
+/** Project a branded ref to its plain wire shape (`TargetArtifactRef`). */
+const plain = (ref) => ({
+  table: ref.table,
+  sysId: ref.sysId,
+  name: nameOf(ref),
+});
 
 const SCOPE_SYS_ID = "5c0be000000000000000000000000000";
 const SCOPE_NAME = "x_acme_inventory";
@@ -36,37 +48,37 @@ function sysId(prefix) {
 const ACTION_A = {
   table: "sys_ui_action",
   sysId: sysId("a1a1"),
-  name: "Recalculate",
+  name: untrusted("Recalculate"),
 };
 const ACTION_B = {
   table: "sys_ui_action",
   sysId: sysId("b2b2"),
-  name: "Close out",
+  name: untrusted("Close out"),
 };
 const RULE_ON_INCIDENT = {
   table: "sys_script",
   sysId: sysId("e1e1"),
-  name: "Incident rule",
+  name: untrusted("Incident rule"),
 };
 const RULE_ON_PROBLEM = {
   table: "sys_script",
   sysId: sysId("e2e2"),
-  name: "Problem rule",
+  name: untrusted("Problem rule"),
 };
 const GLOBAL_RULE = {
   table: "sys_script",
   sysId: sysId("e3e3"),
-  name: "Global rule",
+  name: untrusted("Global rule"),
 };
 const INCLUDE = {
   table: "sys_script_include",
   sysId: sysId("ca1c"),
-  name: "AmountCalculator",
+  name: untrusted("AmountCalculator"),
 };
 const CLIENT = {
   table: "sys_script_client",
   sysId: sysId("c11e"),
-  name: "Submit recalc",
+  name: untrusted("Submit recalc"),
 };
 
 const WITH_ACTIONS = ["sys_script_include", "sys_ui_action"];
@@ -125,7 +137,7 @@ function readerFrom(canned) {
 function actionRow(ref, extra = {}) {
   return {
     sys_id: ref.sysId,
-    sys_name: ref.name,
+    sys_name: nameOf(ref),
     table: "incident",
     client: "false",
     action_name: "x_acme_recalc",
@@ -134,7 +146,7 @@ function actionRow(ref, extra = {}) {
 }
 
 function ruleRow(ref, collection) {
-  return { sys_id: ref.sysId, sys_name: ref.name, collection };
+  return { sys_id: ref.sysId, sys_name: nameOf(ref), collection };
 }
 
 function lookup(canned, subjects = [ACTION_A]) {
@@ -207,7 +219,7 @@ describe("createUiActionLookup", () => {
   });
 
   it("the subject's own ref is bound, not the row's label", async () => {
-    const renamed = { ...ACTION_A, name: "Label from the resolver" };
+    const renamed = { ...ACTION_A, name: untrusted("Label from the resolver") };
     const { result } = lookup(
       {
         sys_ui_action: answered([actionRow(ACTION_A)]),
@@ -527,10 +539,12 @@ describe("UI Action tracing in the analyzer", () => {
 
     assert.deepEqual(uiActions.calls[0].subjects, [ACTION_A]);
     assert.equal(uiActions.calls[0].scopeSysId, SCOPE_SYS_ID);
-    assert.deepEqual(search.calls[0].subjects, [
+    assert.deepEqual(search.calls[0].subjects.map(plain), [
       { table: "sys_ui_action", sysId: ACTION_A.sysId, name: "x_acme_recalc" },
       { table: "sys_ui_action", sysId: ACTION_A.sysId, name: ACTION_A.sysId },
     ]);
+    // The pseudo-subjects' search keys travel branded, like any other name.
+    assert.ok(search.calls[0].subjects.every((ref) => isUntrusted(ref.name)));
     assert.deepEqual(
       report.graph.edges.map((e) => [
         e.from.sysId,
@@ -573,9 +587,10 @@ describe("UI Action tracing in the analyzer", () => {
       uiActions,
       search,
     }).analyze([ACTION_A]);
-    assert.deepEqual(search.calls[0].subjects, [
+    assert.deepEqual(search.calls[0].subjects.map(plain), [
       { table: "sys_ui_action", sysId: ACTION_A.sysId, name: ACTION_A.sysId },
     ]);
+    assert.ok(isUntrusted(search.calls[0].subjects[0].name));
   });
 
   it("an action the lookup neither bound nor refused is refused by the analyzer", async () => {
@@ -677,7 +692,7 @@ describe("end to end over the live UI action lookup and the live where-used sear
       sys_script_client: answered([
         {
           sys_id: CLIENT.sysId,
-          sys_name: CLIENT.name,
+          sys_name: nameOf(CLIENT),
           script: "gsftSubmit(null, g_form.getFormElement(), 'x_acme_recalc');",
         },
       ]),

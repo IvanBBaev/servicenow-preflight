@@ -19,6 +19,7 @@ import type {
   PipelineContext,
   TargetInput,
 } from "@tessera/types";
+import { escapeForTerminal, unwrapUntrusted } from "@tessera/types";
 
 import { ResolutionInputError } from "./errors.js";
 import { artifactKey } from "./keys.js";
@@ -41,8 +42,18 @@ function names(value: string | undefined): boolean {
   return value !== undefined && value.trim() !== "";
 }
 
+/**
+ * The one place this file reads an instance-authored artifact name (TM-1,
+ * AIS-4): it goes into a resolution note a human reads in a terminal, so it is
+ * escaped on the way out and never reaches a prompt from here.
+ */
+const NOTE_BOUNDARY = "resolution note label (escaped for the terminal)";
+
 function label(artifact: AffectedArtifact): string {
-  return `${artifact.ref.table}/${artifact.ref.sysId} (${artifact.ref.name})`;
+  const name = escapeForTerminal(
+    unwrapUntrusted(artifact.ref.name, NOTE_BOUNDARY),
+  );
+  return `${artifact.ref.table}/${artifact.ref.sysId} (${name})`;
 }
 
 /**

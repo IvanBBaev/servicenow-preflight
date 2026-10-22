@@ -7,7 +7,9 @@ import { ResolutionInputError } from "./errors.js";
  * sys_id is only unique per table in principle and a collision would silently
  * merge two different artifacts into one row.
  */
-export function artifactKey(ref: TargetArtifactRef): string {
+export function artifactKey(
+  ref: Pick<TargetArtifactRef, "table" | "sysId">,
+): string {
   return `${ref.table}:${ref.sysId}`;
 }
 

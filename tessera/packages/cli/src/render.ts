@@ -9,6 +9,7 @@
 // CliOptions, so this module does not depend on the run command's parser and
 // the dependency runs one way: commands -> render.
 
+import { escapeForTerminal } from "@tessera/types";
 import type { ChecklistRow, Lifecycle } from "@tessera/types";
 
 import { runExitDisposition } from "./exitCodes.js";
@@ -41,7 +42,8 @@ function formatRow(row: ChecklistRow): string {
   ].join(", ");
   return [
     `  [${row.status.toUpperCase().padEnd(12)}] ${row.spec.id} (${row.kind})`,
-    `      target:   ${row.target.table}/${row.target.sysId} — ${row.target.name}`,
+    // The target name is instance-authored text (AIS-4): escaped for the log.
+    `      target:   ${row.target.table}/${row.target.sysId} — ${escapeForTerminal(row.target.name)}`,
     `      raw:      ${row.raw} (${flags})`,
     `      evidence: ${evidence}`,
   ].join("\n");

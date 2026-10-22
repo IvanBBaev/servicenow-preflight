@@ -25,10 +25,12 @@
 // that did not return the whole scope makes the affected actions UNANALYZABLE —
 // never an action with fewer edges.
 
-import type { TargetArtifactRef, UnanalyzableArtifact } from "@tessera/types";
+import { untrusted } from "@tessera/types";
+import type { InstanceArtifactRef, UnanalyzableArtifact } from "@tessera/types";
 import { describeReadTruncation, isTableName } from "@tessera/resolvers";
 import type { RecordReader } from "@tessera/resolvers";
 
+import { artifactName } from "./names.js";
 import {
   BUSINESS_RULE_TABLE,
   compareRows,
@@ -87,7 +89,7 @@ function compare(left: string, right: string): number {
 function compareActions(left: UiActionRow, right: UiActionRow): number {
   return (
     compare(left.table, right.table) ||
-    compare(left.action.name, right.action.name) ||
+    compare(artifactName(left.action), artifactName(right.action)) ||
     compare(left.action.sysId, right.action.sysId)
   );
 }
@@ -182,7 +184,7 @@ export function createUiActionLookup(reader: RecordReader): UiActionLookup {
     const unanalyzable: UnanalyzableArtifact[] = [];
 
     // Subjects addressed by sys_id; a duplicate is one subject.
-    const subjectsById = new Map<string, TargetArtifactRef>();
+    const subjectsById = new Map<string, InstanceArtifactRef>();
     for (const subject of request.subjects) {
       if (!subjectsById.has(subject.sysId)) {
         subjectsById.set(subject.sysId, subject);
@@ -194,7 +196,7 @@ export function createUiActionLookup(reader: RecordReader): UiActionLookup {
 
     /** Every listed subject, with one reason — the whole-read failure modes. */
     const refuse = (
-      subjects: Iterable<TargetArtifactRef>,
+      subjects: Iterable<InstanceArtifactRef>,
       reason: string,
     ): UiActionLookupResult => {
       for (const subject of subjects) {
@@ -314,7 +316,7 @@ export function createUiActionLookup(reader: RecordReader): UiActionLookup {
       return refuse(bound, detail);
     }
 
-    const rows: { ref: TargetArtifactRef; verdict: CollectionVerdict }[] = [];
+    const rows: { ref: InstanceArtifactRef; verdict: CollectionVerdict }[] = [];
     let opaque = 0;
     for (const row of ruleRead.records) {
       const sysId = text(row["sys_id"]);
@@ -331,7 +333,10 @@ export function createUiActionLookup(reader: RecordReader): UiActionLookup {
         ref: {
           table: BUSINESS_RULE_TABLE,
           sysId,
-          name: text(row["sys_name"]) ?? `${BUSINESS_RULE_TABLE}/${sysId}`,
+          // Branded as it leaves the record (TM-1, AIS-4).
+          name: untrusted(
+            text(row["sys_name"]) ?? `${BUSINESS_RULE_TABLE}/${sysId}`,
+          ),
         },
         verdict,
       });

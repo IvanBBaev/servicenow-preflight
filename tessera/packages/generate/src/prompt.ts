@@ -48,7 +48,13 @@
 import { createHash } from "node:crypto";
 
 import { TEST_KINDS, unwrapUntrusted, untrusted } from "@tessera/types";
-import type { ImpactGraph, TestKind, Untrusted } from "@tessera/types";
+import type {
+  ImpactGraph,
+  InstanceArtifactRef,
+  TargetArtifactRef,
+  TestKind,
+  Untrusted,
+} from "@tessera/types";
 
 import { GenerateInputError } from "./errors.js";
 
@@ -328,12 +334,23 @@ function assertKind(kind: TestKind): void {
  * branded rather than just the field: a caller holding the branded line cannot
  * pick the safe halves out of it, which is the point.
  */
-function describeRef(ref: {
-  table: string;
-  sysId: string;
-  name: string;
-}): string {
+function describeWireRef(ref: TargetArtifactRef): string {
   return `table=${ref.table} sys_id=${ref.sysId} name=${ref.name}`;
+}
+
+/**
+ * A graph node's name arrives branded (TM-1, AIS-4). It is opened here only to
+ * be spliced into a line that every caller below re-brands as a whole block
+ * body before it goes anywhere; the raw name never leaves this module unboxed.
+ */
+const BLOCK_BOUNDARY = "re-branded at once as a prompt data block body";
+
+function describeRef(ref: InstanceArtifactRef): string {
+  return describeWireRef({
+    table: ref.table,
+    sysId: ref.sysId,
+    name: unwrapUntrusted(ref.name, BLOCK_BOUNDARY),
+  });
 }
 
 /**
@@ -388,7 +405,7 @@ export function graphDataBlocks(
         graph.demanded
           .map(
             (planned) =>
-              `spec=${planned.spec.id} kind=${planned.kind} target[${describeRef(planned.target)}]`,
+              `spec=${planned.spec.id} kind=${planned.kind} target[${describeWireRef(planned.target)}]`,
           )
           .join("\n"),
       ),

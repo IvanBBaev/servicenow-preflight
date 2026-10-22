@@ -11,6 +11,7 @@
 // and no dependency on `@tessera/provisioner`. What the report says is advice
 // for a human with a deployment pipeline.
 
+import { escapeForTerminal } from "@tessera/types";
 import type { TargetArtifactRef } from "@tessera/types";
 
 import { ParityContractError } from "./errors.js";
@@ -46,7 +47,8 @@ function shortDigest(digest: string): string {
 }
 
 function label(artifact: TargetArtifactRef): string {
-  return `${artifact.table}/${artifact.sysId} (${artifact.name})`;
+  // The name is instance-authored text (AIS-4): escaped, since evidence is printed.
+  return `${artifact.table}/${artifact.sysId} (${escapeForTerminal(artifact.name)})`;
 }
 
 /**

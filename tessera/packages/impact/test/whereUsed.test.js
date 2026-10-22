@@ -21,6 +21,7 @@ import assert from "node:assert/strict";
 
 import { ResolutionFaultError, ResolutionInputError } from "@tessera/resolvers";
 import { scriptsApi, tableApi } from "@tessera/sn-client";
+import { isUntrusted, untrusted, unwrapUntrusted } from "@tessera/types";
 
 import {
   CONSUMER_TABLES,
@@ -29,6 +30,16 @@ import {
   isIncomplete,
 } from "../build/index.js";
 
+/** Read a branded artifact name back out, for assertions only. */
+const nameOf = (ref) => unwrapUntrusted(ref.name, "test assertion");
+
+/** Project a branded ref to its plain wire shape, for deep comparisons. */
+const plain = (ref) => ({
+  table: ref.table,
+  sysId: ref.sysId,
+  name: nameOf(ref),
+});
+
 const SCOPE_SYS_ID = "aaaa0000000000000000000000000001";
 const SCOPE_LABEL = "x_snc_demo";
 
@@ -36,7 +47,7 @@ const SCOPE_LABEL = "x_snc_demo";
 const SUBJECT = {
   table: "sys_script_include",
   sysId: "bbbb0000000000000000000000000002",
-  name: "AmountCalculator",
+  name: untrusted("AmountCalculator"),
 };
 
 const RULE_SYS_ID = "cccc0000000000000000000000000003";
@@ -247,15 +258,24 @@ describe("finding a consumer", () => {
     const result = await whereUsed(reader);
 
     assert.equal(result.references.length, 1);
-    assert.deepEqual(result.references[0], {
-      consumer: {
-        table: "sys_script",
-        sysId: RULE_SYS_ID,
-        name: "Total on insert",
+    // The consumer's name is instance-authored text, branded as it left the
+    // record (TM-1, AIS-4).
+    assert.ok(isUntrusted(result.references[0].consumer.name));
+    assert.deepEqual(
+      {
+        ...result.references[0],
+        consumer: plain(result.references[0].consumer),
       },
-      field: "script",
-      match: { name: "AmountCalculator", kind: "call", line: 2 },
-    });
+      {
+        consumer: {
+          table: "sys_script",
+          sysId: RULE_SYS_ID,
+          name: "Total on insert",
+        },
+        field: "script",
+        match: { name: "AmountCalculator", kind: "call", line: 2 },
+      },
+    );
     assert.deepEqual(result.unanalyzable, []);
     assert.equal(result.incomplete, false);
     assert.deepEqual(messages(result, "warning"), []);
@@ -302,8 +322,9 @@ describe("finding a consumer", () => {
     });
     const result = await whereUsed(reader);
 
+    assert.ok(isUntrusted(result.references[0].consumer.name));
     assert.equal(
-      result.references[0].consumer.name,
+      nameOf(result.references[0].consumer),
       `sys_script/${RULE_SYS_ID}`,
     );
   });
@@ -344,7 +365,7 @@ describe("finding a consumer", () => {
     const helper = {
       table: "sys_script_include",
       sysId: OTHER_RULE_SYS_ID,
-      name: "TaxHelper",
+      name: untrusted("TaxHelper"),
     };
     const reader = readerFrom({
       sys_script_include: answered([
@@ -402,7 +423,7 @@ describe("finding a consumer", () => {
     assert.deepEqual(
       result.references.map((r) => [
         r.consumer.table,
-        r.consumer.name,
+        nameOf(r.consumer),
         r.field,
         r.match.line,
       ]),

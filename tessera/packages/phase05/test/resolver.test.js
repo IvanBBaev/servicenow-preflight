@@ -17,11 +17,19 @@
 import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
 
+import { isUntrusted, unwrapUntrusted } from "@tessera/types";
+
 import { SCRIPT_INCLUDE_TABLE } from "../build/atf.js";
 import { SkeletonInfrastructureError } from "../build/errors.js";
 import { S5_TARGET_NAME } from "../build/fixtures.js";
 import { createS5Resolver } from "../build/resolver.js";
 import { context, harness } from "./support.js";
+
+/** The resolved name, after asserting it arrived branded (AIS-4). */
+const nameOf = (ref) => {
+  assert.ok(isUntrusted(ref.name), "the instance name must be branded");
+  return unwrapUntrusted(ref.name, "test assertion");
+};
 
 const opened = [];
 after(() => {
@@ -55,7 +63,7 @@ describe("createS5Resolver", () => {
       assert.equal(artifacts.length, 1);
       const [artifact] = artifacts;
       assert.equal(artifact.ref.table, SCRIPT_INCLUDE_TABLE);
-      assert.equal(artifact.ref.name, S5_TARGET_NAME);
+      assert.equal(nameOf(artifact.ref), S5_TARGET_NAME);
 
       // The sys_id must be the row's, not a fabricated or blank placeholder:
       // downstream projection writes against it, and a wrong one tests the
@@ -294,7 +302,7 @@ describe("createS5Resolver", () => {
       const [artifact] = await createS5Resolver({
         targetName: "OtherThing",
       }).resolve(context(), {});
-      assert.equal(artifact.ref.name, "OtherThing");
+      assert.equal(nameOf(artifact.ref), "OtherThing");
     } finally {
       h.restore();
     }

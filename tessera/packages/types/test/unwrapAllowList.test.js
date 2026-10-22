@@ -54,20 +54,47 @@ const EXEMPT = new Set(["types/src/untrusted.ts"]);
  * line here — that is the point.
  */
 const ALLOWED_UNWRAPS = [
+  // AIS-4: an instance artifact name leaves the CLI escaped for a terminal or
+  // as a plain JSON / TestSpec wire field — one private unwrap behind both.
+  "cli/src/instanceNames.ts NAME_BOUNDARY",
   // `tess run --live` (delegated decision 2026-09-23): a repo spec body is
   // unwrapped only as `verdict.cleared.source`, after the TM-3 gate passed it,
   // to become the ATF step script the store projects — the writer.ts pattern.
   "cli/src/liveSpecs.ts PROJECTION_BOUNDARY",
+  // AIS-4: an unanalyzable artifact's instance name, escaped into a verdict
+  // warning.
+  "core/src/aggregateVerdict.ts WARNING_BOUNDARY",
   // PA-10: the two-layer ATF server-script gate unwraps once to hand the text
   // to acorn (layer 1); the body is parsed, never evaluated, and only rule
   // names and constant details leave the gate.
   "generate/src/gate.ts ATF_GATE_BOUNDARY",
   "generate/src/gate.ts GATE_BOUNDARY",
+  // AIS-4: target selection unwraps a branded name only to refuse a blank one
+  // and re-brands it at once; a proposed TestSpec carries the plain wire shape.
+  "generate/src/generator.ts SELECTION_BOUNDARY",
+  "generate/src/generator.ts SPEC_TARGET_BOUNDARY",
+  // AIS-4: a branded node name is spliced into a line that is re-branded at
+  // once as a prompt data block body.
+  "generate/src/prompt.ts BLOCK_BOUNDARY",
   "generate/src/prompt.ts PROMPT_BOUNDARY",
   "generate/src/provider.ts PARSE_BOUNDARY",
+  // AIS-4: the offline template echoes a target name into a completion that
+  // is branded as a whole, and parseCandidates re-brands it.
+  "generate/src/provider.ts TEMPLATE_ECHO_BOUNDARY",
   "generate/src/quality.ts QUALITY_BOUNDARY",
+  // AIS-4: a model-authored target name, after the field-safety caps, copied
+  // into the proposed manifest's labelled targets[].name data field.
+  "generate/src/writer.ts MANIFEST_NAME_BOUNDARY",
   "generate/src/writer.ts WRITE_BOUNDARY",
+  // AIS-4: an instance artifact name is opened inside impact only as a search
+  // or ordering key, an escaped message fragment, or the demanded checklist
+  // row's plain wire target.
+  "impact/src/names.ts NAME_BOUNDARY",
+  "impact/src/names.ts WIRE_BOUNDARY",
   "impact/src/scan.ts SCAN_BOUNDARY",
+  // AIS-4: instance artifact names are branded where they are read; the
+  // resolver unwraps one only to print it, escaped, in a resolution note.
+  "resolvers/src/composite.ts NOTE_BOUNDARY",
 ];
 
 /** Every `.ts` file under `dir`, recursively. */

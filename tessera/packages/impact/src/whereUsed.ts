@@ -24,12 +24,13 @@
 // TM-1 lands here for real. This is the first place in the workspace that reads
 // free text off an instance, and every value taken out of a script column is
 // branded with `untrusted()` at the moment it leaves the record — before it is
-// measured, logged, or passed anywhere. Nothing in this file ever opens the
-// box, so there is no path from an instance-authored comment into a message, a
-// query, or a later generation prompt.
+// measured, logged, or passed anywhere. Nothing in this file ever opens a
+// script box, so there is no path from an instance-authored comment into a
+// message, a query, or a later generation prompt. Artifact names are branded
+// too (AIS-4) and opened only through `names.ts`, as search and ordering keys.
 
 import { untrusted } from "@tessera/types";
-import type { TargetArtifactRef, UnanalyzableArtifact } from "@tessera/types";
+import type { InstanceArtifactRef, UnanalyzableArtifact } from "@tessera/types";
 import {
   ResolutionFaultError,
   ResolutionInputError,
@@ -37,6 +38,8 @@ import {
 } from "@tessera/resolvers";
 import type { RecordReader, SnRecord } from "@tessera/resolvers";
 import { scriptsApi } from "@tessera/sn-client";
+
+import { artifactName } from "./names.js";
 
 import { scanScript } from "./scan.js";
 import type {
@@ -148,7 +151,7 @@ function compare(a: string, b: string): number {
 function compareReferences(a: UsageReference, b: UsageReference): number {
   return (
     compare(a.consumer.table, b.consumer.table) ||
-    compare(a.consumer.name, b.consumer.name) ||
+    compare(artifactName(a.consumer), artifactName(b.consumer)) ||
     compare(a.consumer.sysId, b.consumer.sysId) ||
     compare(a.field, b.field) ||
     a.match.line - b.match.line
@@ -207,11 +210,11 @@ function normalizeTables(
  * and an artifact whose display name did not survive the read is a subject this
  * search cannot look for by name at all.
  */
-function searchedNames(subjects: readonly TargetArtifactRef[]): string[] {
+function searchedNames(subjects: readonly InstanceArtifactRef[]): string[] {
   const seen = new Set<string>();
   const names: string[] = [];
   for (const subject of subjects) {
-    const name = text(subject.name);
+    const name = text(artifactName(subject));
     if (name === undefined || seen.has(name)) continue;
     seen.add(name);
     names.push(name);
@@ -224,14 +227,14 @@ function consumerRef(
   table: string,
   sysId: string,
   row: SnRecord,
-): TargetArtifactRef {
+): InstanceArtifactRef {
   return {
     table,
     sysId,
     // Never an empty label: a reference printed with a blank name tells a
     // reviewer nothing, and `table/sys_id` is at least something they can paste
-    // into a URL.
-    name: text(row["sys_name"]) ?? `${table}/${sysId}`,
+    // into a URL. Branded as it leaves the record (TM-1, AIS-4).
+    name: untrusted(text(row["sys_name"]) ?? `${table}/${sysId}`),
   };
 }
 
@@ -271,7 +274,7 @@ export function createWhereUsedSearch(
     const subjectNamesBySysId = new Map<string, Set<string>>();
     for (const subject of request.subjects) {
       const sysId = text(subject.sysId);
-      const name = text(subject.name);
+      const name = text(artifactName(subject));
       if (sysId === undefined || name === undefined) continue;
       const own = subjectNamesBySysId.get(sysId);
       if (own === undefined) subjectNamesBySysId.set(sysId, new Set([name]));
@@ -289,7 +292,7 @@ export function createWhereUsedSearch(
     // would inflate the QA-15 denominator with copies of a single fact.
     const opaque = new Set<string>();
     function markUnanalyzable(
-      artifact: TargetArtifactRef,
+      artifact: InstanceArtifactRef,
       reason: string,
     ): void {
       if (opaque.has(artifact.sysId)) return;

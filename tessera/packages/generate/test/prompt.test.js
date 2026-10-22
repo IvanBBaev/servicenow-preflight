@@ -106,13 +106,19 @@ function parseBlocks(data) {
   return { blocks, outside: outside.join("\n") };
 }
 
+/**
+ * A graph-side `InstanceArtifactRef` (AIS-4): the instance-authored `name`
+ * arrives branded, exactly as `@tessera/impact` hands it over.
+ */
+function branded(table, sysId, name) {
+  return { table, sysId, name: untrusted(name) };
+}
+
 /** A minimal but complete ImpactGraph — every list populated. */
 function fixtureGraph() {
-  const ref = (id) => ({
-    table: `x_tsa_${id}`,
-    sysId: `${id}`.repeat(8),
-    name: `artifact ${id}`,
-  });
+  const fields = (id) => [`x_tsa_${id}`, `${id}`.repeat(8), `artifact ${id}`];
+  const ref = (id) => branded(...fields(id));
+  const [table, sysId, name] = fields("a");
   return {
     nodes: [ref("a"), ref("b")],
     edges: [
@@ -123,7 +129,8 @@ function fixtureGraph() {
       {
         spec: { id: "spec-1", path: "tests/spec-1.unit.ts" },
         kind: "unit",
-        target: ref("a"),
+        // A demanded row's target stays the plain checklist wire shape.
+        target: { table, sysId, name },
       },
     ],
   };
@@ -138,18 +145,18 @@ function fixtureGraph() {
  */
 function markedGraph() {
   return {
-    nodes: [{ table: "MK_TABLE", sysId: "MK_SYSID", name: "MK_NAME" }],
+    nodes: [branded("MK_TABLE", "MK_SYSID", "MK_NAME")],
     edges: [
       {
-        from: { table: "MK_FROM_T", sysId: "MK_FROM_S", name: "MK_FROM_N" },
-        to: { table: "MK_TO_T", sysId: "MK_TO_S", name: "MK_TO_N" },
+        from: branded("MK_FROM_T", "MK_FROM_S", "MK_FROM_N"),
+        to: branded("MK_TO_T", "MK_TO_S", "MK_TO_N"),
         via: "MK_VIA",
         confidence: "MK_CONF",
       },
     ],
     unanalyzable: [
       {
-        artifact: { table: "MK_UA_T", sysId: "MK_UA_S", name: "MK_UA_N" },
+        artifact: branded("MK_UA_T", "MK_UA_S", "MK_UA_N"),
         reason: "MK_REASON",
       },
     ],
@@ -601,7 +608,7 @@ describe("renderPrompt — purity, determinism and provenance", () => {
     // wholly different instance state reuse a pinned run's identity.
     const before = renderPrompt(buildGenerationPrompt("unit", fixtureGraph()));
     const changed = fixtureGraph();
-    changed.nodes[0].name = "artifact a (renamed)";
+    changed.nodes[0].name = untrusted("artifact a (renamed)");
     const after = renderPrompt(buildGenerationPrompt("unit", changed));
     assert.notEqual(before.data, after.data);
     assert.notEqual(before.promptHash, after.promptHash);
@@ -615,7 +622,7 @@ describe("renderPrompt — purity, determinism and provenance", () => {
     const graph = fixtureGraph();
     const other = fixtureGraph();
     other.unanalyzable.push({
-      artifact: { table: "x_tsa_d", sysId: "d".repeat(8), name: "artifact d" },
+      artifact: branded("x_tsa_d", "d".repeat(8), "artifact d"),
       reason: "no source",
     });
     const one = renderPrompt(buildGenerationPrompt("unit", graph));

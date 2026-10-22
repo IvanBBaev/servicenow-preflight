@@ -11,6 +11,7 @@ import path from "node:path";
 
 import { createTargetGuard } from "@tessera/guard";
 import { createIntentLedger } from "@tessera/ledger";
+import { untrusted } from "@tessera/types";
 
 import {
   RunConcurrencyRefusedError,
@@ -2213,8 +2214,9 @@ describe("runPipeline — an incomplete impact analysis (unanalyzable artifacts)
   const IMPACT_WARNING = /impact analysis is incomplete/;
   const RESOLUTION_WARNING = /artifact resolution is incomplete/;
   const INVENTORY_WARNING = /spec inventory is incomplete/;
+  // An impact analyzer brands the instance name at ingestion (AIS-4).
   const UNTRACED = {
-    artifact: ARTIFACT,
+    artifact: { ...ARTIFACT, name: untrusted(ARTIFACT.name) },
     reason: "usage could not be fully traced: sys_script search refused (403)",
   };
 

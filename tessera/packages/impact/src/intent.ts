@@ -27,7 +27,11 @@
 // a dependency of this package and the two sides keep speaking `@tessera/types`
 // only. The function is pure — no clock, no disk, no instance.
 
-import type { TargetArtifactRef, TestSpec, TestSpecRef } from "@tessera/types";
+import type {
+  InstanceArtifactRef,
+  TestSpec,
+  TestSpecRef,
+} from "@tessera/types";
 import { artifactKey } from "@tessera/resolvers";
 
 import { isIncomplete } from "./types.js";
@@ -83,7 +87,7 @@ export function computeIntent(
   // both sources feed one map: an artifact in `nodes` AND in `unanalyzable`
   // is one impacted artifact, and an artifact in `unanalyzable` alone is still
   // one (QA-15).
-  const impacted = new Map<string, TargetArtifactRef>();
+  const impacted = new Map<string, InstanceArtifactRef>();
   const untraced = new Set<string>();
   for (const node of report.graph.nodes) {
     const key = artifactKey(node);

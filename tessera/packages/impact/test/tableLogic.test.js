@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 
 import { ResolutionInputError } from "@tessera/resolvers";
 import { tableApi } from "@tessera/sn-client";
+import { isUntrusted, untrusted, unwrapUntrusted } from "@tessera/types";
 
 import {
   BUSINESS_RULE_TABLE,
@@ -26,6 +27,16 @@ import {
   createImpactAnalyzer,
   isIncomplete,
 } from "../build/index.js";
+
+/** Read a branded artifact name back out, for assertions and seeds only. */
+const nameOf = (ref) => unwrapUntrusted(ref.name, "test assertion");
+
+/** Project a branded ref to its plain wire shape (`TargetArtifactRef`). */
+const plain = (ref) => ({
+  table: ref.table,
+  sysId: ref.sysId,
+  name: nameOf(ref),
+});
 
 const SCOPE_SYS_ID = "5c0be000000000000000000000000000";
 const SCOPE_NAME = "x_acme_inventory";
@@ -38,18 +49,22 @@ function sysId(prefix) {
 const RULE_A = {
   table: "sys_script",
   sysId: sysId("a1fa"),
-  name: "Alpha rule",
+  name: untrusted("Alpha rule"),
 };
-const RULE_B = { table: "sys_script", sysId: sysId("beba"), name: "Beta rule" };
+const RULE_B = {
+  table: "sys_script",
+  sysId: sysId("beba"),
+  name: untrusted("Beta rule"),
+};
 const INCLUDE = {
   table: "sys_script_include",
   sysId: sysId("ca1c"),
-  name: "AmountCalculator",
+  name: untrusted("AmountCalculator"),
 };
 const POLICY = {
   table: "sys_ui_policy",
   sysId: sysId("d01c"),
-  name: "Some policy",
+  name: untrusted("Some policy"),
 };
 
 function ctx() {
@@ -96,7 +111,7 @@ function readerFrom(canned) {
 }
 
 function row(ref, collection, extra = {}) {
-  return { sys_id: ref.sysId, sys_name: ref.name, collection, ...extra };
+  return { sys_id: ref.sysId, sys_name: nameOf(ref), collection, ...extra };
 }
 
 function lookup(read, subjects = [RULE_A]) {
@@ -132,8 +147,16 @@ describe("createBusinessRuleLookup", () => {
   });
 
   it("binds a subject to its collection and finds sibling rules on the same table", async () => {
-    const SIBLING = { table: "sys_script", sysId: sysId("5ib"), name: "Sib" };
-    const ELSEWHERE = { table: "sys_script", sysId: sysId("e15e"), name: "X" };
+    const SIBLING = {
+      table: "sys_script",
+      sysId: sysId("5ib"),
+      name: untrusted("Sib"),
+    };
+    const ELSEWHERE = {
+      table: "sys_script",
+      sysId: sysId("e15e"),
+      name: untrusted("X"),
+    };
     const { result } = lookup(
       answered([
         row(RULE_A, "incident"),
@@ -144,6 +167,8 @@ describe("createBusinessRuleLookup", () => {
     const out = await result;
     assert.deepEqual(out.rules, [{ rule: RULE_A, collection: "incident" }]);
     assert.deepEqual(out.siblings, [{ rule: SIBLING, collection: "incident" }]);
+    // A sibling's ref is minted from the row, and branded as it leaves it.
+    assert.ok(isUntrusted(out.siblings[0].rule.name));
     assert.deepEqual(out.unanalyzable, []);
     assert.deepEqual(levels(out.notes, "warning"), []);
   });
@@ -159,7 +184,11 @@ describe("createBusinessRuleLookup", () => {
   });
 
   it("a global rule in scope is a sibling of every subject's table", async () => {
-    const GLOBAL = { table: "sys_script", sysId: sysId("610b"), name: "G" };
+    const GLOBAL = {
+      table: "sys_script",
+      sysId: sysId("610b"),
+      name: untrusted("G"),
+    };
     const { result } = lookup(
       answered([
         row(RULE_A, "incident"),
@@ -185,7 +214,7 @@ describe("createBusinessRuleLookup", () => {
     ["global", "global", /every table/],
   ]) {
     it(`a subject whose collection is ${label} is unanalyzable, never bound`, async () => {
-      const record = { sys_id: RULE_A.sysId, sys_name: RULE_A.name };
+      const record = { sys_id: RULE_A.sysId, sys_name: nameOf(RULE_A) };
       if (collection !== undefined) record.collection = collection;
       const { result } = lookup(answered([record]));
       const out = await result;
@@ -249,7 +278,11 @@ describe("createBusinessRuleLookup", () => {
   });
 
   it("a non-subject row with an unreadable collection refuses every subject", async () => {
-    const OTHER = { table: "sys_script", sysId: sysId("0the"), name: "O" };
+    const OTHER = {
+      table: "sys_script",
+      sysId: sysId("0the"),
+      name: untrusted("O"),
+    };
     const { result } = lookup(
       answered([row(RULE_A, "incident"), { sys_id: OTHER.sysId }]),
     );
@@ -436,9 +469,10 @@ describe("Business Rule tracing in the analyzer", () => {
     assert.equal(businessRules.calls[0].scopeSysId, SCOPE_SYS_ID);
     // The rule is searched for by its trigger table, keyed on its own sys_id.
     assert.equal(search.calls.length, 1);
-    assert.deepEqual(search.calls[0].subjects, [
+    assert.deepEqual(search.calls[0].subjects.map(plain), [
       { table: "sys_script", sysId: RULE_A.sysId, name: "incident" },
     ]);
+    assert.ok(isUntrusted(search.calls[0].subjects[0].name));
 
     assert.deepEqual(report.graph.unanalyzable, []);
     assert.equal(isIncomplete(report), false);
@@ -449,7 +483,7 @@ describe("Business Rule tracing in the analyzer", () => {
           path: `tests/${SCOPE_NAME}/sys_script/Alpha_rule/Alpha_rule.unit.ts`,
         },
         kind: "unit",
-        target: RULE_A,
+        target: plain(RULE_A),
       },
     ]);
   });
@@ -458,7 +492,7 @@ describe("Business Rule tracing in the analyzer", () => {
     const CONSUMER = {
       table: "sys_script_include",
       sysId: sysId("c0de"),
-      name: "Writer",
+      name: untrusted("Writer"),
     };
     const businessRules = lookupStub({
       rules: [
@@ -507,7 +541,11 @@ describe("Business Rule tracing in the analyzer", () => {
   });
 
   it("a non-subject sibling becomes a node, an edge and a demanded spec", async () => {
-    const SIB = { table: "sys_script", sysId: sysId("5ib"), name: "Sib" };
+    const SIB = {
+      table: "sys_script",
+      sysId: sysId("5ib"),
+      name: untrusted("Sib"),
+    };
     const businessRules = lookupStub({
       rules: [{ rule: RULE_A, collection: "incident" }],
       siblings: [{ rule: SIB, collection: "incident" }],
@@ -529,12 +567,12 @@ describe("Business Rule tracing in the analyzer", () => {
     const SI_NAMED = {
       table: "sys_script_include",
       sysId: sysId("5a3e"),
-      name: "incident",
+      name: untrusted("incident"),
     };
     const CONSUMER = {
       table: "sys_ui_action",
       sysId: sysId("c0de"),
-      name: "Btn",
+      name: untrusted("Btn"),
     };
     const businessRules = lookupStub({
       rules: [{ rule: RULE_A, collection: "incident" }],
@@ -618,7 +656,7 @@ describe("Business Rule tracing in the analyzer", () => {
     const NAMELESS_RULE = {
       table: "sys_script",
       sysId: sysId("d0d0"),
-      name: `sys_script/${sysId("d0d0")}`,
+      name: untrusted(`sys_script/${sysId("d0d0")}`),
     };
     const businessRules = lookupStub({
       rules: [{ rule: NAMELESS_RULE, collection: "incident" }],
@@ -669,7 +707,7 @@ describe("end to end over the live lookup and the live where-used search", () =>
   const WRITER = {
     table: "sys_script_include",
     sysId: sysId("c0de"),
-    name: "IncidentWriter",
+    name: untrusted("IncidentWriter"),
   };
 
   function liveReader(extra = {}) {
@@ -678,7 +716,7 @@ describe("end to end over the live lookup and the live where-used search", () =>
       sys_script: answered([
         {
           sys_id: RULE_A.sysId,
-          sys_name: RULE_A.name,
+          sys_name: nameOf(RULE_A),
           collection: "incident",
           script:
             "(function executeRule(current, previous) {\n  current.state = 2;\n})(current, previous);",
@@ -688,7 +726,7 @@ describe("end to end over the live lookup and the live where-used search", () =>
       sys_script_include: answered([
         {
           sys_id: WRITER.sysId,
-          sys_name: WRITER.name,
+          sys_name: nameOf(WRITER),
           script: "var gr = new GlideRecord('incident');\ngr.insert();",
         },
       ]),

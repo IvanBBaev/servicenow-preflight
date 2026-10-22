@@ -6,6 +6,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
 
+import { untrusted } from "@tessera/types";
+
 import {
   aggregateVerdict,
   canonicalJson,
@@ -13,8 +15,30 @@ import {
 } from "../build/index.js";
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
-const load = (name) =>
-  JSON.parse(readFileSync(join(fixturesDir, `${name}.json`), "utf8"));
+/**
+ * Loads a golden fixture, branding what ingestion brands in production
+ * (AIS-4): JSON cannot carry an `Untrusted` box, so an unanalyzable
+ * artifact's instance name is branded here.
+ */
+const load = (name) => {
+  const fixture = JSON.parse(
+    readFileSync(join(fixturesDir, `${name}.json`), "utf8"),
+  );
+  const { impact } = fixture.input;
+  return {
+    ...fixture,
+    input: {
+      ...fixture.input,
+      impact: {
+        ...impact,
+        unanalyzable: impact.unanalyzable.map((entry) => ({
+          ...entry,
+          artifact: { ...entry.artifact, name: untrusted(entry.artifact.name) },
+        })),
+      },
+    },
+  };
+};
 
 const split = (input) => {
   const { results, impact, coverage, ...policy } = input;

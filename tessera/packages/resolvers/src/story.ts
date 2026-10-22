@@ -38,9 +38,10 @@ import type {
   AffectedArtifact,
   PipelineContext,
   ResolverSource,
-  TargetArtifactRef,
+  InstanceArtifactRef,
   TargetInput,
 } from "@tessera/types";
+import { untrusted } from "@tessera/types";
 
 import { ResolutionFaultError, ResolutionInputError } from "./errors.js";
 import {
@@ -490,10 +491,14 @@ export function createStoryResolver(
       // `target_name` is the display name the update set recorded; without
       // one, a table/sys_id label still points a human at the right row.
       const label = text(row, "target_name");
-      const ref: TargetArtifactRef = {
+      const ref: InstanceArtifactRef = {
         table: parsed.table,
         sysId: parsed.sysId,
-        name: label === "" ? `${parsed.table}/${parsed.sysId}` : label,
+        // Branded as it leaves the record (TM-1, AIS-4): `target_name` is
+        // free text the instance recorded.
+        name: untrusted(
+          label === "" ? `${parsed.table}/${parsed.sysId}` : label,
+        ),
       };
       const key = artifactKey(ref);
       // The same record lands in several update sets whenever a story is

@@ -32,6 +32,17 @@ import {
   createSnRecordReader,
   isIncomplete,
 } from "../build/index.js";
+import { isUntrusted, unwrapUntrusted } from "@tessera/types";
+
+/** A resolved name, after checking it arrived branded (AIS-4). */
+const nameOf = (ref) => {
+  assert.equal(isUntrusted(ref.name), true, "a resolved name must be branded");
+  return unwrapUntrusted(ref.name, "test: read a resolved artifact name");
+};
+
+/** An artifact list as plain wire-shaped rows, names checked and unwrapped. */
+const plainArtifacts = (artifacts) =>
+  artifacts.map((a) => ({ ...a, ref: { ...a.ref, name: nameOf(a.ref) } }));
 
 // ── decision half ───────────────────────────────────────────────────────────
 
@@ -182,7 +193,7 @@ describe("naming the scope", () => {
     });
     assert.equal(reader.requests.length, 2);
 
-    assert.deepEqual(report.artifacts, [
+    assert.deepEqual(plainArtifacts(report.artifacts), [
       {
         ref: {
           table: "sys_script_include",
@@ -418,7 +429,7 @@ describe("enumerating the artifacts", () => {
     const report = await resolveScope(reader);
 
     assert.equal(
-      report.artifacts[0].ref.name,
+      nameOf(report.artifacts[0].ref),
       `sys_script_include/${INCLUDE_ROWS[0].sys_id}`,
     );
   });
@@ -433,7 +444,7 @@ describe("enumerating the artifacts", () => {
     const report = await resolveScope(reader);
 
     assert.equal(report.artifacts.length, 1);
-    assert.equal(report.artifacts[0].ref.name, "AmountCalculator");
+    assert.equal(nameOf(report.artifacts[0].ref), "AmountCalculator");
   });
 
   it("will not answer an empty table list with a clean empty list", async () => {
@@ -657,7 +668,7 @@ describe("against a live fake instance", () => {
       });
 
       assert.deepEqual(
-        report.artifacts.map((a) => a.ref.name),
+        report.artifacts.map((a) => nameOf(a.ref)),
         ["AmountCalculator", "ZoneLookup"],
       );
       // Real minted ids, and the same ones the instance is holding.
@@ -668,7 +679,7 @@ describe("against a live fake instance", () => {
       );
       for (const artifact of report.artifacts) {
         assert.match(artifact.ref.sysId, /^[0-9a-f]{32}$/);
-        assert.equal(artifact.ref.sysId, stored.get(artifact.ref.name));
+        assert.equal(artifact.ref.sysId, stored.get(nameOf(artifact.ref)));
         assert.equal(artifact.ref.table, "sys_script_include");
         assert.equal(artifact.resolvedBy, "scope");
       }
@@ -740,7 +751,7 @@ describe("against a live fake instance", () => {
       });
 
       assert.deepEqual(
-        report.artifacts.map((a) => a.ref.name),
+        report.artifacts.map((a) => nameOf(a.ref)),
         ["AmountCalculator"],
       );
       const warning = messages(report, "warning").join("\n");

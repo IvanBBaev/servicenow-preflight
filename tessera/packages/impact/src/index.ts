@@ -27,6 +27,9 @@
  * merely intended. Script bodies enter branded and reach exactly one
  * `unwrapUntrusted` call — inside the scanner, whose whole job is to regex a
  * hostile string and return numbers and enum values, never the string.
+ * Artifact names are branded too (AIS-4) and are opened only in the internal
+ * `names.ts`, as search and ordering keys, escaped message fragments, or the
+ * plain wire target of a demanded checklist row.
  */
 
 export { SUBJECT_TABLES, createImpactAnalyzer } from "./analyze.js";

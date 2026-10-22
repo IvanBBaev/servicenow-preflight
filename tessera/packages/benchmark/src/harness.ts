@@ -38,6 +38,7 @@ import type {
   TestKind,
   TestSpec,
 } from "@tessera/types";
+import { untrusted } from "@tessera/types";
 
 import type {
   BenchmarkCatalog,
@@ -594,7 +595,14 @@ class Driver {
     await this.reset(`${runId}:generate`);
     await this.apply(target, behaviour, { kind: "correct" });
     const ctx = this.context(`${runId}:generate`);
-    const affected: AffectedArtifact[] = [{ ref: target, resolvedBy: "scope" }];
+    // The catalog target's name is the identity of a record on the instance,
+    // so it enters the graph branded like any resolver's (AIS-4).
+    const affected: AffectedArtifact[] = [
+      {
+        ref: { ...target, name: untrusted(target.name) },
+        resolvedBy: "scope",
+      },
+    ];
     const graph = await this.options.pipeline.impact.analyze(ctx, affected);
     return this.options.pipeline.generator.generate(
       ctx,

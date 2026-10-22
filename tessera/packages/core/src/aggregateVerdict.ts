@@ -18,7 +18,11 @@ import type {
   SpecOutcome,
   VerdictStatus,
 } from "@tessera/types";
-import { RAW_OUTCOMES } from "@tessera/types";
+import {
+  RAW_OUTCOMES,
+  escapeForTerminal,
+  unwrapUntrusted,
+} from "@tessera/types";
 import { canonicalJson, sha256Hex, specKey } from "./canonical.js";
 
 export interface VerdictInput {
@@ -71,6 +75,13 @@ function compareRows(a: ChecklistRow, b: ChecklistRow): number {
   if (a.spec.path !== b.spec.path) return a.spec.path < b.spec.path ? -1 : 1;
   return 0;
 }
+
+/**
+ * TM-1 (AIS-4): an unanalyzable artifact's name is instance text. It is opened
+ * here only to become part of a verdict warning, which a human reads in a
+ * terminal, so it is escaped on the way in.
+ */
+const WARNING_BOUNDARY = "verdict warning (escaped for the terminal)";
 
 function describeSpec(ref: PlannedSpec["spec"]): string {
   return `${ref.id} (${ref.path})`;
@@ -238,7 +249,7 @@ export function aggregateVerdict(input: VerdictInput): PreflightVerdict {
   });
   for (const entry of unanalyzable) {
     warnings.push(
-      `unanalyzable impact: ${entry.artifact.table}/${entry.artifact.sysId} (${entry.artifact.name}): ${entry.reason}`,
+      `unanalyzable impact: ${entry.artifact.table}/${entry.artifact.sysId} (${escapeForTerminal(unwrapUntrusted(entry.artifact.name, WARNING_BOUNDARY))}): ${entry.reason}`,
     );
   }
 

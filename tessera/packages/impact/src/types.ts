@@ -27,7 +27,7 @@
 import type {
   ImpactConfidence,
   PipelineContext,
-  TargetArtifactRef,
+  InstanceArtifactRef,
   TestSpecRef,
   UnanalyzableArtifact,
 } from "@tessera/types";
@@ -156,7 +156,7 @@ export interface ImpactNote {
 /** One consumer script that mentions one of the searched names. */
 export interface UsageReference {
   /** The row holding the script — the `to` end of an edge. */
-  readonly consumer: TargetArtifactRef;
+  readonly consumer: InstanceArtifactRef;
   /** Which script column matched; a UI Policy has two, and they differ. */
   readonly field: string;
   readonly match: ScanMatch;
@@ -174,7 +174,7 @@ export interface WhereUsedRequest {
    * and the SYS_ID is what keeps a Script Include's own definition out of its
    * own result set — every `Foo` script include contains the word `Foo`.
    */
-  readonly subjects: readonly TargetArtifactRef[];
+  readonly subjects: readonly InstanceArtifactRef[];
 }
 
 export interface WhereUsedResult {
@@ -279,7 +279,7 @@ export interface ImpactAnalyzerOptions {
 
 /** One `sys_script` row and the table whose writes trigger it. */
 export interface BusinessRuleRow {
-  readonly rule: TargetArtifactRef;
+  readonly rule: InstanceArtifactRef;
   readonly collection: string;
 }
 
@@ -288,7 +288,7 @@ export interface BusinessRuleLookupRequest {
   readonly scopeSysId: string;
   readonly scopeLabel: string;
   /** The `sys_script` subjects whose trigger tables are wanted. */
-  readonly subjects: readonly TargetArtifactRef[];
+  readonly subjects: readonly InstanceArtifactRef[];
 }
 
 /**
@@ -312,7 +312,7 @@ export interface BusinessRuleLookup {
  * `action_name` scripts invoke it by (absent when the row has none).
  */
 export interface UiActionRow {
-  readonly action: TargetArtifactRef;
+  readonly action: InstanceArtifactRef;
   readonly table: string;
   readonly actionName?: string;
 }
@@ -322,7 +322,7 @@ export interface UiActionLookupRequest {
   readonly scopeSysId: string;
   readonly scopeLabel: string;
   /** The `sys_ui_action` subjects to bind. */
-  readonly subjects: readonly TargetArtifactRef[];
+  readonly subjects: readonly InstanceArtifactRef[];
 }
 
 /**
@@ -344,7 +344,7 @@ export interface UiActionLookup {
 
 /** One Script Include a standalone script's body calls, and where. */
 export interface ScriptIncludeCall {
-  readonly include: TargetArtifactRef;
+  readonly include: InstanceArtifactRef;
   /** The script column the call was found in. */
   readonly field: string;
   readonly match: ScanMatch;
@@ -352,7 +352,7 @@ export interface ScriptIncludeCall {
 
 /** One bound standalone script and every in-scope Script Include it calls. */
 export interface StandaloneScriptRow {
-  readonly script: TargetArtifactRef;
+  readonly script: InstanceArtifactRef;
   readonly calls: readonly ScriptIncludeCall[];
   /**
    * `sys_transform_script` only: the `target_table` of the script's transform
@@ -371,7 +371,7 @@ export interface StandaloneScriptLookupRequest {
    * The `sysauto_script` / `sys_ws_operation` / `sys_transform_script`
    * subjects to bind.
    */
-  readonly subjects: readonly TargetArtifactRef[];
+  readonly subjects: readonly InstanceArtifactRef[];
 }
 
 /**
@@ -464,7 +464,7 @@ export function isIncomplete(report: ImpactReport): boolean {
  * is the only join key that stays true as specs get wider.
  */
 export interface IntentEntry {
-  readonly artifact: TargetArtifactRef;
+  readonly artifact: InstanceArtifactRef;
   /** Empty means a GAP: nothing in the repo claims to test this artifact. */
   readonly specs: readonly TestSpecRef[];
   /**
@@ -505,7 +505,9 @@ export interface IntentReport {
 }
 
 /** Impacted artifacts no repo spec targets — what generation would have to fill. */
-export function intentGaps(report: IntentReport): readonly TargetArtifactRef[] {
+export function intentGaps(
+  report: IntentReport,
+): readonly InstanceArtifactRef[] {
   return report.entries
     .filter((entry) => entry.specs.length === 0)
     .map((entry) => entry.artifact);

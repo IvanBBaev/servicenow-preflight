@@ -40,6 +40,7 @@ import type { PipelineContext, TargetInput } from "@tessera/types";
 import type { CliContext } from "../context.js";
 import { EXIT_CODES, type ExitCode } from "../exitCodes.js";
 import { CONFIG_SECTIONS, RESOLVE_OPTIONS } from "../options.js";
+import { printedName, wireRef } from "../instanceNames.js";
 import { bindRole, TopologyError } from "../topology.js";
 
 /**
@@ -219,10 +220,10 @@ export async function resolveCommand(
         {
           source: { profile: binding.profile, host: binding.ref.host },
           input,
+          // The wire shape: a branded name would serialise as `{"value":...}`
+          // (AIS-4), so it leaves through the CLI's one named boundary.
           artifacts: artifacts.map((artifact) => ({
-            table: artifact.ref.table,
-            sysId: artifact.ref.sysId,
-            name: artifact.ref.name,
+            ...wireRef(artifact.ref),
             resolvedBy: artifact.resolvedBy,
           })),
           notes: report.notes,
@@ -251,7 +252,7 @@ export async function resolveCommand(
     context.stdout(`artifacts (${artifacts.length}):`);
     for (const artifact of artifacts) {
       context.stdout(
-        `  ${pad(artifact.resolvedBy, width)}  ${artifact.ref.table}/${artifact.ref.sysId}  ${artifact.ref.name}`,
+        `  ${pad(artifact.resolvedBy, width)}  ${artifact.ref.table}/${artifact.ref.sysId}  ${printedName(artifact.ref)}`,
       );
     }
   }

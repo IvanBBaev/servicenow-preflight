@@ -7,9 +7,26 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { untrusted } from "@tessera/types";
+
 import { aggregateVerdict, canonicalJson } from "../build/index.js";
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+
+/**
+ * JSON cannot carry an `Untrusted` box, so the loader brands what ingestion
+ * brands in production (AIS-4): an unanalyzable artifact's instance name.
+ */
+const branded = (input) => ({
+  ...input,
+  impact: {
+    ...input.impact,
+    unanalyzable: input.impact.unanalyzable.map((entry) => ({
+      ...entry,
+      artifact: { ...entry.artifact, name: untrusted(entry.artifact.name) },
+    })),
+  },
+});
 const fixtureFiles = readdirSync(fixturesDir)
   .filter((f) => f.endsWith(".json"))
   .sort();
@@ -37,9 +54,12 @@ describe("aggregateVerdict golden fixtures", () => {
   });
 
   for (const file of fixtureFiles) {
-    const { name, input, expected } = JSON.parse(
-      readFileSync(join(fixturesDir, file), "utf8"),
-    );
+    const {
+      name,
+      input: raw,
+      expected,
+    } = JSON.parse(readFileSync(join(fixturesDir, file), "utf8"));
+    const input = branded(raw);
 
     it(`${name}: reproduces the golden verdict byte-for-byte`, () => {
       const actual = aggregateVerdict(input);

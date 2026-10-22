@@ -23,10 +23,12 @@
 // rule that is not in the scope, or a read that did not return the whole scope
 // makes the affected rules UNANALYZABLE — never a rule with fewer edges.
 
-import type { TargetArtifactRef, UnanalyzableArtifact } from "@tessera/types";
+import { untrusted } from "@tessera/types";
+import type { InstanceArtifactRef, UnanalyzableArtifact } from "@tessera/types";
 import { describeReadTruncation, isTableName } from "@tessera/resolvers";
 import type { RecordReader } from "@tessera/resolvers";
 
+import { artifactName } from "./names.js";
 import type {
   BusinessRuleLookup,
   BusinessRuleLookupRequest,
@@ -82,7 +84,7 @@ export function compareRows(
 ): number {
   return (
     compare(left.collection, right.collection) ||
-    compare(left.rule.name, right.rule.name) ||
+    compare(artifactName(left.rule), artifactName(right.rule)) ||
     compare(left.rule.sysId, right.rule.sysId)
   );
 }
@@ -140,7 +142,7 @@ export function createBusinessRuleLookup(
     const unanalyzable: UnanalyzableArtifact[] = [];
 
     // Subjects addressed by sys_id; a duplicate is one subject.
-    const subjectsById = new Map<string, TargetArtifactRef>();
+    const subjectsById = new Map<string, InstanceArtifactRef>();
     for (const subject of request.subjects) {
       if (!subjectsById.has(subject.sysId)) {
         subjectsById.set(subject.sysId, subject);
@@ -201,7 +203,7 @@ export function createBusinessRuleLookup(
     }
 
     // First pass: every addressable row, with its collection verdict.
-    const rows: { ref: TargetArtifactRef; verdict: CollectionVerdict }[] = [];
+    const rows: { ref: InstanceArtifactRef; verdict: CollectionVerdict }[] = [];
     let anonymous = 0;
     for (const row of read.records) {
       const sysId = text(row["sys_id"]);
@@ -215,7 +217,10 @@ export function createBusinessRuleLookup(
           sysId,
           // Same label rule as the where-used search's `consumerRef`, so one
           // rule reached both ways is printed the same way.
-          name: text(row["sys_name"]) ?? `${BUSINESS_RULE_TABLE}/${sysId}`,
+          // Branded as it leaves the record (TM-1, AIS-4).
+          name: untrusted(
+            text(row["sys_name"]) ?? `${BUSINESS_RULE_TABLE}/${sysId}`,
+          ),
         },
         verdict: readCollection(row["collection"]),
       });

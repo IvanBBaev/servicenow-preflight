@@ -37,10 +37,11 @@ import type {
   ImpactEdge,
   ImpactGraph,
   PipelineContext,
+  InstanceArtifactRef,
   PlannedSpec,
-  TargetArtifactRef,
   UnanalyzableArtifact,
 } from "@tessera/types";
+import { escapeForTerminal, untrusted } from "@tessera/types";
 import {
   ResolutionInputError,
   artifactKey,
@@ -74,6 +75,7 @@ import {
   TRANSFORM_SCRIPT_TABLE,
   createStandaloneScriptLookup,
 } from "./standaloneScriptLogic.js";
+import { artifactName, nameForMessage, wireTarget } from "./names.js";
 import { createWhereUsedSearch } from "./whereUsed.js";
 
 /**
@@ -244,8 +246,8 @@ function compare(left: string, right: string): number {
  * and report that nothing as "this Script Include is unused", which is the
  * strongest possible claim built on the weakest possible evidence.
  */
-function usableName(ref: TargetArtifactRef): string | undefined {
-  const name = typeof ref.name === "string" ? ref.name.trim() : "";
+function usableName(ref: InstanceArtifactRef): string | undefined {
+  const name = artifactName(ref).trim();
   if (name === "" || name === `${ref.table}/${ref.sysId}`) return undefined;
   return name;
 }
@@ -267,12 +269,12 @@ function pathSegment(value: string): string {
 }
 
 function compareRefs(
-  left: TargetArtifactRef,
-  right: TargetArtifactRef,
+  left: InstanceArtifactRef,
+  right: InstanceArtifactRef,
 ): number {
   return (
     compare(left.table, right.table) ||
-    compare(left.name, right.name) ||
+    compare(artifactName(left), artifactName(right)) ||
     compare(left.sysId, right.sysId)
   );
 }
@@ -294,10 +296,10 @@ function compareRefs(
  */
 function compareEdges(left: ImpactEdge, right: ImpactEdge): number {
   return (
-    compare(left.from.name, right.from.name) ||
+    compare(artifactName(left.from), artifactName(right.from)) ||
     compare(left.from.sysId, right.from.sysId) ||
     compare(left.to.table, right.to.table) ||
-    compare(left.to.name, right.to.name) ||
+    compare(artifactName(left.to), artifactName(right.to)) ||
     compare(left.to.sysId, right.to.sysId)
   );
 }
@@ -434,15 +436,15 @@ export function createImpactAnalyzer(
     // There is no third bucket and nothing is dropped, because a resolved
     // artifact that simply vanished between stages is invisible to the reader
     // of the verdict — the failure mode this whole partition exists to prevent.
-    const inputs: TargetArtifactRef[] = [];
-    const subjects: TargetArtifactRef[] = [];
-    const subjectsByName = new Map<string, TargetArtifactRef[]>();
+    const inputs: InstanceArtifactRef[] = [];
+    const subjects: InstanceArtifactRef[] = [];
+    const subjectsByName = new Map<string, InstanceArtifactRef[]>();
     const skipped: UnanalyzableArtifact[] = [];
-    const ruleSubjects: TargetArtifactRef[] = [];
+    const ruleSubjects: InstanceArtifactRef[] = [];
     const ruleSeen = new Set<string>();
-    const actionSubjects: TargetArtifactRef[] = [];
+    const actionSubjects: InstanceArtifactRef[] = [];
     const actionSeen = new Set<string>();
-    const scriptSubjects: TargetArtifactRef[] = [];
+    const scriptSubjects: InstanceArtifactRef[] = [];
     const scriptSeen = new Set<string>();
 
     for (const artifact of artifacts) {
@@ -517,7 +519,7 @@ export function createImpactAnalyzer(
       notes.push(
         note(
           "warning",
-          `${sameName.length} ${SUBJECT_TABLE} rows in scope \`${scopeLabel}\` are named \`${name}\`; every reference to that name is attributed to all of them, because picking one would drop an edge silently`,
+          `${sameName.length} ${SUBJECT_TABLE} rows in scope \`${scopeLabel}\` are named \`${escapeForTerminal(name)}\`; every reference to that name is attributed to all of them, because picking one would drop an edge silently`,
         ),
       );
     }
@@ -548,7 +550,7 @@ export function createImpactAnalyzer(
     // refused here. An injected lookup that forgot one must not turn that rule
     // into a traced rule with no edges (fail closed, QA-9).
     const boundRules: BusinessRuleRow[] = [];
-    const rulesByCollection = new Map<string, TargetArtifactRef[]>();
+    const rulesByCollection = new Map<string, InstanceArtifactRef[]>();
     {
       const bound = new Map<string, BusinessRuleRow>();
       for (const row of rules.rules) {
@@ -585,11 +587,13 @@ export function createImpactAnalyzer(
     // The pseudo-subjects handed to the where-used search: one per bound rule,
     // named after its table. Keyed on the rule's own sys_id, so the search's
     // own-name exclusion drops the rule's mentions of its own table.
-    const rulePseudoSubjects: TargetArtifactRef[] = boundRules.map((entry) => ({
-      table: BUSINESS_RULE_TABLE,
-      sysId: entry.rule.sysId,
-      name: entry.collection,
-    }));
+    const rulePseudoSubjects: InstanceArtifactRef[] = boundRules.map(
+      (entry) => ({
+        table: BUSINESS_RULE_TABLE,
+        sysId: entry.rule.sysId,
+        name: untrusted(entry.collection),
+      }),
+    );
 
     // UI Actions next, with the same defensive binding: an action subject the
     // lookup neither bound nor refused is refused here (fail closed, QA-9).
@@ -611,8 +615,8 @@ export function createImpactAnalyzer(
     }
 
     const boundActions: UiActionRow[] = [];
-    const actionsByName = new Map<string, TargetArtifactRef[]>();
-    const actionPseudoSubjects: TargetArtifactRef[] = [];
+    const actionsByName = new Map<string, InstanceArtifactRef[]>();
+    const actionPseudoSubjects: InstanceArtifactRef[] = [];
     {
       const bound = new Map<string, UiActionRow>();
       for (const row of actions.actions) {
@@ -623,11 +627,11 @@ export function createImpactAnalyzer(
       const refused = new Set(
         actions.unanalyzable.map((entry) => entry.artifact.sysId),
       );
-      const addName = (name: string, subject: TargetArtifactRef): void => {
+      const addName = (name: string, subject: InstanceArtifactRef): void => {
         actionPseudoSubjects.push({
           table: UI_ACTION_TABLE,
           sysId: subject.sysId,
-          name,
+          name: untrusted(name),
         });
         const same = actionsByName.get(name);
         if (same === undefined) actionsByName.set(name, [subject]);
@@ -679,8 +683,8 @@ export function createImpactAnalyzer(
     }
 
     const boundScripts: StandaloneScriptRow[] = [];
-    const scriptsBySysId = new Map<string, TargetArtifactRef>();
-    const scriptPseudoSubjects: TargetArtifactRef[] = [];
+    const scriptsBySysId = new Map<string, InstanceArtifactRef>();
+    const scriptPseudoSubjects: InstanceArtifactRef[] = [];
     {
       const bound = new Map<string, StandaloneScriptRow>();
       for (const row of scripts.scripts) {
@@ -738,7 +742,7 @@ export function createImpactAnalyzer(
         scriptPseudoSubjects.push({
           table: subject.table,
           sysId: subject.sysId,
-          name: subject.sysId,
+          name: untrusted(subject.sysId),
         });
       }
     }
@@ -798,8 +802,8 @@ export function createImpactAnalyzer(
     const unknownNames = new Set<string>();
 
     const addEdge = (
-      subject: TargetArtifactRef,
-      consumer: TargetArtifactRef,
+      subject: InstanceArtifactRef,
+      consumer: InstanceArtifactRef,
       via: string,
       confidence: ImpactConfidence,
     ): void => {
@@ -904,7 +908,7 @@ export function createImpactAnalyzer(
     // Rules that share a table run in the same transaction on the same
     // record: each is an edge from the subject rule to the other rule. Both
     // subject rules and non-subject siblings count; a rule never edges itself.
-    const rulesOnTable = new Map<string, TargetArtifactRef[]>();
+    const rulesOnTable = new Map<string, InstanceArtifactRef[]>();
     for (const entry of [...boundRules, ...rules.siblings]) {
       const list = rulesOnTable.get(entry.collection);
       if (list === undefined) rulesOnTable.set(entry.collection, [entry.rule]);
@@ -978,7 +982,7 @@ export function createImpactAnalyzer(
       notes.push(
         note(
           "warning",
-          `the where-used search returned reference(s) to name(s) that were never searched for (${[...unknownNames].sort(compare).join(", ")}); they could not be attributed to a subject and are missing from the graph`,
+          `the where-used search returned reference(s) to name(s) that were never searched for (${[...unknownNames].sort(compare).map(escapeForTerminal).join(", ")}); they could not be attributed to a subject and are missing from the graph`,
         ),
       );
     }
@@ -993,8 +997,8 @@ export function createImpactAnalyzer(
     // dropped them would raise every coverage figure by exactly the artifacts
     // the floor was written to catch, and the run would look better the less it
     // managed to analyse.
-    const nodesByKey = new Map<string, TargetArtifactRef>();
-    const addNode = (ref: TargetArtifactRef): void => {
+    const nodesByKey = new Map<string, InstanceArtifactRef>();
+    const addNode = (ref: InstanceArtifactRef): void => {
       const key = artifactKey(ref);
       if (!nodesByKey.has(key)) nodesByKey.set(key, ref);
     };
@@ -1047,25 +1051,25 @@ export function createImpactAnalyzer(
       for (const subject of subjects) {
         traced.push({
           artifact: subject,
-          reason: `usage of \`${subject.name}\` could not be fully traced inside scope \`${scopeLabel}\`, so an absent edge is not evidence that nothing uses it: ${evidence}`,
+          reason: `usage of \`${nameForMessage(subject)}\` could not be fully traced inside scope \`${scopeLabel}\`, so an absent edge is not evidence that nothing uses it: ${evidence}`,
         });
       }
       for (const entry of boundRules) {
         traced.push({
           artifact: entry.rule,
-          reason: `the scripts reaching business rule \`${entry.rule.name}\` through table \`${entry.collection}\` could not be fully traced inside scope \`${scopeLabel}\`, so an absent edge is not evidence that nothing triggers it: ${evidence}`,
+          reason: `the scripts reaching business rule \`${nameForMessage(entry.rule)}\` through table \`${entry.collection}\` could not be fully traced inside scope \`${scopeLabel}\`, so an absent edge is not evidence that nothing triggers it: ${evidence}`,
         });
       }
       for (const entry of boundActions) {
         traced.push({
           artifact: entry.action,
-          reason: `the scripts invoking UI action \`${entry.action.name}\` could not be fully traced inside scope \`${scopeLabel}\`, so an absent edge is not evidence that nothing invokes it: ${evidence}`,
+          reason: `the scripts invoking UI action \`${nameForMessage(entry.action)}\` could not be fully traced inside scope \`${scopeLabel}\`, so an absent edge is not evidence that nothing invokes it: ${evidence}`,
         });
       }
       for (const entry of boundScripts) {
         traced.push({
           artifact: entry.script,
-          reason: `the scripts reaching ${entry.script.table} script \`${entry.script.name}\` by sys_id could not be fully traced inside scope \`${scopeLabel}\`, so an absent edge is not evidence that nothing reaches it: ${evidence}`,
+          reason: `the scripts reaching ${entry.script.table} script \`${nameForMessage(entry.script)}\` by sys_id could not be fully traced inside scope \`${scopeLabel}\`, so an absent edge is not evidence that nothing reaches it: ${evidence}`,
         });
       }
     }
@@ -1127,7 +1131,7 @@ export function createImpactAnalyzer(
           path: `tests/${pathSegment(scopeLabel)}/${ref.table}/${segment}/${segment}.unit.ts`,
         },
         kind: "unit",
-        target: ref,
+        target: wireTarget(ref),
       });
     }
     demanded.sort((left, right) => compare(left.spec.path, right.spec.path));

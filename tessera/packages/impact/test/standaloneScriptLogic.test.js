@@ -17,6 +17,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
+import { isUntrusted, untrusted, unwrapUntrusted } from "@tessera/types";
+
 import {
   CONSUMER_TABLES,
   REST_OPERATION_TABLE,
@@ -31,6 +33,16 @@ import {
   isIncomplete,
 } from "../build/index.js";
 
+/** Read a branded artifact name back out, for assertions and seeds only. */
+const nameOf = (ref) => unwrapUntrusted(ref.name, "test assertion");
+
+/** Project a branded ref to its plain wire shape (`TargetArtifactRef`). */
+const plain = (ref) => ({
+  table: ref.table,
+  sysId: ref.sysId,
+  name: nameOf(ref),
+});
+
 const SCOPE_SYS_ID = "5c0be000000000000000000000000000";
 const SCOPE_NAME = "x_acme_inventory";
 const SCOPE_ROW = { sys_id: SCOPE_SYS_ID, scope: SCOPE_NAME, name: "Acme" };
@@ -42,32 +54,32 @@ function sysId(prefix) {
 const JOB = {
   table: "sysauto_script",
   sysId: sysId("10b1"),
-  name: "Nightly recalc",
+  name: untrusted("Nightly recalc"),
 };
 const OPERATION = {
   table: "sys_ws_operation",
   sysId: sysId("0e1a"),
-  name: "GET amounts",
+  name: untrusted("GET amounts"),
 };
 const TRANSFORM = {
   table: "sys_transform_script",
   sysId: sysId("7a75"),
-  name: "onBefore amounts",
+  name: untrusted("onBefore amounts"),
 };
 const INCLUDE = {
   table: "sys_script_include",
   sysId: sysId("ca1c"),
-  name: "AmountCalculator",
+  name: untrusted("AmountCalculator"),
 };
 const OTHER_INCLUDE = {
   table: "sys_script_include",
   sysId: sysId("0c0c"),
-  name: "TaxHelper",
+  name: untrusted("TaxHelper"),
 };
 const RULE = {
   table: "sys_script",
   sysId: sysId("e1e1"),
-  name: "Incident rule",
+  name: untrusted("Incident rule"),
 };
 
 const WITH_JOBS = ["sys_script_include", "sysauto_script"];
@@ -124,11 +136,16 @@ function readerFrom(canned) {
 }
 
 function includeRow(ref, extra = {}) {
-  return { sys_id: ref.sysId, sys_name: ref.name, name: ref.name, ...extra };
+  return {
+    sys_id: ref.sysId,
+    sys_name: nameOf(ref),
+    name: nameOf(ref),
+    ...extra,
+  };
 }
 
 function jobRow(ref, script, extra = {}) {
-  return { sys_id: ref.sysId, sys_name: ref.name, script, ...extra };
+  return { sys_id: ref.sysId, sys_name: nameOf(ref), script, ...extra };
 }
 
 /** The transform map the canned transform script belongs to. */
@@ -210,7 +227,7 @@ describe("standalone script tables", () => {
     for (const table of STANDALONE_SCRIPT_TABLES) {
       const consumer = CONSUMER_TABLES.find((entry) => entry.table === table);
       assert.ok(consumer, table);
-      const subject = { table, sysId: sysId("5ab"), name: "s" };
+      const subject = { table, sysId: sysId("5ab"), name: untrusted("s") };
       const { reader, result } = lookup(
         {
           [table]: answered([
@@ -309,7 +326,7 @@ describe("createStandaloneScriptLookup", () => {
         sys_ws_operation: answered([
           {
             sys_id: OPERATION.sysId,
-            sys_name: OPERATION.name,
+            sys_name: nameOf(OPERATION),
             operation_script: "new AmountCalculator().get();",
           },
         ]),
@@ -360,7 +377,7 @@ describe("createStandaloneScriptLookup", () => {
 
   it("an unreadable script column is refused, never an empty script", async () => {
     const { result } = lookup({
-      sysauto_script: answered([{ sys_id: JOB.sysId, sys_name: JOB.name }]),
+      sysauto_script: answered([{ sys_id: JOB.sysId, sys_name: nameOf(JOB) }]),
       sys_script_include: INCLUDES,
     });
     const out = await result;
@@ -574,7 +591,7 @@ function call(include, kind, line = 1) {
   return {
     include,
     field: "script",
-    match: { name: include.name, kind, line },
+    match: { name: nameOf(include), kind, line },
   };
 }
 
@@ -626,7 +643,7 @@ describe("standalone script tracing in the analyzer", () => {
     const caller = {
       table: "sys_script_include",
       sysId: sysId("ca11e5"),
-      name: "JobStarter",
+      name: untrusted("JobStarter"),
     };
     const search = searchStub({
       references: [
@@ -644,9 +661,11 @@ describe("standalone script tracing in the analyzer", () => {
     assert.equal(standaloneScripts.calls.length, 1);
     assert.deepEqual(standaloneScripts.calls[0].subjects, [JOB]);
     assert.equal(standaloneScripts.calls[0].scopeSysId, SCOPE_SYS_ID);
-    assert.deepEqual(search.calls[0].subjects, [
+    assert.deepEqual(search.calls[0].subjects.map(plain), [
       { table: "sysauto_script", sysId: JOB.sysId, name: JOB.sysId },
     ]);
+    // The sys_id pseudo-subject's search key travels branded too.
+    assert.ok(isUntrusted(search.calls[0].subjects[0].name));
     assert.deepEqual(edgeRows(report), [
       [INCLUDE.sysId, JOB.sysId, "where_used", "high"],
       [JOB.sysId, caller.sysId, "where_used", "low"],
@@ -901,17 +920,17 @@ describe("a transform script's target table", () => {
   const TARGET_RULE = {
     table: "sys_script",
     sysId: sysId("7a6e7"),
-    name: "Amount before insert",
+    name: untrusted("Amount before insert"),
   };
   const OTHER_RULE = {
     table: "sys_script",
     sysId: sysId("07e7"),
-    name: "Incident rule",
+    name: untrusted("Incident rule"),
   };
   const GLOBAL_RULE = {
     table: "sys_script",
     sysId: sysId("610b"),
-    name: "Everywhere rule",
+    name: untrusted("Everywhere rule"),
   };
 
   // `script` too: the analyzer's where-used search reads the same table and
@@ -919,7 +938,7 @@ describe("a transform script's target table", () => {
   function ruleRow(ref, collection, extra = {}) {
     return {
       sys_id: ref.sysId,
-      sys_name: ref.name,
+      sys_name: nameOf(ref),
       collection,
       script: "",
       ...extra,

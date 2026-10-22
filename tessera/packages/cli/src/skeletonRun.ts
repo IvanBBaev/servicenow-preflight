@@ -39,6 +39,7 @@ import {
 } from "@tessera/phase05";
 import type { Lifecycle, RunId } from "@tessera/types";
 
+import { wireRef } from "./instanceNames.js";
 import { composeSkeletonPipeline } from "./registries.js";
 
 export interface SkeletonRunOptions {
@@ -211,7 +212,7 @@ export async function runSkeleton(
       },
       lifecycle,
       input: {},
-      specs: [createS5Spec(target)],
+      specs: [createS5Spec(wireRef(target))],
       // The change AND its test are hardcoded by the Phase-0.5 adapters, so
       // neither optional stage runs. The registered `none` adapters make that
       // visible in the composition; these two flags make it true at run time.

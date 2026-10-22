@@ -318,6 +318,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and value charset; scope is resolved once per run.
 - The Table API client detects response security-trimming via `X-Total-Count`
   and treats it as a signal rather than an empty-but-clean result.
+- **Tessera brands instance names at ingestion** (AIS-4) — every artifact
+  name a resolver or an impact lookup reads off the instance, and every
+  model-authored `targets[].name` the provider parses, is now an
+  `Untrusted<string>` (`InstanceArtifactRef`). Each use unwraps it behind a
+  named, allow-listed boundary; every terminal print site escapes it with
+  `escapeForTerminal` (now exported from `@tessera/types`), and the JSON
+  outputs (`tess resolve/impact/coverage --json`, TestSpecs, the proposed
+  manifest) carry the plain wire string. The proposed-manifest writer refuses
+  a target whose name is not branded.
 
 ## [0.5.0] - 2026-07-04
 

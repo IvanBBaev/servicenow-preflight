@@ -40,7 +40,13 @@
 // counts and the names of the policy's own sections; the withheld identities
 // travel as a structured property, never in `message` (`./errors.ts`).
 
-import type { ImpactGraph, TargetArtifactRef, TestKind } from "@tessera/types";
+import type {
+  ImpactGraph,
+  InstanceArtifactRef,
+  TargetArtifactRef,
+  TestKind,
+} from "@tessera/types";
+import { isUntrusted, mapUntrusted, untrusted } from "@tessera/types";
 
 import { GenerateInputError } from "./errors.js";
 import { buildGenerationPrompt, renderPrompt } from "./prompt.js";
@@ -376,7 +382,9 @@ export function clearForEgress(
   const seen = new Set<string>();
   const redaction = new Redaction(compiled.sentFields);
 
-  const ref = (target: TargetArtifactRef): TargetArtifactRef => {
+  const identity = (
+    target: Pick<TargetArtifactRef, "table" | "sysId">,
+  ): { table: string; sysId: string } => {
     const table = typeof target.table === "string" ? target.table : "";
     const sysId = typeof target.sysId === "string" ? target.sysId : "";
     const key = `${normalizeTable(table)}\u0000${sysId.toLowerCase()}`;
@@ -401,15 +409,28 @@ export function clearForEgress(
         );
       }
     }
-    return {
-      table,
-      sysId,
-      name: redaction.field(
-        "name",
-        typeof target.name === "string" ? target.name : "",
-      ),
-    };
+    return { table, sysId };
   };
+
+  const redactName = (raw: unknown): string =>
+    redaction.field("name", typeof raw === "string" ? raw : "");
+
+  // A graph node's name arrives branded (TM-1, AIS-4) and leaves branded: the
+  // redaction runs inside `mapUntrusted`, so this stage never holds the raw
+  // name outside the box. A name that was never branded is treated as absent
+  // rather than trusted.
+  const ref = (target: InstanceArtifactRef): InstanceArtifactRef => ({
+    ...identity(target),
+    name: isUntrusted(target.name)
+      ? mapUntrusted(target.name, redactName)
+      : untrusted(redactName(undefined)),
+  });
+
+  // A demanded row's target is the plain checklist wire shape.
+  const wireRef = (target: TargetArtifactRef): TargetArtifactRef => ({
+    ...identity(target),
+    name: redactName(target.name),
+  });
 
   const cleared: ImpactGraph = {
     nodes: graph.nodes.map(ref),
@@ -429,7 +450,7 @@ export function clearForEgress(
         ...planned.spec,
         id: redaction.field("plan", planned.spec.id),
       },
-      target: ref(planned.target),
+      target: wireRef(planned.target),
     })),
   };
 

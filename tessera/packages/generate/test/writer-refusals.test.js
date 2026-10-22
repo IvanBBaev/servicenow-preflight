@@ -76,7 +76,8 @@ const PROVENANCE = {
 const TARGET = {
   table: "incident",
   sysId: "0123456789abcdef0123456789abcdef",
-  name: "Incident business rule",
+  // AIS-4: the parser hands the writer a branded name; a bare string is refused.
+  name: untrusted("Incident business rule"),
 };
 
 function proposed(overrides = {}) {
@@ -158,9 +159,21 @@ describe("a target field is bounded before it reaches the manifest (W7b L3)", ()
     it(`refuses ${label}, writing nothing`, async () => {
       const { testsRoot } = await sandbox();
       const error = await refusal(
-        write(testsRoot, [proposed({ targets: [{ ...TARGET, ...override }] })]),
+        write(testsRoot, [
+          proposed({
+            targets: [
+              {
+                ...TARGET,
+                ...override,
+                ...("name" in override
+                  ? { name: untrusted(override.name) }
+                  : {}),
+              },
+            ],
+          }),
+        ]),
         "GenerateInputError",
-        /has a target whose table, sys_id or name holds a control, bidi or zero-width character, or is longer than its cap/,
+        /has a target whose table, sys_id or name holds a control, bidi or zero-width character, is longer than its cap/,
       );
       // The refused value is model output; the message does not repeat it.
       for (const value of Object.values(override)) {
@@ -176,11 +189,30 @@ describe("a target field is bounded before it reaches the manifest (W7b L3)", ()
     const { testsRoot } = await sandbox();
     await refusal(
       write(testsRoot, [
-        proposed({ targets: [{ ...TARGET, name: "\u0007" }] }),
+        proposed({ targets: [{ ...TARGET, name: untrusted("\u0007") }] }),
       ]),
       "GenerateInputError",
       /\(\d+\/\d+\/\d+ chars\)/,
     );
+  });
+
+  it("refuses a target whose name is not branded untrusted text (AIS-4), writing nothing", async () => {
+    // Fail closed: a name that did not come through the parser is not trusted
+    // as plain text. A bare string and a hand-rolled `{ value }` look-alike are
+    // both refused — the door checks provenance, not shape.
+    const { testsRoot } = await sandbox();
+    for (const name of [
+      "Incident business rule",
+      { value: "Incident business rule" },
+      undefined,
+    ]) {
+      await refusal(
+        write(testsRoot, [proposed({ targets: [{ ...TARGET, name }] })]),
+        "GenerateInputError",
+        /or whose name is not branded untrusted text/,
+      );
+    }
+    assert.deepEqual(await tree(testsRoot), []);
   });
 
   it("refuses targets that are not a list at all", async () => {

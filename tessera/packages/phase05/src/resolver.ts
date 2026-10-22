@@ -14,6 +14,7 @@ import type {
   PipelineContext,
   TargetInput,
 } from "@tessera/types";
+import { untrusted } from "@tessera/types";
 import { tableApi } from "@tessera/sn-client";
 
 import { SCRIPT_INCLUDE_TABLE } from "./atf.js";
@@ -117,7 +118,9 @@ export function createS5Resolver(options: S5ResolverOptions = {}): Resolver {
           ref: {
             table: SCRIPT_INCLUDE_TABLE,
             sysId: requireSysId(first, `resolve ${targetName}`),
-            name: targetName,
+            // Instance text from here on (AIS-4): the row's own name, which
+            // the check above proved equal to the requested one.
+            name: untrusted(returnedName),
           },
           resolvedBy: "scope",
         },

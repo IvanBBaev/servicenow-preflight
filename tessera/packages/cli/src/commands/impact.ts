@@ -57,6 +57,7 @@ import {
   type ResolutionReport,
 } from "@tessera/resolvers";
 import type {
+  InstanceArtifactRef,
   PipelineContext,
   ResolverSource,
   TargetArtifactRef,
@@ -67,6 +68,7 @@ import type { CliContext } from "../context.js";
 import { EXIT_CODES, type ExitCode } from "../exitCodes.js";
 import { CONFIG_SECTIONS, IMPACT_OPTIONS } from "../options.js";
 import { createCliImpactAnalyzer } from "../impactComposition.js";
+import { printedName, wireRef } from "../instanceNames.js";
 import { bindRole, TopologyError } from "../topology.js";
 
 /**
@@ -102,13 +104,13 @@ function pad(value: string, width: number): string {
 }
 
 /** `<table>/<sys_id>` — the label is what a human recognises, this is what they can open. */
-function address(ref: TargetArtifactRef): string {
+function address(ref: Pick<TargetArtifactRef, "table" | "sysId">): string {
   return `${ref.table}/${ref.sysId}`;
 }
 
 /** The three identity fields, and never a fourth: see the TM-1 note above. */
-function refJson(ref: TargetArtifactRef): Record<string, string> {
-  return { table: ref.table, sysId: ref.sysId, name: ref.name };
+function refJson(ref: InstanceArtifactRef): Record<string, string> {
+  return { ...wireRef(ref) };
 }
 
 /**
@@ -280,8 +282,9 @@ export async function impactCommand(
   for (const artifact of resolution.artifacts) {
     resolvedBy.set(artifactKey(artifact.ref), artifact.resolvedBy);
   }
-  const originOf = (ref: TargetArtifactRef): ResolverSource | undefined =>
-    resolvedBy.get(artifactKey(ref));
+  const originOf = (
+    ref: Pick<TargetArtifactRef, "table" | "sysId">,
+  ): ResolverSource | undefined => resolvedBy.get(artifactKey(ref));
 
   // One stream, two speakers. The resolution's notes are attributed to the
   // ARCH-5 adapter that wrote them and the analysis's to `impact`, because
@@ -333,7 +336,13 @@ export async function impactCommand(
             id: planned.spec.id,
             path: planned.spec.path,
             kind: planned.kind,
-            target: refJson(planned.target),
+            // Already the plain wire shape: `@tessera/impact` projects the
+            // demanded row's target at its own named boundary.
+            target: {
+              table: planned.target.table,
+              sysId: planned.target.sysId,
+              name: planned.target.name,
+            },
           })),
           notes,
           incomplete,
@@ -364,7 +373,7 @@ export async function impactCommand(
     context.stdout(`nodes (${graph.nodes.length}):`);
     graph.nodes.forEach((ref, index) => {
       context.stdout(
-        `  ${pad(labels[index] ?? CONSUMER_LABEL, width)}  ${address(ref)}  ${ref.name}`,
+        `  ${pad(labels[index] ?? CONSUMER_LABEL, width)}  ${address(ref)}  ${printedName(ref)}`,
       );
     });
   }
@@ -387,7 +396,7 @@ export async function impactCommand(
       // `low` edge is a name found in a comment, and reading it as a call is
       // the misreading this column exists to prevent.
       context.stdout(
-        `  ${pad(edge.confidence, width)}  ${edge.from.name} -> ${address(edge.to)}  ${edge.to.name}  (via ${edge.via})`,
+        `  ${pad(edge.confidence, width)}  ${printedName(edge.from)} -> ${address(edge.to)}  ${printedName(edge.to)}  (via ${edge.via})`,
       );
     }
   }
@@ -396,7 +405,9 @@ export async function impactCommand(
     context.stdout("");
     context.stdout(`unanalyzable (${graph.unanalyzable.length}):`);
     for (const entry of graph.unanalyzable) {
-      context.stdout(`  ${address(entry.artifact)}  ${entry.artifact.name}`);
+      context.stdout(
+        `  ${address(entry.artifact)}  ${printedName(entry.artifact)}`,
+      );
       // The reason on its own line: it is a sentence, and folding it onto the
       // identity line would push the identity off the left of a CI log.
       context.stdout(`    ${entry.reason}`);

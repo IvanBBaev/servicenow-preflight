@@ -1,6 +1,7 @@
 // @tessera/types — shared run/pipeline data shapes (DESIGN §6).
 // Pure data; nothing in this package performs I/O.
 
+import type { Untrusted } from "./untrusted.js";
 import type { EvidenceRef, RawOutcome, TargetArtifactRef } from "./verdict.js";
 
 /**
@@ -154,20 +155,43 @@ export interface TargetInput {
 export type ResolverSource = "story" | "update-set" | "scope";
 
 /**
+ * An artifact identity as it was read off an instance (TM-1, AIS-4).
+ *
+ * `table` and `sysId` are identity: the resolvers and the impact lookups hold
+ * them to `TABLE_NAME_RE` / `SYS_ID_RE` (or to a table they asked for) before
+ * a ref is built. `name` is not — it is the display name somebody with write
+ * access on the instance typed into a form, so it is branded `Untrusted` the
+ * moment it leaves the record and stays branded through the resolvers and the
+ * impact graph. Every consumer that needs the text has to cross a named
+ * `unwrapUntrusted` boundary (declared in `test/unwrapAllowList.test.js`), and
+ * the ones that print it escape it with `escapeForTerminal`.
+ *
+ * Deliberately NOT `TargetArtifactRef`, which is the wire shape of a checklist
+ * row and a spec's `targets`: those are serialised as JSON, and a branded box
+ * there would serialise as `{"value": ...}` (see `untrusted.ts`). Turning one
+ * of these into a `TargetArtifactRef` is the unwrap.
+ */
+export interface InstanceArtifactRef {
+  table: string;
+  sysId: string;
+  name: Untrusted<string>;
+}
+
+/**
  * ARCH-5: composite resolution unions results de-duplicated by sys_id; order
  * sets reporting precedence, not first-wins — `resolvedBy` keeps the winning
  * source visible.
  */
 export interface AffectedArtifact {
-  ref: TargetArtifactRef;
+  ref: InstanceArtifactRef;
   resolvedBy: ResolverSource;
 }
 
 export type ImpactConfidence = "high" | "medium" | "low";
 
 export interface ImpactEdge {
-  from: TargetArtifactRef;
-  to: TargetArtifactRef;
+  from: InstanceArtifactRef;
+  to: InstanceArtifactRef;
   /** What produced the edge: where_used, table_logic, trace_table_event, … */
   via: string;
   confidence: ImpactConfidence;
@@ -175,12 +199,12 @@ export interface ImpactEdge {
 
 /** QA-9 honesty: an artifact static analysis could not trace. */
 export interface UnanalyzableArtifact {
-  artifact: TargetArtifactRef;
+  artifact: InstanceArtifactRef;
   reason: string;
 }
 
 export interface ImpactGraph {
-  nodes: readonly TargetArtifactRef[];
+  nodes: readonly InstanceArtifactRef[];
   edges: readonly ImpactEdge[];
   /** Surfaced as explicit verdict warnings — never silent green (QA-9). */
   unanalyzable: readonly UnanalyzableArtifact[];

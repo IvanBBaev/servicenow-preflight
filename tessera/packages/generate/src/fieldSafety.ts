@@ -13,6 +13,12 @@
 // this pipeline asked for, and printing it is a reviewer scrolling past the
 // thing they were supposed to read.
 
+import {
+  escapeForTerminal,
+  hasUnsafeTextCharacter,
+  stripUnsafeTextCharacters,
+} from "@tessera/types";
+
 /** Caps on each field, in UTF-16 code units. */
 export const MAX_ID_CHARS = 120;
 export const MAX_FILENAME_CHARS = 120;
@@ -22,33 +28,11 @@ export const MAX_TARGET_NAME_CHARS = 256;
 export const MAX_TARGETS_PER_SPEC = 64;
 export const MAX_MODEL_ID_CHARS = 200;
 
-/**
- * True for a code unit that renders as nothing, reorders the line, or drives
- * the terminal: C0 controls (tab and newline included — none of these fields
- * spans lines), DEL, C1 controls, the bidi embeddings/overrides/isolates and
- * marks, the zero-width characters and BOM, and the Unicode line/paragraph
- * separators.
- */
-function isUnsafeCodeUnit(code: number): boolean {
-  return (
-    code < 0x20 ||
-    (code >= 0x7f && code <= 0x9f) ||
-    (code >= 0x200b && code <= 0x200f) ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2066 && code <= 0x2069) ||
-    code === 0x2028 ||
-    code === 0x2029 ||
-    code === 0xfeff
-  );
-}
-
-/** Whether `text` carries any character `isUnsafeCodeUnit` refuses. */
-export function hasUnsafeTextCharacter(text: string): boolean {
-  for (let i = 0; i < text.length; i += 1) {
-    if (isUnsafeCodeUnit(text.charCodeAt(i))) return true;
-  }
-  return false;
-}
+// The character class and the escape moved to `@tessera/types` (AIS-4): the
+// resolvers and the impact lookups ingest instance names too, and the core's
+// verdict warnings print them. Re-exported so this package's surface is
+// unchanged.
+export { escapeForTerminal, hasUnsafeTextCharacter };
 
 /**
  * Whether a short model-authored field is admissible: no unsafe character and
@@ -56,29 +40,6 @@ export function hasUnsafeTextCharacter(text: string): boolean {
  */
 export function isSafeField(text: string, max: number): boolean {
   return text.length <= max && !hasUnsafeTextCharacter(text);
-}
-
-/**
- * `text` made safe to print on one terminal line: a backslash becomes `\\`
- * and every unsafe character becomes `\u{XXXX}`, so the output is
- * unambiguous and the raw character never reaches the terminal.
- *
- * Delegated decision 2026-09-26: escape rather than drop. A dropped character
- * makes two different ids print identically, which is the confusion the
- * refusal upstream exists to prevent; an escape shows the reviewer exactly
- * what is there.
- */
-export function escapeForTerminal(text: string): string {
-  let out = "";
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text.charAt(i);
-    const code = text.charCodeAt(i);
-    if (ch === "\\") out += "\\\\";
-    else if (isUnsafeCodeUnit(code)) {
-      out += `\\u{${code.toString(16).toUpperCase().padStart(4, "0")}}`;
-    } else out += ch;
-  }
-  return out;
 }
 
 /**
@@ -91,9 +52,5 @@ export function escapeForTerminal(text: string): string {
  * that could drive a terminal and nothing past the cap.
  */
 export function sanitizeModelId(modelId: string): string {
-  let out = "";
-  for (let i = 0; i < modelId.length; i += 1) {
-    if (!isUnsafeCodeUnit(modelId.charCodeAt(i))) out += modelId.charAt(i);
-  }
-  return out.slice(0, MAX_MODEL_ID_CHARS);
+  return stripUnsafeTextCharacters(modelId).slice(0, MAX_MODEL_ID_CHARS);
 }

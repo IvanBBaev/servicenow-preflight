@@ -48,7 +48,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 
-import { TEST_KINDS, untrusted } from "@tessera/types";
+import { TEST_KINDS, isUntrusted, untrusted } from "@tessera/types";
 
 import {
   ALLOWED_SUFFIXES,
@@ -167,13 +167,20 @@ function proposed(overrides = {}) {
         {
           table: "incident",
           sysId: "0123456789abcdef0123456789abcdef",
-          name: "Incident business rule",
+          // AIS-4: a candidate's target name is model-authored and arrives
+          // branded from the parser; the writer refuses a bare string.
+          name: untrusted("Incident business rule"),
         },
       ],
       source: branded,
     },
     cleared: verdict.cleared,
   };
+}
+
+/** A plain target triple with its name branded, as the parser hands it over (AIS-4). */
+function branded(target) {
+  return { ...target, name: untrusted(target.name) };
 }
 
 function write(testsRoot, specs, provenance = PROVENANCE) {
@@ -509,7 +516,11 @@ describe("the proposed manifest", () => {
       { table: "sys_script", sysId: "b".repeat(32), name: "Second rule" },
     ];
     await write(testsRoot, [
-      proposed({ id: "one", filename: "one.unit.ts", targets }),
+      proposed({
+        id: "one",
+        filename: "one.unit.ts",
+        targets: targets.map(branded),
+      }),
       proposed({ id: "two", kind: "e2e", filename: "two.e2e.atf.yaml" }),
     ]);
     const manifest = await readProposedManifest(testsRoot);
@@ -523,6 +534,21 @@ describe("the proposed manifest", () => {
     // spec body where an un-labelled copy reads like prose somebody wrote.
     assert.deepEqual(first.targets, targets);
     assert.equal(manifest.specs[1].kind, "e2e");
+  });
+
+  it('writes branded target names as plain strings, never as {"value": boxes (AIS-4)', async () => {
+    const { testsRoot } = await sandbox();
+    const input = proposed({ id: "plain", filename: "plain.unit.ts" });
+    assert.equal(isUntrusted(input.candidate.targets[0].name), true);
+    await write(testsRoot, [input]);
+    const raw = await readFile(
+      path.join(testsRoot, PROPOSED_MANIFEST_FILENAME),
+      "utf8",
+    );
+    assert.equal(raw.includes('"value"'), false, raw);
+    const manifest = JSON.parse(raw);
+    assert.equal(manifest.specs[0].targets[0].name, "Incident business rule");
+    assert.equal(typeof manifest.specs[0].targets[0].name, "string");
   });
 
   it("sorts entries by id, so a re-run diffs cleanly", async () => {
@@ -1313,7 +1339,9 @@ describe("untrusted source is written as bytes, never interpreted", () => {
       proposed({
         id: "prose",
         filename: "prose.unit.ts",
-        targets: [{ table: "incident", sysId: "c".repeat(32), name }],
+        targets: [
+          { table: "incident", sysId: "c".repeat(32), name: untrusted(name) },
+        ],
       }),
     ]);
     const manifest = await readProposedManifest(testsRoot);
@@ -1326,7 +1354,13 @@ describe("untrusted source is written as bytes, never interpreted", () => {
         proposed({
           id: "prose",
           filename: "prose.unit.ts",
-          targets: [{ table: "incident", sysId: "c".repeat(32), name: "a\nb" }],
+          targets: [
+            {
+              table: "incident",
+              sysId: "c".repeat(32),
+              name: untrusted("a\nb"),
+            },
+          ],
         }),
       ]),
       /control, bidi or zero-width/,
@@ -1586,7 +1620,7 @@ describe("the filename charset, Windows device names and the caps (W7b L3)", () 
     const one = {
       table: "incident",
       sysId: "0123456789abcdef0123456789abcdef",
-      name: "Rule",
+      name: untrusted("Rule"),
     };
     await assertInputError(
       write(testsRoot, [

@@ -17,9 +17,10 @@
 import type {
   AffectedArtifact,
   PipelineContext,
-  TargetArtifactRef,
+  InstanceArtifactRef,
   TargetInput,
 } from "@tessera/types";
+import { untrusted } from "@tessera/types";
 
 import { ResolutionFaultError, ResolutionInputError } from "./errors.js";
 import { artifactKey, assertQueryValue, isSysId, isTableName } from "./keys.js";
@@ -51,10 +52,9 @@ export interface ScopeResolverOptions {
 const SCOPE_TABLE = "sys_scope";
 
 /**
- * Identity only. TM-1 wants untrusted free text branded where it is ingested,
- * and the way this package satisfies that is by never reading any: `scope` and
- * `name` are the labels a human uses to address a row, not prose that travels
- * on to the generator.
+ * Identity only: `scope` and `name` are the labels a human uses to address a
+ * row. They are still free text somebody typed into a form, so TM-1 (AIS-4)
+ * brands the artifact `name` as `Untrusted` the moment it leaves the record.
  */
 const SCOPE_FIELDS: readonly string[] = ["sys_id", "scope", "name"];
 // `sys_scope` is read back so every row can be checked against the filter that
@@ -380,12 +380,14 @@ export function createScopeResolver(
           );
           continue;
         }
-        const ref: TargetArtifactRef = {
+        const ref: InstanceArtifactRef = {
           table,
           sysId,
           // Never an empty label: a checklist row printed as `[  ]` tells a
           // reviewer nothing, and table/sys_id is at least addressable.
-          name: text(row["name"]) ?? `${table}/${sysId}`,
+          // Branded here, as it leaves the record (TM-1, AIS-4): the name is
+          // whatever somebody typed into the form.
+          name: untrusted(text(row["name"]) ?? `${table}/${sysId}`),
         };
         const key = artifactKey(ref);
         // Defensive: one table cannot return the same sys_id twice, but a

@@ -89,7 +89,7 @@ function prompt() {
         {
           table: "sys_script",
           sysId: "0123456789abcdef0123456789abcdef",
-          name: "DATA-CHANNEL artifact",
+          name: untrusted("DATA-CHANNEL artifact"),
         },
       ],
       edges: [],
@@ -104,6 +104,7 @@ function prompt() {
 /** A recognisable instance-derived name, for the TM-1 assertion further down. */
 const TARGET_NAME = "Incident: name-canary-5c07-instance-prose";
 
+/** The plain wire triple — what a model's JSON answer carries. */
 function target(overrides = {}) {
   return {
     table: "incident",
@@ -113,11 +114,22 @@ function target(overrides = {}) {
   };
 }
 
+/** The graph-side `InstanceArtifactRef` a `GenerationRequest` carries (AIS-4). */
+function instanceTarget(overrides = {}) {
+  const plain = target(overrides);
+  return { ...plain, name: untrusted(plain.name) };
+}
+
+/** Assertion-side projection of a branded ref back to the plain triple. */
+function plainRef(ref) {
+  return { ...ref, name: unwrapUntrusted(ref.name, UNWRAP) };
+}
+
 function request(overrides = {}) {
   return {
     prompt: prompt(),
     kind: "unit",
-    targets: [target()],
+    targets: [instanceTarget()],
     ...overrides,
   };
 }
@@ -335,8 +347,8 @@ describe("createTemplateProvider — the hermetic half of the seam", () => {
 
   it("emits one candidate per target, keyed on identity", async () => {
     const targets = [
-      target({ table: "incident", sysId: "a".repeat(32) }),
-      target({ table: "sc_req_item", sysId: "b".repeat(32) }),
+      instanceTarget({ table: "incident", sysId: "a".repeat(32) }),
+      instanceTarget({ table: "sc_req_item", sysId: "b".repeat(32) }),
     ];
     const completion = await createTemplateProvider().complete(
       request({ targets }),
@@ -366,7 +378,9 @@ describe("createTemplateProvider — the hermetic half of the seam", () => {
       !unwrapUntrusted(candidate.source, UNWRAP).includes(TARGET_NAME),
       "the target name reached the generated spec body",
     );
-    assert.equal(candidate.targets[0].name, TARGET_NAME);
+    // The template echoes the name as plain JSON; the parser re-brands it.
+    assert.equal(isUntrusted(candidate.targets[0].name), true);
+    assert.equal(plainRef(candidate.targets[0]).name, TARGET_NAME);
   });
 
   it("reports a blank promptHash by default, and honours a supplied config", async () => {
@@ -1085,9 +1099,32 @@ describe("parseCandidates — where model output stops being opaque", () => {
     assert.equal(candidates.length, 1);
     assert.equal(candidates[0].id, "incident.unit.1");
     assert.equal(candidates[0].filename, "incident.unit.ts");
-    assert.deepEqual(candidates[0].targets, [
+    assert.deepEqual(candidates[0].targets.map(plainRef), [
       { table: "incident", sysId: target().sysId, name: TARGET_NAME },
     ]);
+  });
+
+  it("brands every target name it parses (AIS-4)", () => {
+    // The model echoes instance-derived names; they leave the parser as
+    // `Untrusted<string>`, and a hand-rolled look-alike is not one.
+    const candidates = parseCandidates(
+      completionOf(
+        JSON.stringify({
+          specs: [
+            specJson({
+              targets: [target(), target({ sysId: "f".repeat(32) })],
+            }),
+          ],
+        }),
+      ),
+    );
+    assert.equal(candidates[0].targets.length, 2);
+    for (const parsed of candidates[0].targets) {
+      assert.notEqual(typeof parsed.name, "string");
+      assert.equal(isUntrusted(parsed.name), true);
+      assert.equal(typeof parsed.table, "string");
+      assert.equal(typeof parsed.sysId, "string");
+    }
   });
 
   it("tolerates a fenced code block", () => {

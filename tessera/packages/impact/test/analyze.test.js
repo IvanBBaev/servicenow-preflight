@@ -27,6 +27,17 @@ import {
   createImpactAnalyzer,
   isIncomplete,
 } from "../build/index.js";
+import { isUntrusted, untrusted, unwrapUntrusted } from "@tessera/types";
+
+/** Read a branded artifact name back out, for assertions only. */
+const nameOf = (ref) => unwrapUntrusted(ref.name, "test assertion");
+
+/** Project a branded ref to its plain wire shape (`TargetArtifactRef`). */
+const plain = (ref) => ({
+  table: ref.table,
+  sysId: ref.sysId,
+  name: nameOf(ref),
+});
 
 /** A 32-hex sys_id from a short prefix — the fixtures read by name, not by id. */
 function sysId(prefix) {
@@ -44,27 +55,27 @@ const SCOPE_ROW = {
 const CALCULATOR = {
   table: "sys_script_include",
   sysId: sysId("ca1c"),
-  name: "AmountCalculator",
+  name: untrusted("AmountCalculator"),
 };
 const ZONE = {
   table: "sys_script_include",
   sysId: sysId("20ne"),
-  name: "ZoneLookup",
+  name: untrusted("ZoneLookup"),
 };
 const HELPER = {
   table: "sys_script_include",
   sysId: sysId("he1b"),
-  name: "HelperInclude",
+  name: untrusted("HelperInclude"),
 };
 const ALPHA_RULE = {
   table: "sys_script",
   sysId: sysId("a1fa"),
-  name: "Alpha rule",
+  name: untrusted("Alpha rule"),
 };
 const BETA_RULE = {
   table: "sys_script",
   sysId: sysId("beba"),
-  name: "Beta rule",
+  name: untrusted("Beta rule"),
 };
 
 /**
@@ -75,7 +86,7 @@ const BETA_RULE = {
 const NAMELESS = {
   table: "sys_script_include",
   sysId: sysId("d0d0"),
-  name: `sys_script_include/${sysId("d0d0")}`,
+  name: untrusted(`sys_script_include/${sysId("d0d0")}`),
 };
 
 function ctx() {
@@ -185,6 +196,9 @@ describe("what the search is asked to look for", () => {
     // subject this MVP can trace, and a row whose name is the `table/sys_id`
     // placeholder cannot be searched for at all.
     assert.deepEqual([...request.subjects], [CALCULATOR, ZONE]);
+    // Handed over still branded: the search opens the name behind its own
+    // boundary (TM-1, AIS-4).
+    assert.ok(request.subjects.every((subject) => isUntrusted(subject.name)));
     // One read, and it is the scope lookup — consumer tables are the search's
     // business, not the analyzer's.
     assert.deepEqual(
@@ -233,6 +247,7 @@ describe("what the MVP cannot trace, it says out loud", () => {
     assert.equal(report.graph.unanalyzable.length, 1);
     const entry = report.graph.unanalyzable[0];
     assert.deepEqual(entry.artifact, BETA_RULE);
+    assert.ok(isUntrusted(entry.artifact.name));
     assert.match(entry.reason, /sys_script_include usage only/);
     assert.match(entry.reason, /§12\.3 row 3/);
     // It names the table that was skipped, so the reader knows what was left
@@ -241,6 +256,7 @@ describe("what the MVP cannot trace, it says out loud", () => {
     // QA-15: the artifact stays in the graph. Dropping it would shrink the
     // coverage denominator by exactly the artifact the floor exists for.
     assert.deepEqual([...report.graph.nodes], [BETA_RULE]);
+    assert.ok(report.graph.nodes.every((node) => isUntrusted(node.name)));
     assert.deepEqual([...report.graph.demanded], []);
     assert.equal(isIncomplete(report), true);
   });
@@ -279,7 +295,7 @@ describe("what the MVP cannot trace, it says out loud", () => {
     // entry per subject.
     assert.equal(report.graph.unanalyzable.length, 2);
     assert.deepEqual(
-      report.graph.unanalyzable.map((entry) => entry.artifact.name),
+      report.graph.unanalyzable.map((entry) => nameOf(entry.artifact)),
       ["AmountCalculator", "ZoneLookup"],
     );
     for (const entry of report.graph.unanalyzable) {
@@ -333,7 +349,7 @@ describe("what the MVP cannot trace, it says out loud", () => {
     const report = await h.analyze([CALCULATOR, BETA_RULE]);
 
     assert.deepEqual(
-      report.graph.unanalyzable.map((entry) => entry.artifact.name),
+      report.graph.unanalyzable.map((entry) => nameOf(entry.artifact)),
       // Sorted by (table, name, sys_id, reason): both are `sys_script`.
       ["Alpha rule", "Beta rule"],
     );
@@ -362,6 +378,8 @@ describe("edges", () => {
       via: "where_used",
       confidence: "high",
     });
+    assert.ok(isUntrusted(report.graph.edges[0].from.name));
+    assert.ok(isUntrusted(report.graph.edges[0].to.name));
 
     // Order of arrival must not decide it: a trailing comment cannot demote a
     // proven call.
@@ -465,8 +483,8 @@ describe("a graph two runs can be diffed against each other", () => {
     // Edges: (from.name, to.table, to.name, to.sysId).
     assert.deepEqual(
       report.graph.edges.map((edge) => [
-        edge.from.name,
-        edge.to.name,
+        nameOf(edge.from),
+        nameOf(edge.to),
         edge.confidence,
       ]),
       [
@@ -480,7 +498,7 @@ describe("a graph two runs can be diffed against each other", () => {
     // Nodes: every input plus every consumer that earned an edge, by
     // (table, name, sys_id).
     assert.deepEqual(
-      report.graph.nodes.map((ref) => `${ref.table}/${ref.name}`),
+      report.graph.nodes.map((ref) => `${ref.table}/${nameOf(ref)}`),
       [
         "sys_script/Alpha rule",
         "sys_script/Beta rule",
@@ -502,7 +520,10 @@ describe("a graph two runs can be diffed against each other", () => {
       ],
     );
     assert.ok(report.graph.demanded.every((entry) => entry.kind === "unit"));
-    assert.deepEqual(report.graph.demanded[1].target, HELPER);
+    // The checklist row's target is the PLAIN wire shape: it is serialised
+    // into checklists and reports, where a box would print as {"value":...}.
+    assert.deepEqual(report.graph.demanded[1].target, plain(HELPER));
+    assert.equal(typeof report.graph.demanded[1].target.name, "string");
     // Nothing went untraced, so nothing is warned about.
     assert.deepEqual([...report.graph.unanalyzable], []);
     assert.equal(isIncomplete(report), false);
@@ -523,7 +544,7 @@ describe("a graph two runs can be diffed against each other", () => {
     const report = await h.analyze([BETA_RULE, CALCULATOR]);
 
     assert.deepEqual(
-      report.graph.unanalyzable.map((entry) => entry.artifact.name),
+      report.graph.unanalyzable.map((entry) => nameOf(entry.artifact)),
       ["Alpha rule", "Beta rule", "HelperInclude"],
     );
   });
@@ -534,7 +555,7 @@ describe("the demanded checklist", () => {
     const awkward = {
       table: "sys_script_include",
       sysId: sysId("aw"),
-      name: "Amount/Calculator Pro",
+      name: untrusted("Amount/Calculator Pro"),
     };
     // A scope row with no `scope` column falls back to its display name, which
     // is where the space in the path segment comes from. The scope is named by
@@ -557,7 +578,7 @@ describe("the demanded checklist", () => {
             path: "tests/Acme_Inventory/sys_script_include/Amount_Calculator_Pro/Amount_Calculator_Pro.unit.ts",
           },
           kind: "unit",
-          target: awkward,
+          target: plain(awkward),
         },
       ],
     );

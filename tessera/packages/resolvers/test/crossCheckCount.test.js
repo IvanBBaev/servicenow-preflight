@@ -26,6 +26,13 @@ import {
   createStoryResolver,
   isIncomplete,
 } from "../build/index.js";
+import { isUntrusted, unwrapUntrusted } from "@tessera/types";
+
+/** A resolved name, after checking it arrived branded (AIS-4). */
+const nameOf = (ref) => {
+  assert.equal(isUntrusted(ref.name), true, "a resolved name must be branded");
+  return unwrapUntrusted(ref.name, "test: read a resolved artifact name");
+};
 
 const HOST = "dev-resolvers-crosscheck.service-now.com";
 const hex = (prefix) => prefix.padEnd(32, "0");
@@ -150,7 +157,7 @@ describe("a trimmed last window is detected by the count", () => {
     try {
       const report = await resolveScope(h);
       assert.deepEqual(
-        report.artifacts.map((a) => a.ref.name),
+        report.artifacts.map((a) => nameOf(a.ref)),
         ["AmountCalculator"],
       );
       assert.match(
@@ -335,7 +342,7 @@ describe("known residual — an ACL-filtered Stats count", () => {
     try {
       const report = await resolveScope(h);
       assert.deepEqual(
-        report.artifacts.map((a) => a.ref.name),
+        report.artifacts.map((a) => nameOf(a.ref)),
         ["AmountCalculator"],
       );
       assert.equal(isIncomplete(report), false);

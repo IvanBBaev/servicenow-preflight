@@ -16,6 +16,7 @@ import {
   createCompositeResolver,
   isIncomplete,
 } from "../build/index.js";
+import { untrusted } from "@tessera/types";
 
 const CTX = {
   runId: "run-composite-1",
@@ -28,19 +29,19 @@ const CTX = {
 const INCLUDE = {
   table: "sys_script_include",
   sysId: "aaaa0000000000000000000000000001",
-  name: "TesseraUtils",
+  name: untrusted("TesseraUtils"),
 };
 
 const RULE = {
   table: "sys_script",
   sysId: "bbbb0000000000000000000000000002",
-  name: "Tessera demo rule",
+  name: untrusted("Tessera demo rule"),
 };
 
 const POLICY = {
   table: "sys_ui_policy",
   sysId: "cccc0000000000000000000000000003",
-  name: "Tessera demo policy",
+  name: untrusted("Tessera demo policy"),
 };
 
 const found = (ref, resolvedBy) => ({ ref, resolvedBy });
@@ -213,10 +214,30 @@ describe("createCompositeResolver — union and precedence", () => {
     assert.match(scopeFirst.notes[0].message, /reported as scope/);
   });
 
+  it("escapes an instance-authored name in its precedence note (AIS-4)", async () => {
+    // The name is whatever somebody typed into a form; a note is printed in a
+    // terminal. An ESC sequence or a bidi override must arrive inert.
+    const hostile = { ...INCLUDE, name: untrusted("Utils\u001b[2J\u202eevil") };
+    const report = await createCompositeResolver([
+      stub("story", { artifacts: [found(hostile, "story")] }),
+      stub("scope", { artifacts: [found(hostile, "scope")] }),
+    ]).resolveWithReport(CTX, { story: "STRY0010001", scope: "x_tess_demo" });
+
+    assert.equal(report.notes.length, 1);
+    const [precedence] = report.notes;
+    assert.equal(precedence.message.includes("\u001b"), false);
+    assert.equal(precedence.message.includes("\u202e"), false);
+    assert.match(precedence.message, /Utils/);
+  });
+
   it("de-duplicates by table AND sys_id", async () => {
     // Same sys_id on two tables is two artifacts; collapsing them would hide
     // one behind the other for the rest of the pipeline.
-    const twin = { ...RULE, table: "sys_script_include", name: "Twin" };
+    const twin = {
+      ...RULE,
+      table: "sys_script_include",
+      name: untrusted("Twin"),
+    };
     const story = stub("story", { artifacts: [found(RULE, "story")] });
     const scope = stub("scope", { artifacts: [found(twin, "scope")] });
 

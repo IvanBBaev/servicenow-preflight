@@ -13,6 +13,7 @@ import {
   isIncomplete,
 } from "@tessera/impact";
 import { ResolutionFaultError } from "@tessera/resolvers";
+import { untrusted } from "@tessera/types";
 
 import {
   DEFAULT_CLI_SUBJECT_TABLES,
@@ -83,6 +84,9 @@ describe("createCliImpactAnalyzer", () => {
 // refused or faulted lookup read does, and which reader the lookup reads.
 
 const hex = (prefix) => prefix.padEnd(32, "0");
+
+/** A resolver brands the instance name at ingestion (AIS-4). */
+const branded = (ref) => ({ ...ref, name: untrusted(ref.name) });
 const SCOPE_NAME = "x_demo";
 const SCOPE_ID = hex("5c0be");
 const ACTION = {
@@ -174,7 +178,7 @@ function cannedReader({ profile = "source", actionRead } = {}) {
 
 function analyzeAction(analyzer) {
   return analyzer.analyzeWithReport(ctx(), [
-    { ref: ACTION, resolvedBy: "scope" },
+    { ref: branded(ACTION), resolvedBy: "scope" },
   ]);
 }
 
@@ -399,7 +403,9 @@ function scriptReader({ profile = "source", includeRead, jobRead } = {}) {
 }
 
 function analyzeJob(analyzer) {
-  return analyzer.analyzeWithReport(ctx(), [{ ref: JOB, resolvedBy: "scope" }]);
+  return analyzer.analyzeWithReport(ctx(), [
+    { ref: branded(JOB), resolvedBy: "scope" },
+  ]);
 }
 
 const REFUSED_403 = (table) => ({
@@ -683,7 +689,7 @@ function transformReader({ profile = "source", reads = {} } = {}) {
 
 function analyzeTransform(analyzer) {
   return analyzer.analyzeWithReport(ctx(), [
-    { ref: TRANSFORM, resolvedBy: "scope" },
+    { ref: branded(TRANSFORM), resolvedBy: "scope" },
   ]);
 }
 

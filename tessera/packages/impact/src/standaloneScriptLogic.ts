@@ -66,15 +66,16 @@
 // return, an unreadable, non-table or `global` `target_table`, and a refused,
 // truncated or opaque map or rule read each refuse the script.
 
-import { untrusted } from "@tessera/types";
+import { escapeForTerminal, untrusted } from "@tessera/types";
 import type {
-  TargetArtifactRef,
+  InstanceArtifactRef,
   UnanalyzableArtifact,
   Untrusted,
 } from "@tessera/types";
 import { describeReadTruncation } from "@tessera/resolvers";
 import type { RecordReader } from "@tessera/resolvers";
 
+import { artifactName } from "./names.js";
 import { scanScript } from "./scan.js";
 import {
   BUSINESS_RULE_TABLE,
@@ -176,7 +177,7 @@ function compareScripts(
 ): number {
   return (
     compare(left.script.table, right.script.table) ||
-    compare(left.script.name, right.script.name) ||
+    compare(artifactName(left.script), artifactName(right.script)) ||
     compare(left.script.sysId, right.script.sysId)
   );
 }
@@ -186,7 +187,7 @@ function compareCalls(
   right: ScriptIncludeCall,
 ): number {
   return (
-    compare(left.include.name, right.include.name) ||
+    compare(artifactName(left.include), artifactName(right.include)) ||
     compare(left.include.sysId, right.include.sysId) ||
     compare(left.field, right.field) ||
     left.match.line - right.match.line
@@ -195,7 +196,7 @@ function compareCalls(
 
 /** One subject whose body was read, waiting for the include names. */
 interface PendingScript {
-  readonly subject: TargetArtifactRef;
+  readonly subject: InstanceArtifactRef;
   readonly bodies: readonly {
     readonly field: string;
     readonly body: Untrusted<string>;
@@ -236,7 +237,7 @@ export function createStandaloneScriptLookup(
     const notes: ImpactNote[] = [];
     const unanalyzable: UnanalyzableArtifact[] = [];
 
-    const refuseOne = (subject: TargetArtifactRef, reason: string): void => {
+    const refuseOne = (subject: InstanceArtifactRef, reason: string): void => {
       unanalyzable.push({
         artifact: subject,
         reason: `the Script Includes this ${subject.table} script calls could not be established in scope \`${label}\`: ${reason}`,
@@ -252,7 +253,7 @@ export function createStandaloneScriptLookup(
     // Subjects grouped by table, addressed by sys_id; a duplicate is one
     // subject. A subject on a table this lookup does not serve is refused —
     // an injected caller's slip must not become a traced script.
-    const byTable = new Map<string, Map<string, TargetArtifactRef>>();
+    const byTable = new Map<string, Map<string, InstanceArtifactRef>>();
     const seenIds = new Set<string>();
     for (const subject of request.subjects) {
       if (seenIds.has(subject.sysId)) continue;
@@ -445,7 +446,7 @@ export function createStandaloneScriptLookup(
           signal: request.ctx.signal,
         });
         const ruleRows: {
-          ref: TargetArtifactRef;
+          ref: InstanceArtifactRef;
           verdict: CollectionVerdict;
         }[] = [];
         let ruleDetail: string | undefined;
@@ -470,8 +471,9 @@ export function createStandaloneScriptLookup(
               ref: {
                 table: BUSINESS_RULE_TABLE,
                 sysId,
-                name:
+                name: untrusted(
                   text(row["sys_name"]) ?? `${BUSINESS_RULE_TABLE}/${sysId}`,
+                ),
               },
               verdict,
             });
@@ -550,7 +552,7 @@ export function createStandaloneScriptLookup(
       return { scripts: [], rules: [], unanalyzable, notes };
     }
 
-    const includesByName = new Map<string, TargetArtifactRef[]>();
+    const includesByName = new Map<string, InstanceArtifactRef[]>();
     let opaque = 0;
     for (const row of includeRead.records) {
       const sysId = text(row["sys_id"]);
@@ -559,10 +561,12 @@ export function createStandaloneScriptLookup(
         opaque += 1;
         continue;
       }
-      const ref: TargetArtifactRef = {
+      // Branded as it leaves the record (TM-1, AIS-4); the plain `name` stays
+      // local as this lookup's search key and never leaves unescaped.
+      const ref: InstanceArtifactRef = {
         table: SCRIPT_INCLUDE_TABLE,
         sysId,
-        name,
+        name: untrusted(name),
       };
       const same = includesByName.get(name);
       if (same === undefined) includesByName.set(name, [ref]);
@@ -582,7 +586,7 @@ export function createStandaloneScriptLookup(
       notes.push(
         note(
           "warning",
-          `standalone script lookup: ${refs.length} ${SCRIPT_INCLUDE_TABLE} rows in scope \`${label}\` are named \`${name}\`; every call to that name is attributed to all of them`,
+          `standalone script lookup: ${refs.length} ${SCRIPT_INCLUDE_TABLE} rows in scope \`${label}\` are named \`${escapeForTerminal(name)}\`; every call to that name is attributed to all of them`,
         ),
       );
     }

@@ -32,6 +32,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
+import { isUntrusted, untrusted } from "@tessera/types";
+
 import {
   DEFAULT_GENERATION_DEADLINE_MS,
   GenerateInputError,
@@ -55,6 +57,7 @@ import {
   graphWith,
   makeCtx,
   manualClock,
+  plain,
   specPayload,
   stubGate,
   stubProvider,
@@ -390,6 +393,10 @@ describe("generate — the happy path", () => {
         targets,
       },
     ]);
+    // AIS-4: the TestSpec carries the plain wire shape, so it serialises to
+    // strings and never to a `{"value": ...}` box.
+    assert.equal(typeof specs[0].targets[0].name, "string");
+    assert.equal(JSON.stringify(specs).includes('"value"'), false);
   });
 
   it("hands the quality bar the written specs and the graph they came from", async () => {
@@ -1045,7 +1052,8 @@ describe("generationTargets", () => {
     );
     assert.equal(targets.length, 1);
     // First seen wins, so the graph's own node is what the prompt describes.
-    assert.deepEqual(targets[0], node);
+    assert.equal(isUntrusted(targets[0].name), true);
+    assert.deepEqual(plain(targets[0]), node);
   });
 
   it("drops a target missing any of table, sys_id or name", () => {
@@ -1088,9 +1096,46 @@ describe("generationTargets", () => {
     );
     assert.equal(collidable.length, 2);
     assert.deepEqual(
-      collidable.map((entry) => entry.name),
+      collidable.map((entry) => plain(entry).name),
       ["first", "second"],
     );
+  });
+
+  it("keeps a graph whose node names are branded, and hands them on branded (AIS-4)", () => {
+    // Regression: a selection that only accepted a plain string name dropped
+    // every branded graph target, so a real ImpactGraph yielded no targets.
+    const node = target("branded-node");
+    const from = target("branded-from");
+    const to = target("branded-to");
+    const opaque = target("branded-opaque");
+    const graph = graphWith([node], {
+      edges: [edge(from, to)],
+      unanalyzable: [unanalyzed(opaque)],
+    });
+    assert.equal(isUntrusted(graph.nodes[0].name), true);
+    const targets = generationTargets(graph);
+    assert.equal(targets.length, 4);
+    for (const entry of targets) {
+      assert.equal(isUntrusted(entry.name), true, entry.sysId);
+    }
+    assert.deepEqual(targets.map(plain), [node, from, to, opaque]);
+  });
+
+  it("re-brands a plain demanded target name, and drops a blank branded one", () => {
+    // `demanded[].target` is the plain checklist wire shape; what leaves
+    // selection is branded either way. A branded name that is blank inside the
+    // box is still a target the model cannot name.
+    const wanted = target("plain-demanded");
+    const targets = generationTargets(
+      graphWith(
+        [{ table: "sys_script", sysId: "b1", name: untrusted("   ") }],
+        { demanded: [demand(wanted)] },
+      ),
+    );
+    assert.equal(targets.length, 1);
+    assert.equal(typeof wanted.name, "string");
+    assert.equal(isUntrusted(targets[0].name), true);
+    assert.deepEqual(plain(targets[0]), wanted);
   });
 });
 
