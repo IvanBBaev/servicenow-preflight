@@ -88,6 +88,21 @@ jobs:
             echo "::error::Tag v$TAG does not match package.json version $PKG"
             exit 1
           fi
+      # Delegated decision 2026-10-22 (ADR-001 follow-up 1): `prepack` stages
+      # Tessera into ANY publish from main, so a 0.x tag cut from main would
+      # ship `tess`/`tessera-mcp` while ADR-001 promises 0.x keeps shipping
+      # preflight checks unchanged. main is the 1.0.0 train; this workflow
+      # refuses every 0.x version. A 0.x patch needs a maintenance branch cut
+      # from the v0.5.0 tag and its own release path (see docs/RELEASING.md).
+      - name: Refuse a 0.x version from the 1.0.0 train
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          case "$PKG" in
+            0.*)
+              echo "::error::Version $PKG is 0.x — main ships Tessera, which ADR-001 holds back until v1.0.0. Refusing to publish."
+              exit 1
+              ;;
+          esac
       # `prepublishOnly` runs the full `check` gate (build + lint + format:check + coverage).
       # `--provenance` requires `id-token: write` (above) and publishes a signed
       # provenance attestation. It works with both a token and OIDC Trusted Publishing.

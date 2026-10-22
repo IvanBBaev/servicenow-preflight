@@ -42,8 +42,21 @@ as long as you follow the flow below — no back-fix needed.
 4. The `Release` workflow runs and publishes. It refuses to publish if:
    - the tagged commit is **not reachable from `main`** (OPS-1 ancestry guard),
    - the tag name doesn't match `package.json` version,
+   - the version is **0.x** (see below),
    - the `prepublishOnly` gate (`npm run check`: build + lint + format +
      coverage) fails.
+
+## `main` is the 1.0.0 train — no 0.x releases from it
+
+`prepack` stages the Tessera runtime into every package packed from `main`, so
+any release cut from `main` ships the `tess` and `tessera-mcp` bins. ADR-001
+promises that 0.x keeps shipping the preflight checks unchanged and that
+Tessera ships only at v1.0.0, after a GO review. The `Release` workflow
+therefore refuses every 0.x version.
+
+If a 0.x fix is ever needed, cut a maintenance branch from the `v0.5.0` tag and
+give it its own release path. The current workflow cannot publish it as is:
+the ancestry guard requires `main`, and the 0.x guard refuses the version.
 
 ## Supply-chain guarantees in the pipeline
 
