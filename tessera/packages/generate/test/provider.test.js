@@ -384,8 +384,10 @@ describe("createTemplateProvider — the hermetic half of the seam", () => {
   });
 
   it("reports a blank promptHash by default, and honours a supplied config", async () => {
-    // A blank hash is how `./generator.ts` reads "not pinned" and skips the
-    // drift check — an offline template has no frozen prompt to drift from.
+    // A blank hash means "not pinned": the template sends no instruction, so
+    // it has no instruction hash to pin, and `@tessera/cli`'s `promptHashDrift`
+    // skips a blank pin (AIS-6). Run provenance records the rendered prompt
+    // hash instead (see the generator suite).
     const bare = createTemplateProvider();
     assert.equal(bare.name, "template");
     assert.equal(bare.config.promptHash, "");

@@ -41,6 +41,7 @@ import {
   GenerationFaultError,
   buildGenerationPrompt,
   createAiTestGenerator,
+  createTemplateProvider,
   generationTargets,
   renderPrompt,
 } from "../build/index.js";
@@ -341,6 +342,23 @@ describe("generate — the happy path", () => {
     // config — both of those describe a different thing.
     assert.notEqual(recorded, "provider-reported-hash");
     assert.notEqual(recorded, "pinned-instruction-hash");
+  });
+
+  it("records the rendered prompt hash for a template run, whose own pin is blank (AIS-6)", async () => {
+    // The template provider reports `promptHash: ""` — it sends no
+    // instruction, so it has no instruction hash to pin. Provenance must not
+    // inherit that blank: the batch is still reproducible from the prompt the
+    // generator rendered, and that is the hash the manifest records.
+    const provider = createTemplateProvider();
+    assert.equal(provider.config.promptHash, "");
+    const { generator, writer } = harness({ provider });
+    await generator.generate(makeCtx(), GRAPH, "unit");
+
+    const rendered = renderPrompt(buildGenerationPrompt("unit", GRAPH));
+    const recorded = writer.calls[0].provenance.promptHash;
+    assert.match(recorded, /^[0-9a-f]{64}$/);
+    assert.equal(recorded, rendered.promptHash);
+    assert.equal(writer.calls[0].provenance.generator, "template");
   });
 
   it("refuses a write report that binds a spec to a path the quality bar did not judge", async () => {

@@ -209,6 +209,22 @@ export interface TemplateProviderOptions {
  * keys results on the pin — `@tessera/cli`'s `promptHashDrift`
  * (`benchmarkRun.ts`), which compares a non-blank pin with
  * `instructionHashFor(kind)` from `./prompt.ts` and skips a blank one.
+ *
+ * Why the default stays blank rather than hashing the template's input
+ * (AIS-6): `PinnedGenConfig.promptHash` is defined as the hash of the frozen
+ * INSTRUCTION channel, and the template reads no instruction — it builds each
+ * spec from the target's table and sys_id alone. A hash of anything else would
+ * be a second meaning for one field, and `promptHashDrift` would refuse it
+ * (exit 4) because it is not `instructionHashFor(kind)`. The default is also
+ * meant to fail the benchmark's ResultKey check, which demands a real pin. A
+ * template run is still traceable: the generator records the rendered
+ * prompt's full hash in the manifest provenance, never `completion.promptHash`.
+ *
+ * The one instance string the template copies is `target.name`, echoed into
+ * `targets[]` only — never into the spec id, filename or source. It leaves
+ * here as plain JSON like any model completion and goes back through
+ * `parseCandidates`, which refuses an unsafe name and re-brands the rest;
+ * every print site escapes it (`escapeForTerminal`).
  */
 export function createTemplateProvider(
   options: TemplateProviderOptions = {},

@@ -1141,6 +1141,15 @@ export async function benchmarkCommand(
         "--provider anthropic needs a key in TESSERA_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY); it is env-only on purpose",
       );
     }
+    // Egress (DESIGN §10.4): this path wires NO egress policy, on purpose for
+    // now. `composeRealPipeline` builds the generator without `egress`, so
+    // every prompt it renders is uncleared, and the anthropic adapter's
+    // `assertEgressCleared` throws `EgressRefusedError` before any request is
+    // built. Instance data therefore cannot leave through the benchmark: an
+    // anthropic benchmark fails closed at its first generation. Enabling it
+    // means threading the config file's consented `egress` section through
+    // `composeRealPipeline`, as `tess generate` does — not loosening the
+    // adapter.
     try {
       provider = createAnthropicProvider({
         fetch: nodeFetch,

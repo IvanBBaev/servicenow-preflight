@@ -334,6 +334,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cause chain. The message names only the upstream error's class and code
   (for example `(TypeError, UND_ERR_SOCKET)`), each matched against a closed
   identifier shape.
+- **Tessera's template provider keeps a blank `promptHash` pin, now
+  documented** (AIS-6) — the field is the hash of the frozen instruction
+  channel and the template sends none, so any other value would be refused by
+  the benchmark's drift check. A template run's manifest provenance records
+  the rendered prompt's full hash, never the provider's blank pin (now
+  tested). `tess benchmark --provider anthropic` wires no egress policy, so it
+  fails closed with `EgressRefusedError` before any request is sent.
 
 ## [0.5.0] - 2026-07-04
 
