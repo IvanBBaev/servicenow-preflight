@@ -697,7 +697,8 @@ file; `npm run check` runs `gen:site -- --check` and fails when it is stale.
   any other third-party package or version.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md). Contributions:
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](CONTRIBUTING.md). Community standards:
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Support
 

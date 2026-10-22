@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`CODE_OF_CONDUCT.md`** — the Contributor Covenant 2.1, verbatim; conduct
+  reports go to the maintainer via GitHub (no e-mail address). Linked from the
+  README next to `SECURITY.md` and `CONTRIBUTING.md`.
 - **Tessera reviewed-body binding for `run --live`** — a promoted unit
   spec's `.manifest.json` entry now carries
   `"review": { "bodySha256": "<hex>", "reviewer": "<id>" }`, written by the

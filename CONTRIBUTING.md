@@ -5,7 +5,8 @@ to discuss a larger change before you start on a pull request. Small fixes
 (typos, docs, an obvious bug) are welcome straight away.
 
 Security problems: see [SECURITY.md](SECURITY.md) — do not file them as public
-issues.
+issues. Everyone taking part is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Setup
 
