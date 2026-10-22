@@ -86,6 +86,18 @@ export const moduleRoles: Check = {
   name: NAME,
   description:
     "Navigator modules are gated by their own or their menu's roles. Advisory.",
+  meta: {
+    rule: "5.5",
+    severity: "advisory",
+    tables: ["sys_app_module", "sys_app_application"],
+    remediation:
+      "Add roles to each navigator module, or to its application menu, so modules are shown only to the users who can use them.",
+    verdicts: {
+      pass: "Every active module in scope is gated, or the scope ships none.",
+      warn: "A module shown to every user, an unreadable menu, no scope, or a trimmed read.",
+      fail: "Never — module visibility is a usability finding.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

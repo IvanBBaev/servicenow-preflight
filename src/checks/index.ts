@@ -57,6 +57,17 @@ export { testDrift } from "./test-drift.js";
 export const instanceUrlConfigured: Check = {
   name: "instance-url-configured",
   description: "A ServiceNow instance URL is configured and well-formed.",
+  meta: {
+    severity: "blocker",
+    tables: [],
+    remediation:
+      "Pass --instance <url>, set SNPF_INSTANCE, or set instanceUrl in the config file to the full https origin of the target instance (for example https://<instance>.service-now.com).",
+    verdicts: {
+      pass: "A well-formed https URL.",
+      warn: "A valid URL that is not https.",
+      fail: "No URL provided, or the value is not a valid URL.",
+    },
+  },
   run(ctx) {
     const url = ctx.instanceUrl?.trim();
     if (!url) {

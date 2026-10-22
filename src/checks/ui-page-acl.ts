@@ -61,6 +61,18 @@ function aclNameFor(row: Record<string, unknown>): string {
 export const uiPageAcl: Check = {
   name: NAME,
   description: "Every custom UI Page is protected by an active read ACL.",
+  meta: {
+    rule: "2.2",
+    severity: "blocker",
+    tables: ["sys_ui_page", "sys_security_acl"],
+    remediation:
+      "Create an active read ACL of type ui_page named for each UI Page endpoint (the URI without .do, for example x_<vendor>_<app>_<page>) and bind it to an app role.",
+    verdicts: {
+      pass: "Every UI Page in scope has an active read ACL, or the scope ships none.",
+      warn: "No scope set, or an ambiguous zero-row read.",
+      fail: "A UI Page has no active read ACL, or a read was security-trimmed.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

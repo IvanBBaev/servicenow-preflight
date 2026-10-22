@@ -169,6 +169,17 @@ function describeStates(sets: BatchSet[]): string {
 export const updateSetState: Check = {
   name: NAME,
   description: "The target update set is in a deployable state.",
+  meta: {
+    severity: "blocker",
+    tables: ["sys_update_set", "sys_update_xml"],
+    remediation:
+      "Mark the target update set (and every batched child set) Complete once it carries the intended changes; do not ship a set that is In progress, set to Ignore, or empty. Set updateSetId to the sys_id of the set you deploy.",
+    verdicts: {
+      pass: "Complete and carries at least one change.",
+      warn: "No update set id configured, or the instance is unreachable.",
+      fail: "Missing, still in progress, marked ignore, complete but with zero changes, or the read failed.",
+    },
+  },
   async run(ctx) {
     const updateSetId = ctx.updateSetId?.trim();
     if (!updateSetId) {

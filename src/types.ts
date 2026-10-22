@@ -90,10 +90,42 @@ export interface CheckResult {
   message: string;
 }
 
+/**
+ * Whether a check is designed to block a release. `"blocker"` checks may
+ * return `fail`; `"advisory"` checks return `warn` at most on a finding (by
+ * design, not by policy).
+ */
+export type CheckSeverity = "blocker" | "advisory";
+
+/**
+ * Optional, static metadata a check declares about itself. Consumed by the
+ * catalogue helpers (`describeChecks`), the SARIF reporter's `rules[]`
+ * and the `list` / `explain` CLI subcommands. Every field is optional, so a
+ * check without metadata keeps working everywhere.
+ */
+export interface CheckMeta {
+  /** Certification rule id from ci/certification/CHECKLIST.md ("1.1"); absent for operational checks. */
+  rule?: string;
+  /** "blocker" checks may return fail; "advisory" checks return warn at most (by design, not by policy). */
+  severity?: CheckSeverity;
+  /** Tables the check reads (used for offline eligibility, docs, SARIF). */
+  tables?: readonly string[];
+  /** One paragraph, plain text: what to change on the instance to make the check pass. */
+  remediation?: string;
+  /** Catalogue wording for each verdict. */
+  verdicts?: { pass: string; warn: string; fail: string };
+  /** Eligible to run against an offline update-set export. Default false. */
+  offline?: boolean;
+  /** Must run alone after the parallel batch. Default false. */
+  serial?: boolean;
+}
+
 /** A named, self-describing preflight check. */
 export interface Check {
   name: string;
   description: string;
+  /** Optional static metadata (rule id, severity, tables, remediation, verdict wording). */
+  meta?: CheckMeta;
   run(ctx: PreflightContext): CheckResult | Promise<CheckResult>;
 }
 

@@ -23,7 +23,9 @@ import type {
 
 export type {
   Check,
+  CheckMeta,
   CheckResult,
+  CheckSeverity,
   CheckStatus,
   CheckSelection,
   PreflightAuth,
@@ -146,6 +148,11 @@ export {
   formatGitHubAnnotations,
   formatGitHubAnnotationsAll,
 } from "./report/github.js";
+export {
+  describeChecks,
+  findCheck,
+  type CheckDescriptor,
+} from "./catalogue.js";
 export {
   defaultChecks,
   instanceUrlConfigured,

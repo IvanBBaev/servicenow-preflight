@@ -28,6 +28,17 @@ export const connectivityAuth: Check = {
   name: NAME,
   description:
     "The target instance is reachable and the credentials authenticate.",
+  meta: {
+    severity: "blocker",
+    tables: ["sys_user"],
+    remediation:
+      "Confirm the instance is reachable from the runner and configure credentials (SNPF_USER/SNPF_PASS, SNPF_TOKEN, SNPF_API_KEY, OAuth or a client certificate). A 403 means the account authenticates but lacks read rights: grant the CI account the roles it needs to read the tables the checks query.",
+    verdicts: {
+      pass: "Reachable and successfully authenticated.",
+      warn: "No credentials configured, or a 403 (authenticated but lacking rights).",
+      fail: "HTTP 401 / missing credentials, unreachable host, or an unexpected non-2xx response.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     // A mutual-TLS client cert can identify the caller on its own, so only warn
     // when neither a header credential nor a client cert is configured.

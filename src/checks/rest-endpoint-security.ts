@@ -42,6 +42,18 @@ export const restEndpointSecurity: Check = {
   name: NAME,
   description:
     "Scripted REST resources require authentication and ACL authorization.",
+  meta: {
+    rule: "1.3",
+    severity: "blocker",
+    tables: ["sys_ws_operation", "sys_security_acl"],
+    remediation:
+      "Tick Requires authentication and Requires ACL authorization on every Scripted REST resource and add a REST_Endpoint ACL bound to an app role for it, instead of relying on the Scripted REST External Default ACL.",
+    verdicts: {
+      pass: "Every resource authenticates and enforces ACL authorization, or the scope ships none.",
+      warn: "ACL authorization opted out, no backing REST_Endpoint ACL, or no scope set.",
+      fail: "A resource does not require authentication, or the read was security-trimmed.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

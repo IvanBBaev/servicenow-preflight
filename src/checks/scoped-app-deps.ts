@@ -219,6 +219,17 @@ export const scopedAppDeps: Check = {
   name: NAME,
   description:
     "The scoped application's dependencies are present on the target instance.",
+  meta: {
+    severity: "blocker",
+    tables: ["sys_store_app", "sys_app", "sys_plugins"],
+    remediation:
+      "Install or activate each required scoped app or plugin on the target instance and upgrade any below its declared minVersion; correct malformed requiredApps entries in the config.",
+    verdicts: {
+      pass: "Every dependency present, active, and up to date.",
+      warn: "None declared, entries malformed, or a version could not be read.",
+      fail: "A required app is missing, inactive, or below its declared minVersion.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const { apps, invalid, malformed } = parseRequiredApps(
       ctx.options?.requiredApps,

@@ -474,6 +474,15 @@ timeoutMs?, cicdPollIntervalMs?, cicdMaxPolls?, maxRows?, proxy?, noProxy? }`),
   variables; `noProxy` overrides `NO_PROXY`.
 - **`formatJUnit`** / **`formatSarif`**, and **`loadConfig`** /
   **`resolveAuthFromEnv`** / **`resolveTlsFromEnv`** (the CLI's own resolution).
+- **`describeChecks(checks, defaults?)`** → `CheckDescriptor[]` (`name`,
+  `description`, `meta`, `inDefaultSuite`), in the order given, and
+  **`findCheck(name)`** (searches the default suite plus `test-drift`). Every
+  bundled check declares an optional `meta` (`CheckMeta`): its certification
+  `rule` id, `severity` (`"blocker"` or `"advisory"` — advisory checks never
+  fail on a finding), the `tables` it reads, a `remediation` paragraph and the
+  `verdicts` wording for pass / warn / fail. `formatSarif(report, checks?)`
+  uses it to fill each SARIF rule's `shortDescription`, `fullDescription` and
+  `properties`; a check without `meta` keeps working everywhere.
 
 Checks _always_ call `ctx.http`, never `fetch` directly, so `createFakeSnClient`
 (an in-memory `SnClient`) unit-tests them with no network — seed table rows and

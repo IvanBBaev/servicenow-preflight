@@ -162,6 +162,23 @@ async function collectKeys(
 export const i18nCompleteness: Check = {
   name: NAME,
   description: "Translations are complete for the required languages.",
+  meta: {
+    severity: "blocker",
+    tables: [
+      "sys_translated_text",
+      "sys_ui_message",
+      "sys_documentation",
+      "sys_choice",
+      "sys_translated",
+    ],
+    remediation:
+      "Add the missing translations for each required language (UI messages, field labels, choice labels and translated text) in the app scope, or remove the language from the languages list if it is not supported.",
+    verdicts: {
+      pass: "Every required language is fully covered.",
+      warn: "No scope / languages set, a language with no baseline, or unreachable.",
+      fail: "One or more languages have gaps, or the instance returned an error.",
+    },
+  },
   async run(ctx: PreflightContext): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

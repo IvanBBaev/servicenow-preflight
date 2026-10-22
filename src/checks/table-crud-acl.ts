@@ -131,6 +131,18 @@ export const tableCrudAcl: Check = {
   name: NAME,
   description:
     "Every custom table has active table-level create, read, write and delete ACLs.",
+  meta: {
+    rule: "1.1",
+    severity: "blocker",
+    tables: ["sys_db_object", "sys_security_acl"],
+    remediation:
+      "Create active table-level create, read, write and delete ACLs for every custom table in the app scope and bind each to an app role (not public); an extended table may inherit from its parent, but declare its own ACLs when it needs different access.",
+    verdicts: {
+      pass: "Every table in scope has all four active ACLs, or the scope ships none.",
+      warn: "Only extended tables have gaps, no scope set, or an ambiguous zero-row read.",
+      fail: "A base table lacks an active CRUD ACL, or a read was security-trimmed.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

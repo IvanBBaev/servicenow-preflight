@@ -30,6 +30,18 @@ function result(status: CheckStatus, message: string): CheckResult {
 export const tableNamespace: Check = {
   name: NAME,
   description: "Every custom table is prefixed with the app's scope namespace.",
+  meta: {
+    rule: "6.1",
+    severity: "blocker",
+    tables: ["sys_db_object"],
+    remediation:
+      "Create custom tables inside the app scope so they carry the scope prefix (x_<vendor>_<app>_); a table without the prefix has to be recreated in scope and its data migrated.",
+    verdicts: {
+      pass: "Every table in scope is namespaced, or the scope ships none.",
+      warn: "No scope, the global scope, an unresolved sys_id, or an ambiguous zero-row read.",
+      fail: "A table in scope lacks the namespace prefix, or the read was security-trimmed.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

@@ -37,6 +37,17 @@ export const testDrift: Check = {
   name: NAME,
   description:
     "Every test on the current instance also exists on the promote target.",
+  meta: {
+    severity: "blocker",
+    tables: [],
+    remediation:
+      "Promote the missing ATF tests to the target instance (or deactivate them on the source), then run sync on both instances so the state manifests are current.",
+    verdicts: {
+      pass: "Every active source test exists on the promote target.",
+      warn: "No source/target manifest to compare, or the target only carries extra tests.",
+      fail: "A test active on the source is absent on the promote target.",
+    },
+  },
   run(ctx): CheckResult {
     const source = ctx.manifest;
     const target = ctx.driftTarget;

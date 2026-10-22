@@ -51,6 +51,18 @@ export const clientCallableAcl: Check = {
   name: NAME,
   description:
     "Every client-callable Script Include is gated by an active execute ACL.",
+  meta: {
+    rule: "1.2",
+    severity: "blocker",
+    tables: ["sys_script_include", "sys_security_acl"],
+    remediation:
+      "Create an active execute ACL of type client_callable_script_include named for each client-callable Script Include and bind it to an app role, or turn off Client callable on includes that the browser never calls.",
+    verdicts: {
+      pass: "Every client-callable Script Include is gated, or the scope ships none.",
+      warn: "No scope set, an unverifiable include name, or an ambiguous zero-row read.",
+      fail: "A Script Include lacks an active execute ACL, or the ACL read was security-trimmed.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

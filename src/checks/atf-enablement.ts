@@ -122,6 +122,17 @@ const MALFORMED_NOTE =
 export const atfEnablement: Check = {
   name: NAME,
   description: "ATF test execution is enabled on the target instance.",
+  meta: {
+    severity: "blocker",
+    tables: ["sys_properties", "sys_atf_agent"],
+    remediation:
+      "Set the sn_atf.runner.enabled system property to true on the target instance and, when browser tests are required, start a scheduled client test runner (Automated Test Framework > Run > Scheduled Client Test Runner).",
+    verdicts: {
+      pass: "ATF execution is enabled (and the required runner is online).",
+      warn: "No credentials configured, the property is not visible, or malformed options.",
+      fail: "The property is false or evaluates as false, or a required runner is offline.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     // With nothing to authenticate as, the reads below can only fail at the
     // transport layer — a configuration gap, not an instance problem. Warn and

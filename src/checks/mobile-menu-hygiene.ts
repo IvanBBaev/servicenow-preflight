@@ -39,6 +39,18 @@ function label(row: Record<string, unknown>): string {
 export const mobileMenuHygiene: Check = {
   name: NAME,
   description: "No mobile Application Menus/Modules ship in a non-mobile app.",
+  meta: {
+    rule: "5.1",
+    severity: "advisory",
+    tables: ["sys_app_application", "sys_app_module"],
+    remediation:
+      "Delete the mobile Application Menus and Modules the app does not use (they are created by default with each table) before publishing a non-mobile app.",
+    verdicts: {
+      pass: "The instance reports the scope ships no mobile menus or modules.",
+      warn: "Mobile menus or modules found in scope, no scope set, or an unreadable table.",
+      fail: "Never — packaging hygiene stays advisory.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

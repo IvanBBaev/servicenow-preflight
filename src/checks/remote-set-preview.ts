@@ -259,6 +259,17 @@ export const remoteSetPreview: Check = {
   name: NAME,
   description:
     "Retrieved update sets on the target instance have a clean preview.",
+  meta: {
+    severity: "blocker",
+    tables: ["sys_remote_update_set", "sys_update_preview_problem"],
+    remediation:
+      "On the target instance, preview every retrieved update set and resolve each preview problem (accept the remote update or skip it) before committing; re-preview a set whose preview is stale.",
+    verdicts: {
+      pass: "No pending retrieved update sets — nothing awaiting preview or commit.",
+      warn: "No credentials configured, a stale preview, or the list is security-trimmed.",
+      fail: "A retrieved set was never previewed, or preview problems remain unresolved.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     // With nothing to authenticate as, the reads below can only fail at the
     // transport layer — a configuration gap, not an instance problem. Warn and

@@ -89,6 +89,18 @@ export const uiActionGating: Check = {
   name: NAME,
   description:
     "Every active UI Action is gated by a condition or a Requires-role entry.",
+  meta: {
+    rule: "2.1",
+    severity: "blocker",
+    tables: ["sys_ui_action", "sys_ui_action_role"],
+    remediation:
+      "Give every active UI Action a Condition (for example a gs.hasRole or canWrite check) or a Requires role entry, so it is not shown to every user who can see the form or list.",
+    verdicts: {
+      pass: "Every active UI Action in scope is gated, or the scope ships none.",
+      warn: "No scope set, or an ambiguous zero-row read.",
+      fail: "A UI Action has no condition and no role, or a read was security-trimmed.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

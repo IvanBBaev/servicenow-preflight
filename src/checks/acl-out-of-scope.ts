@@ -43,6 +43,18 @@ function splitAclName(name: string): { table: string; field: string } {
 export const aclOutOfScope: Check = {
   name: NAME,
   description: "The app ships no ACLs onto tables outside its own scope.",
+  meta: {
+    rule: "1.6",
+    severity: "blocker",
+    tables: ["sys_security_acl", "sys_db_object"],
+    remediation:
+      "Remove the table-level and wildcard ACLs the app ships onto tables outside its scope; restrict access through the app's own tables, or limit the ACL to the app's own fields on the foreign table.",
+    verdicts: {
+      pass: "Every record ACL in scope targets the app's own tables, or it ships none.",
+      warn: "Only field ACLs for the app's own fields on foreign tables, no scope, or global.",
+      fail: "A table-level or wildcard ACL targets a foreign table, or the ACL read was trimmed.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

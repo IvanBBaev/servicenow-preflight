@@ -38,6 +38,18 @@ export const scriptFieldExposure: Check = {
   name: NAME,
   description:
     "Every script-typed column ships with an active field write ACL.",
+  meta: {
+    rule: "1.4",
+    severity: "blocker",
+    tables: ["sys_dictionary", "sys_security_acl"],
+    remediation:
+      "Add an active field-level write ACL (<table>.<column>) for every script-typed column in the app, restricted to an admin role, so non-admins cannot write executable code.",
+    verdicts: {
+      pass: "Every script column carries an active field write ACL, or the scope ships none.",
+      warn: "No scope set, or an ambiguous zero-row read.",
+      fail: "A script column has no active field write ACL, or a read was security-trimmed.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

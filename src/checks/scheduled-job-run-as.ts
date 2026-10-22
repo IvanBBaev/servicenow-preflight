@@ -29,6 +29,18 @@ function result(status: CheckStatus, message: string): CheckResult {
 export const scheduledJobRunAs: Check = {
   name: NAME,
   description: "Scheduled Jobs leave 'Run as' empty (run as system).",
+  meta: {
+    rule: "6.2",
+    severity: "advisory",
+    tables: ["sysauto_script"],
+    remediation:
+      "Clear the Run as field on each Scheduled Script Execution so it runs as system; a pinned user breaks on install when that user does not exist.",
+    verdicts: {
+      pass: "Every scheduled job in scope runs as system, or the scope ships none.",
+      warn: "A job pins 'Run as' to a named user, no scope set, or an unreadable table.",
+      fail: "Never — install hygiene stays advisory.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

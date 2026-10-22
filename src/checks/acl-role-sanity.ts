@@ -137,6 +137,17 @@ function roleRef(link: Record<string, unknown>): {
 export const aclRoleSanity: Check = {
   name: NAME,
   description: "Shipped ACLs and roles pass basic security sanity checks.",
+  meta: {
+    severity: "blocker",
+    tables: ["sys_security_acl", "sys_security_acl_role", "sys_user_role"],
+    remediation:
+      "Gate every create, write and delete ACL with a role, condition or script instead of leaving it public, and point each ACL role entry at a role that exists (create the role in the app or remove the stale reference).",
+    verdicts: {
+      pass: "Every ACL is gated and every referenced role resolves.",
+      warn: "No scope, a public-read ACL, inactive shipped ACLs, or unreadable tables.",
+      fail: "A mutating ACL is public-write, or references a role that does not exist.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

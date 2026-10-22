@@ -120,6 +120,18 @@ export const scriptHygiene: Check = {
   name: NAME,
   description:
     "No comment-only Fix Scripts and no duplicate-named Script Includes. Advisory.",
+  meta: {
+    rule: "4.10",
+    severity: "advisory",
+    tables: ["sys_script_fix", "sys_script_include"],
+    remediation:
+      "Delete Fix Scripts whose body is empty or only comments, and rename or remove Script Includes that share a name, so one include never shadows another.",
+    verdicts: {
+      pass: "No empty Fix Scripts and unique Script Include names, or the scope ships none.",
+      warn: "An empty Fix Script, a duplicated or shadowed Script Include name, or a trimmed read.",
+      fail: "Never — dead metadata is a best-practice finding.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

@@ -115,3 +115,40 @@ test("formatSarif returns syntactically valid, pretty-printed JSON", () => {
   // Pretty-printed (2-space indent) => contains newlines.
   assert.ok(out.includes("\n"));
 });
+
+test("formatSarif enriches rules[] for known checks only", () => {
+  const log = JSON.parse(
+    formatSarif(
+      report([
+        {
+          name: "table-crud-acl",
+          status: "fail",
+          message: "2 tables lack ACLs",
+        },
+        { name: "not-a-check", status: "warn", message: "unknown" },
+      ]),
+    ),
+  );
+  const [known, unknown] = log.runs[0].tool.driver.rules;
+  assert.equal(known.id, "table-crud-acl");
+  assert.match(known.shortDescription.text, /CRUD|create, read, write/);
+  assert.equal(typeof known.fullDescription.text, "string");
+  assert.equal(known.properties.rule, "1.1");
+  assert.equal(known.properties.severity, "blocker");
+  assert.deepEqual(known.properties.tables, [
+    "sys_db_object",
+    "sys_security_acl",
+  ]);
+  assert.deepEqual(unknown, { id: "not-a-check" });
+
+  const bare = { name: "bare", description: "Bare check.", run: () => ({}) };
+  const [rule] = JSON.parse(
+    formatSarif(report([{ name: "bare", status: "fail", message: "x" }]), [
+      bare,
+    ]),
+  ).runs[0].tool.driver.rules;
+  assert.deepEqual(rule, {
+    id: "bare",
+    shortDescription: { text: "Bare check." },
+  });
+});

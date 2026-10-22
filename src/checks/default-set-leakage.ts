@@ -157,6 +157,17 @@ export const defaultSetLeakage: Check = {
   name: NAME,
   description:
     "No work in the target scope is stranded in a Default update set.",
+  meta: {
+    severity: "blocker",
+    tables: ["sys_update_set", "sys_update_xml"],
+    remediation:
+      "Move the in-scope customer updates out of the Default update set into the deployable set (Move to Update Set on each sys_update_xml record), then re-run the check.",
+    verdicts: {
+      pass: "Every in-scope change is recorded in a deployable update set.",
+      warn: "No target scope configured, the list is security-trimmed, or an unexpected error.",
+      fail: "In-scope changes sit in a Default set and will not ship, or the read failed.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

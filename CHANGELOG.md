@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-check metadata** — `Check` gains an optional `meta` (`CheckMeta`: the
+  certification `rule` id, `severity` blocker/advisory, the `tables` read, a
+  `remediation` paragraph and the pass/warn/fail `verdicts` wording), filled on
+  all 23 default checks and `test-drift`. New `describeChecks` / `findCheck`
+  catalogue helpers. SARIF `rules[]` entries for known checks now carry
+  `shortDescription`, `fullDescription` (remediation) and `properties`
+  (`rule`, `severity`, `tables`); `formatSarif` takes an optional check list.
 - **Markdown reporter** — `--format markdown` renders a pull-request-comment
   table (heading with instance and verdict, bold summary, rows ordered
   fail → warn → pass, more than five passes folded into `<details>`); `--all`

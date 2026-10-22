@@ -122,6 +122,18 @@ export const portalRoles: Check = {
   name: NAME,
   description:
     "Service Portal widgets and pages carry roles unless deliberately public. Advisory.",
+  meta: {
+    rule: "2.6",
+    severity: "advisory",
+    tables: ["sp_widget", "sp_page"],
+    remediation:
+      "Add roles to each Service Portal widget and page, or document why it is deliberately public (for example a login or landing page) for the certification reviewer.",
+    verdicts: {
+      pass: "Every widget and page in scope carries a role, or the scope ships none.",
+      warn: "A role-less widget or page, public ones called out, no scope, or a trimmed read.",
+      fail: "Never — deliberate exceptions are a reviewer call.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const scope = ctx.scope?.trim();
     if (!scope) {

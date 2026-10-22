@@ -271,6 +271,17 @@ function describeRedTests(red: RedTest[]): string {
 export const atfRun: Check = {
   name: NAME,
   description: "The configured ATF test suite passes.",
+  meta: {
+    severity: "blocker",
+    tables: ["sys_atf_test_suite_result", "sys_atf_test_result"],
+    remediation:
+      "Open the failing test results on the instance, fix the application or the test until every configured suite runs green, then re-run. Configure the suites with atfSuites or a synced state manifest.",
+    verdicts: {
+      pass: "Every configured suite settled green.",
+      warn: "No suite configured, a run still pending, or a transient unreachable error.",
+      fail: "Any test is red — the message carries the failing assertion text.",
+    },
+  },
   async run(ctx): Promise<CheckResult> {
     const suiteIds = resolveSuiteIds(ctx);
     if (suiteIds.length === 0) {
