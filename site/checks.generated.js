@@ -234,5 +234,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "A password-typed property is not private, or the read was security-trimmed to nothing.",
     "warn": "A secret-like property name uses a non-password type, or no scope set.",
     "pass": "Every property in scope is private when password-typed, or the scope ships none."
+  },
+  {
+    "code": "27",
+    "name": "inactive-artifacts",
+    "tag": "scope",
+    "desc": "The app ships no inactive script, UI or notification artifacts — dead code that still lands on every install. Advisory — never fails.",
+    "fail": "Never — install hygiene stays advisory.",
+    "warn": "Inactive artifacts ship with the app, no scope set, or an unreadable table.",
+    "pass": "No inactive artifacts in any of the swept tables in scope."
   }
 ];

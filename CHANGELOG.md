@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`inactive-artifacts` check** — install hygiene (advisory): counts the
+  `active = false` Business Rules, Client Scripts, Script Includes, UI
+  Actions, UI Policies, Scheduled Jobs and Notifications the app ships in
+  scope and **warns** with per-table counts and the first names (dead code
+  still lands on every install and shows in the Store review). One metadata
+  read per table, `sys_id` and the name column only — no script bodies.
 - **`property-privacy` check** — adjacent to rule 1.7 (blocker): every
   active, password-typed `sys_properties` row in scope must be private
   (`is_private`), otherwise its value is exported in update sets and copied
