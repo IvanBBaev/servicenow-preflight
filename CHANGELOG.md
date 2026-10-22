@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Markdown reporter** — `--format markdown` renders a pull-request-comment
+  table (heading with instance and verdict, bold summary, rows ordered
+  fail → warn → pass, more than five passes folded into `<details>`); `--all`
+  adds a one-line roll-up and one block per instance. Exported as
+  `formatMarkdown` / `formatMarkdownAll`.
 - **Tessera (preview)** ships inside the package: a ServiceNow test framework
   that this package grows into at v1.0.0. Two new binaries: `tess` (doctor,
   preflight, resolve, impact, coverage, generate, `run --live`, status, confirm,

@@ -358,11 +358,19 @@ Selected with `--format` (or `--json`):
   entities escaped, so arbitrary ATF output can't break the document.
 - **`sarif`** — a SARIF 2.1.0 log with **one result per non-`pass` check** (`fail`
   → `error`, `warn` → `warning`) for code-scanning dashboards.
+- **`markdown`** — a GitHub-flavoured Markdown block for a pull-request comment:
+  a `###` heading with the instance and verdict, the bold summary, and a table
+  ordered fail → warn → pass (more than five pass rows fold into `<details>`).
+  Cell text is escaped (`|`, newlines, `<`/`>`, backticks), so a message cannot
+  break the table. With `--all`, a one-line roll-up (`**dev** ✅ · **prod** ❌`)
+  leads one block per instance.
 
 ```bash
 snpf --format junit > preflight-junit.xml
 snpf --format sarif > preflight.sarif
 snpf --json | jq '.summary'
+snpf --format markdown > preflight.md
+gh pr comment "$PR_NUMBER" --body-file preflight.md
 ```
 
 ## CI integration

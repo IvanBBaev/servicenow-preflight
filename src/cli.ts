@@ -4,6 +4,7 @@ import { runPreflight } from "./index.js";
 import { loadConfig, UsageError } from "./config.js";
 import { createSnClient } from "./http/client.js";
 import { formatJUnit, formatJUnitSuites } from "./report/junit.js";
+import { formatMarkdown, formatMarkdownAll } from "./report/markdown.js";
 import { formatSarif } from "./report/sarif.js";
 import {
   loadRegistry,
@@ -30,9 +31,15 @@ import type {
 } from "./types.js";
 
 /** Output format for the report. */
-type OutputFormat = "pretty" | "json" | "junit" | "sarif";
+type OutputFormat = "pretty" | "json" | "junit" | "sarif" | "markdown";
 
-const FORMATS: readonly OutputFormat[] = ["pretty", "json", "junit", "sarif"];
+const FORMATS: readonly OutputFormat[] = [
+  "pretty",
+  "json",
+  "junit",
+  "sarif",
+  "markdown",
+];
 
 /** Subcommand: run checks, sync a manifest, or compare two instances. */
 type Subcommand = "run" | "sync" | "drift";
@@ -285,7 +292,8 @@ Options:
       --config <path>    Path to a preflight config file
       --only <csv>       Run only these checks (comma-separated names)
       --skip <csv>       Skip these checks (comma-separated names)
-      --format <fmt>     Output: pretty (default), json, junit, sarif
+      --format <fmt>     Output: pretty (default), json, junit, sarif,
+                         markdown (a PR-comment table)
       --json             Shorthand for --format json
       --max-age <dur>    drift: fail if a compared manifest is older than <dur>.
                          Duration is <number><unit>, unit s|m|h|d|w (e.g. 7d,
@@ -331,9 +339,18 @@ const STATUS_ICON: Record<CheckStatus, string> = {
   fail: "✗",
 };
 
-/** Render one report in the requested format to a string. */
-function render(report: PreflightReport, format: OutputFormat): string {
+/**
+ * Render one report in the requested format to a string. `instance` names the
+ * target in formats that show it (markdown); the others ignore it.
+ */
+function render(
+  report: PreflightReport,
+  format: OutputFormat,
+  instance?: string,
+): string {
   switch (format) {
+    case "markdown":
+      return formatMarkdown(report, instance);
     case "json":
       return `${JSON.stringify(report, null, 2)}\n`;
     case "junit":
@@ -423,6 +440,10 @@ function renderAll(reports: NamedReport[], format: OutputFormat): string {
       ? `All ${reports.length} instance(s) passed.`
       : `Failed on: ${failed.join(", ")}`;
     return `${blocks.join("\n\n")}\n\n${rollup}\n`;
+  }
+  if (format === "markdown") {
+    // One Markdown document: a roll-up line, then a block per instance.
+    return formatMarkdownAll(reports);
   }
   if (format === "junit") {
     // One JUnit document: a <testsuite> per instance inside one <testsuites>.
@@ -623,7 +644,9 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
 
   const [firstReport] = reports;
   if (reports.length === 1 && firstReport) {
-    process.stdout.write(render(firstReport.report, args.format));
+    process.stdout.write(
+      render(firstReport.report, args.format, firstReport.name),
+    );
   } else {
     process.stdout.write(renderAll(reports, args.format));
   }

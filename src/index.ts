@@ -138,6 +138,11 @@ export {
 } from "./report/junit.js";
 export { formatSarif } from "./report/sarif.js";
 export {
+  formatMarkdown,
+  formatMarkdownAll,
+  type MarkdownOptions,
+} from "./report/markdown.js";
+export {
   defaultChecks,
   instanceUrlConfigured,
   connectivityAuth,

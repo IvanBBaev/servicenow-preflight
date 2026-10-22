@@ -145,6 +145,32 @@ test("CLI --format sarif emits a valid SARIF 2.1.0 log", () => {
   assert.equal(log.runs[0].tool.driver.name, "servicenow-preflight");
 });
 
+test("CLI --format markdown emits a Markdown table", () => {
+  const res = runCli([
+    "--only",
+    "instance-url-configured",
+    "--instance",
+    "https://dev12345.service-now.com",
+    "--format",
+    "markdown",
+  ]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /^### servicenow-preflight — preflight — ✅ passed/);
+  assert.match(res.stdout, /\| ✅ \| `instance-url-configured` \|/);
+});
+
+test("CLI accepts --format markdown before failing on a missing registry (exit 2)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-md-"));
+  try {
+    const res = runCli(["run", "--all", "--format", "markdown"], { cwd: dir });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /--all needs a registry/);
+    assert.doesNotMatch(res.stderr, /Unknown --format/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI --help prints usage and exits 0 without running checks", () => {
   const res = runCli(["--help"]);
   assert.equal(res.status, 0);
@@ -275,6 +301,48 @@ test("CLI run --all aggregates a report per instance", () => {
     assert.deepEqual(Object.keys(out.instances).sort(), ["dev", "prod"]);
     assert.equal(out.instances.dev.results[0].status, "pass");
     assert.equal(out.instances.prod.results[0].status, "pass");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run --all --format markdown renders a roll-up and a block per instance", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com", stage: "dev" },
+    prod: { url: "https://prod98765.service-now.com", stage: "prod" },
+  });
+  try {
+    const res = runCli(
+      [
+        "run",
+        "--all",
+        "--only",
+        "instance-url-configured",
+        "--format",
+        "markdown",
+      ],
+      { cwd: dir },
+    );
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /^\*\*dev\*\* ✅ · \*\*prod\*\* ✅\n/);
+    assert.match(res.stdout, /^### servicenow-preflight — dev — ✅ passed$/m);
+    assert.match(res.stdout, /^### servicenow-preflight — prod — ✅ passed$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI run <env> --format markdown names the instance in the heading", () => {
+  const dir = projectWithRegistry({
+    dev: { url: "https://dev12345.service-now.com", stage: "dev" },
+  });
+  try {
+    const res = runCli(
+      ["dev", "--only", "instance-url-configured", "--format", "markdown"],
+      { cwd: dir },
+    );
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /^### servicenow-preflight — dev — ✅ passed/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

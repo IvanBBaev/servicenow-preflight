@@ -764,7 +764,10 @@
       flag: "--only / --skip <csv>",
       desc: "Run only / skip these checks.",
     },
-    { flag: "--format <fmt>", desc: "pretty (default), json, junit, sarif." },
+    {
+      flag: "--format <fmt>",
+      desc: "pretty (default), json, junit, sarif, markdown.",
+    },
     { flag: "--json / -h", desc: "Shorthand for --format json / show help." },
   ];
   var ENVS = [
