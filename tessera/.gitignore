@@ -1,3 +1,8 @@
 # Transient; created and removed by scripts/build-lock.mjs on every
 # build/test/check. Never offer it to git.
 .tessera-build.lock
+
+# Runtime write journals of the vendored sn-client (SN_DOCS_DIR, default
+# `docs/instance` under the cwd). They record live instance operations, so
+# they stay local and are never committed.
+docs/instance/*/write-journal.*
