@@ -29,7 +29,7 @@
     "0123456789ABCDEF ·:#/-", // hex — a sys_id-style code flicker
   ];
 
-  /* ---- Content model: the twenty-three checks -------------------------------- */
+  /* ---- Content model: the twenty-four checks --------------------------------- */
   var CHECKS = [
     {
       code: "01",
@@ -238,6 +238,15 @@
       warn: "An empty Fix Script, a duplicated or shadowed Script Include name, or a trimmed read.",
       pass: "No empty Fix Scripts and unique Script Include names, or the scope ships none.",
     },
+    {
+      code: "24",
+      name: "hardcoded-identifiers",
+      tag: "scope",
+      desc: "No hard-coded sys_ids or non-instance URLs in in-scope scripts. Advisory.",
+      fail: "A script table read was security-trimmed.",
+      warn: "A hard-coded sys_id or URL, no scope, or an ambiguous zero-row read.",
+      pass: "No hard-coded sys_id or URL in any in-scope script, or the scope ships none.",
+    },
   ];
 
   var SCENARIOS = {
@@ -265,8 +274,10 @@
       "warn",
       "warn",
       "warn",
+      "warn",
     ],
     configured: [
+      "pass",
       "pass",
       "pass",
       "pass",
@@ -313,6 +324,7 @@
       "fail",
       "warn",
       "fail",
+      "warn",
       "warn",
       "warn",
     ],

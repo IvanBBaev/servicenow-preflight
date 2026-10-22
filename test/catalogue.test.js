@@ -32,12 +32,13 @@ test("every default check declares verdicts, severity and tables", () => {
   }
 });
 
-test("advisory checks are the five that never fail on a finding", () => {
+test("advisory checks are the six that never fail on a finding", () => {
   const advisory = defaultChecks
     .filter((check) => check.meta?.severity === "advisory")
     .map((check) => check.name)
     .sort();
   assert.deepEqual(advisory, [
+    "hardcoded-identifiers",
     "mobile-menu-hygiene",
     "module-roles",
     "portal-roles",
@@ -56,7 +57,7 @@ test("certification rule ids look like CHECKLIST headings", () => {
 
 test("describeChecks covers the default suite in order", () => {
   const described = describeChecks(defaultChecks);
-  assert.equal(described.length, 23);
+  assert.equal(described.length, 24);
   assert.deepEqual(
     described.map((d) => d.name),
     defaultChecks.map((c) => c.name),

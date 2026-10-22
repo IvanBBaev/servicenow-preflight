@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`hardcoded-identifiers` check** — rule 4.5 (advisory): scans active in-scope
+  server and client scripts for 32-hex sys_ids and `http(s)://` URLs that are
+  not `*.service-now.com` or `localhost`, skipping comments. Findings warn with
+  artifact, field and line (never the matched text); a security-trimmed script
+  table read fails closed.
 - **Shared script scanner** — `scanScripts` (`src/checks/script-scan.ts`) reads
   the script fields of active, in-scope artifacts and tests line patterns
   against every non-comment line (a small state machine skips `//` and

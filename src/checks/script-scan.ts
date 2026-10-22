@@ -212,3 +212,102 @@ export function describeHits(hits: readonly ScanHit[], dropped = 0): string {
     .join(", ");
   return dropped > 0 ? `${list}, … and ${dropped} more` : list;
 }
+
+/*
+ * Standard script sources (ADD-5-0 source table). Field names are the
+ * out-of-box dictionary names; `sys_ui_action.client_script` and the
+ * `sys_transform_script` label column are unverified against a live instance.
+ */
+
+const BUSINESS_RULES: ScriptSource = {
+  table: "sys_script",
+  nameField: "name",
+  scriptFields: ["script"],
+};
+const SCRIPT_INCLUDES: ScriptSource = {
+  table: "sys_script_include",
+  nameField: "name",
+  scriptFields: ["script"],
+};
+const SCHEDULED_SCRIPTS: ScriptSource = {
+  table: "sysauto_script",
+  nameField: "name",
+  scriptFields: ["script"],
+};
+const REST_OPERATIONS: ScriptSource = {
+  table: "sys_ws_operation",
+  nameField: "name",
+  scriptFields: ["operation_script"],
+};
+const TRANSFORM_MAPS: ScriptSource = {
+  table: "sys_transform_map",
+  nameField: "name",
+  scriptFields: ["script"],
+};
+// A transform script has no name of its own; label it by its map reference.
+const TRANSFORM_SCRIPTS: ScriptSource = {
+  table: "sys_transform_script",
+  nameField: "map",
+  scriptFields: ["script"],
+};
+const CLIENT_SCRIPTS: ScriptSource = {
+  table: "sys_script_client",
+  nameField: "name",
+  scriptFields: ["script"],
+};
+const UI_SCRIPTS: ScriptSource = {
+  table: "sys_ui_script",
+  nameField: "name",
+  scriptFields: ["script"],
+};
+const UI_POLICIES: ScriptSource = {
+  table: "sys_ui_policy",
+  nameField: "short_description",
+  scriptFields: ["script_true", "script_false"],
+};
+
+/** Sources whose script fields run on the server. */
+export const SERVER_SCRIPT_SOURCES: readonly ScriptSource[] = [
+  BUSINESS_RULES,
+  SCRIPT_INCLUDES,
+  { table: "sys_ui_action", nameField: "name", scriptFields: ["script"] },
+  SCHEDULED_SCRIPTS,
+  REST_OPERATIONS,
+  TRANSFORM_MAPS,
+  TRANSFORM_SCRIPTS,
+];
+
+/** Sources whose script fields run in the browser. */
+export const CLIENT_SCRIPT_SOURCES: readonly ScriptSource[] = [
+  CLIENT_SCRIPTS,
+  UI_SCRIPTS,
+  UI_POLICIES,
+  {
+    table: "sys_ui_action",
+    nameField: "name",
+    scriptFields: ["client_script"],
+  },
+];
+
+/** Every source, server and client, reading each table once. */
+export const ALL_SCRIPT_SOURCES: readonly ScriptSource[] = [
+  BUSINESS_RULES,
+  SCRIPT_INCLUDES,
+  {
+    table: "sys_ui_action",
+    nameField: "name",
+    scriptFields: ["script", "client_script"],
+  },
+  SCHEDULED_SCRIPTS,
+  REST_OPERATIONS,
+  TRANSFORM_MAPS,
+  TRANSFORM_SCRIPTS,
+  CLIENT_SCRIPTS,
+  UI_SCRIPTS,
+  UI_POLICIES,
+];
+
+/** The distinct table names of `sources`, in order (for `CheckMeta.tables`). */
+export function sourceTables(sources: readonly ScriptSource[]): string[] {
+  return [...new Set(sources.map((s) => s.table))];
+}

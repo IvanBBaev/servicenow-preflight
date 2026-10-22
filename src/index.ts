@@ -198,6 +198,7 @@ export {
   aclOutOfScope,
   moduleRoles,
   scriptHygiene,
+  hardcodedIdentifiers,
   testDrift,
 } from "./checks/index.js";
 

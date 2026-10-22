@@ -21,6 +21,7 @@ import { restEndpointSecurity } from "./rest-endpoint-security.js";
 import { scriptFieldExposure } from "./script-field-exposure.js";
 import { scheduledJobRunAs } from "./scheduled-job-run-as.js";
 import { mobileMenuHygiene } from "./mobile-menu-hygiene.js";
+import { hardcodedIdentifiers } from "./hardcoded-identifiers.js";
 
 export { connectivityAuth } from "./connectivity-auth.js";
 export { updateSetState } from "./update-set-state.js";
@@ -44,6 +45,7 @@ export { restEndpointSecurity } from "./rest-endpoint-security.js";
 export { scriptFieldExposure } from "./script-field-exposure.js";
 export { scheduledJobRunAs } from "./scheduled-job-run-as.js";
 export { mobileMenuHygiene } from "./mobile-menu-hygiene.js";
+export { hardcodedIdentifiers } from "./hardcoded-identifiers.js";
 export { testDrift } from "./test-drift.js";
 
 /**
@@ -146,4 +148,5 @@ export const defaultChecks: Check[] = [
   aclOutOfScope,
   moduleRoles,
   scriptHygiene,
+  hardcodedIdentifiers,
 ];
