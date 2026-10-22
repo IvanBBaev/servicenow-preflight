@@ -6,6 +6,12 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+  # The Tessera workspace has its own lockfile (tessera/package-lock.json).
+  - package-ecosystem: npm
+    directory: "/tessera"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
   # Keep the SHA-pinned GitHub Actions from rotting; Dependabot bumps the pin
   # and refreshes the trailing version comment.
   - package-ecosystem: github-actions
