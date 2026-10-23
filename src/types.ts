@@ -89,11 +89,51 @@ export interface PreflightContext {
   checkOptions?: Record<string, Record<string, unknown>>;
 }
 
+/**
+ * Where a finding lives: a record (table + sys_id + field, optionally a line in
+ * a script) or, for subjects that are not a single record, a logical id
+ * (`"scope/slug"`, `"instance"`, `"app:<scope>"`).
+ */
+export interface FindingLocation {
+  /** Table of the offending record, e.g. `"sys_script_include"`. */
+  table?: string;
+  /** `sys_id` of the offending record. */
+  sysId?: string;
+  /** Display label of the record (`name`, falling back to the sys_id). */
+  recordName?: string;
+  /** Field holding the offending value, e.g. `"script"`. */
+  field?: string;
+  /** 1-based line within `field`, for script findings. */
+  line?: number;
+  /** Identity of a subject that is not one record. */
+  logicalId?: string;
+}
+
+/** One record-level finding behind a check's verdict. */
+export interface Finding {
+  /** Stable fingerprint, `"f1:"` plus 16 hex digits (see `findingId`). */
+  id: string;
+  /** Check-local kind, e.g. `"pattern:gs.log"` or `"acl-missing:create"`. */
+  kind: string;
+  /** One line; never echoes secrets or matched source text. */
+  message: string;
+  /** Verdict of this finding; defaults to the row's status. */
+  status?: CheckStatus;
+  location?: FindingLocation;
+}
+
 /** Result produced by running a single check. */
 export interface CheckResult {
   name: string;
   status: CheckStatus;
   message: string;
+  /**
+   * The record-level findings behind the verdict, when the check reports them.
+   * Omitted when there are none; capped at 500 by the runner.
+   */
+  findings?: Finding[];
+  /** How many findings were dropped by the cap. */
+  findingsTruncated?: number;
 }
 
 /**

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Record-level findings (`Finding`)** — `CheckResult` gains optional
+  `findings` (`id`, `kind`, `message`, `status?`, `location?`) and
+  `findingsTruncated`. New exports `findingId` (stable `f1:` fingerprint over
+  check, kind, table, sys_id, field and logical id — never the line, record
+  name or message), `makeFinding`, `capFindings` and `MAX_FINDINGS` (500).
+  `runPreflight` sanitises returned findings and caps them; results without
+  findings are unchanged.
 - **Per-check options (`checks` config key)** — `PreflightConfig.checks` was
   declared but never read. Each entry is now shallow-merged over `options`
   for its check only (new `PreflightContext.checkOptions`, honoured by

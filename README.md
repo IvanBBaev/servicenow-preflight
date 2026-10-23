@@ -613,6 +613,17 @@ To add your own check, implement the `Check` interface (a `run(ctx)` returning a
 `CheckResult`, catching every `ctx.http` error) and pass a custom list to
 `runPreflight`, or register it in `defaultChecks` under [src/checks/](src/checks/).
 
+A `CheckResult` may also carry record-level **`findings`** (`Finding[]`): each
+has a stable `id` (`"f1:"` + 16 hex, from **`findingId(check, kind, location)`**),
+a check-local `kind`, a one-line `message`, an optional `status` and an optional
+`location` (`table`, `sysId`, `recordName`, `field`, `line`, `logicalId`). The
+id hashes the check, kind, table, sys_id, field and logical id only, so a moved
+line, a renamed record or reworded message keeps the same id. Build them with
+**`makeFinding`**; `runPreflight` validates what a check returns (malformed
+entries are dropped, a bad `id` is recomputed) and caps the list at
+`MAX_FINDINGS` (500), counting the overflow in `findingsTruncated`. `findings`
+is optional and omitted when empty, and never changes the row's status.
+
 ## Tessera (preview): `tess` and `tessera-mcp`
 
 The package also carries **Tessera**, a test framework for ServiceNow that runs

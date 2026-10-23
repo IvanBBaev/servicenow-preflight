@@ -12,6 +12,7 @@
  * @packageDocumentation
  */
 import { defaultChecks } from "./checks/index.js";
+import { sanitizeFindings } from "./findings.js";
 import type {
   Check,
   CheckResult,
@@ -28,6 +29,8 @@ export type {
   CheckSeverity,
   CheckStatus,
   CheckSelection,
+  Finding,
+  FindingLocation,
   PreflightAuth,
   PreflightContext,
   PreflightReport,
@@ -53,6 +56,12 @@ export {
   SnTruncationError,
   SnResponseError,
 } from "./http/client.js";
+export {
+  MAX_FINDINGS,
+  capFindings,
+  findingId,
+  makeFinding,
+} from "./findings.js";
 export { createFakeSnClient } from "./http/fake.js";
 export type { FakeFixtures, ForcedFailure } from "./http/fake.js";
 export {
@@ -253,9 +262,22 @@ function coerceResult(check: Check, produced: unknown): CheckResult {
   // by the summariser below, but `name` is what identifies the row, so a
   // missing one falls back to the check that produced it.
   const candidate = produced as CheckResult;
-  return typeof candidate.name === "string"
-    ? candidate
-    : { ...candidate, name: check.name };
+  const named =
+    typeof candidate.name === "string"
+      ? candidate
+      : { ...candidate, name: check.name };
+  if (
+    !Object.hasOwn(named, "findings") &&
+    !Object.hasOwn(named, "findingsTruncated")
+  ) {
+    return named;
+  }
+  const { findings: raw, findingsTruncated: prior, ...rest } = named;
+  const { findings, truncated } = sanitizeFindings(check.name, raw, prior);
+  const result: CheckResult = { ...rest };
+  if (findings.length > 0) result.findings = findings;
+  if (truncated > 0) result.findingsTruncated = truncated;
+  return result;
 }
 
 /**
