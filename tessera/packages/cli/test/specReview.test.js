@@ -14,6 +14,7 @@ import path from "node:path";
 import { readSpecInventory } from "@tessera/specs";
 
 import {
+  canonicalSpecBody,
   commandHelp,
   EXIT_CODES,
   formatUnreviewedSpecs,
@@ -102,7 +103,7 @@ describe("specBodySha256 — the canonical review digest", () => {
   });
 
   it("is stable: the same text always hashes the same", () => {
-    const body = "var x = 1;\r\n// é\n";
+    const body = "var x = 1;\n// é\n";
     assert.equal(specBodySha256(body), specBodySha256(`${body}`));
     assert.equal(
       specBodySha256(body),
@@ -110,10 +111,21 @@ describe("specBodySha256 — the canonical review digest", () => {
     );
   });
 
-  it("normalises nothing: CRLF, a BOM, trailing whitespace and NFC/NFD all differ", () => {
+  it("folds CRLF to LF and normalises nothing else: lone CR, BOM, trailing whitespace and NFC/NFD all differ", () => {
     const lf = "gs.info('a');\n";
+    assert.equal(specBodySha256("gs.info('a');\r\n"), specBodySha256(lf));
+    assert.equal(canonicalSpecBody("a\r\nb\r\n"), "a\nb\n");
+    // Idempotent: a CR run before an LF folds in one pass, so the digest of
+    // the canonical text is the digest of the text that runs.
+    assert.equal(canonicalSpecBody("a\r\r\nb"), "a\nb");
+    for (const raw of ["a\r\r\n", "\r\n\r\n", "x\ry\r\n", "\r"]) {
+      const once = canonicalSpecBody(raw);
+      assert.equal(canonicalSpecBody(once), once, JSON.stringify(raw));
+      assert.equal(specBodySha256(raw), specBodySha256(once));
+    }
+    assert.equal(canonicalSpecBody("x\ry"), "x\ry");
     const variants = [
-      "gs.info('a');\r\n",
+      "gs.info('a');\r",
       String.fromCharCode(0xfeff) + lf,
       "gs.info('a'); \n",
       "gs.info('a');",
@@ -121,7 +133,38 @@ describe("specBodySha256 — the canonical review digest", () => {
     for (const variant of variants) {
       assert.notEqual(specBodySha256(variant), specBodySha256(lf), variant);
     }
-    assert.notEqual(specBodySha256("// café\n"), specBodySha256("// café\n"));
+    assert.notEqual(
+      specBodySha256("// caf\u00e9\n"),
+      specBodySha256("// cafe\u0301\n"),
+    );
+  });
+
+  it("a CRLF checkout of an LF-reviewed body still loads, and projects LF", async () => {
+    const lf = "gs.info('one');\ngs.info('two');\n";
+    const crlf = lf.replace(/\n/g, "\r\n");
+    const { testsRoot } = await root([
+      { id: "U", path: "u.unit.ts", body: crlf, review: reviewOf(lf) },
+    ]);
+    const load = await loadLiveSpecs(testsRoot);
+    assert.equal(load.kind, "loaded");
+    assert.equal(load.specs[0].payload.script, lf);
+  });
+
+  it("tess review on a CRLF file records the digest an LF checkout matches", async () => {
+    const lf = "gs.info('x');\n";
+    const { base, testsRoot } = await root([
+      { id: "U", path: "u.unit.ts", body: lf.replace(/\n/g, "\r\n") },
+    ]);
+    const io = capture(base);
+    const code = await main(
+      ["review", "--tests-root", testsRoot, "--spec", "U", "--reviewer", "bob"],
+      io.context,
+    );
+    assert.equal(code, 0, io.stderr());
+    const manifest = await readManifest(testsRoot);
+    assert.equal(manifest.specs[0].review.bodySha256, specBodySha256(lf));
+    await fs.writeFile(path.join(testsRoot, "u.unit.ts"), lf);
+    assert.equal((await loadLiveSpecs(testsRoot)).kind, "loaded");
   });
 
   it("hashes exactly what loadLiveSpecs projects as the step script", async () => {
@@ -545,7 +588,11 @@ describe("tess review", () => {
     const text = commandHelp("review");
     assert.match(text, /--reviewer <id>\s+Who reviewed the bodies\. Required/);
     assert.match(text, /never\s+defaulted from git config or \$USER/);
-    assert.match(text, /no newline, BOM, whitespace or Unicode normalisation/);
+    assert.match(text, /each CRLF folded to LF/);
+    assert.match(
+      text,
+      /no other newline, BOM, whitespace or Unicode\s+normalisation/,
+    );
     assert.match(commandHelp("run"), /REFUSED \(TM-5 review\)/);
   });
 });

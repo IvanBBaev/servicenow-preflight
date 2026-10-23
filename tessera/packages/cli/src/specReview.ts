@@ -9,23 +9,43 @@
 // records the SHA-256 of the exact body the named reviewer approved, and the
 // live loader refuses any unit spec whose current body does not hash to it.
 //
-// CANONICAL FORM (one rule, used by both the writer and the checker): the
-// lowercase hex SHA-256 of the spec file's text as `readFile(file, "utf8")`
-// decodes it, re-encoded as UTF-8 — `sha256Hex` from `@tessera/core`. There is
-// deliberately NO normalisation: no newline folding (CRLF stays CRLF), no BOM
-// stripping, no trimming, no Unicode normalisation. The string hashed is the
-// string the gate inspects and the ATF step executes, so the digest covers
-// exactly what runs; any normalisation would make two different executable
-// bodies share one review, which is the gap this closes. The cost is that a
-// checkout that rewrites line endings invalidates the review — that fails
-// closed, and the remedy (re-review) is the safe one.
+// CANONICAL FORM (one rule, used by the reviewer, the checker and the
+// projection alike): `canonicalSpecBody` folds every CRLF line ending to LF —
+// precisely, every run of CRs that ends in an LF becomes one LF, which makes
+// the fold idempotent (a single-pass CRLF→LF would turn `\r\r\n` into `\r\n`
+// and a second pass into `\n`, so the digest would stop covering the text
+// that runs) — and changes nothing else; the review digest is the lowercase hex SHA-256 of that
+// canonical text re-encoded as UTF-8 — `sha256Hex` from `@tessera/core`. There
+// is NO other normalisation: a lone CR, a BOM, trailing whitespace and the
+// Unicode form all stay as they are and all change the digest.
+// A lone CR is a line terminator in ES5, so folding a CR run into the LF that
+// ends it changes no token outside a string literal, and either way the gate
+// parses, and the step runs, the folded text — never the raw file.
+//
+// Why CRLF and only CRLF: a checkout with `core.autocrlf` (or an editor) that
+// rewrites line endings must not void every review, and the tests root lives
+// in the operator's repo, where a `.gitattributes` rule shipped by Tessera
+// cannot reach. Folding stays safe because the canonical text is ALSO what
+// runs: `loadLiveSpecs` reads the body through `canonicalSpecBody`, gates that
+// text and projects that text as the ATF step script, and `tess review` gates
+// and hashes the same text. Two files that differ only in CRLF-vs-LF therefore
+// execute the identical script, so the digest still covers exactly what runs.
 
 import { sha256Hex } from "@tessera/core";
 import type { SpecReviewRead } from "@tessera/specs";
 
+/**
+ * The canonical text of a spec body (see the header): every run of CRs that
+ * ends in an LF folded to one LF, nothing else touched. Idempotent. The text the gate inspects, the
+ * digest covers and the ATF step executes.
+ */
+export function canonicalSpecBody(body: string): string {
+  return body.replace(/\r+\n/g, "\n");
+}
+
 /** The canonical review digest of a spec body (see the header). */
 export function specBodySha256(body: string): string {
-  return sha256Hex(body);
+  return sha256Hex(canonicalSpecBody(body));
 }
 
 /** Why a unit spec has no usable review for its current body. */

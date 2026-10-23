@@ -83,6 +83,7 @@ export type {
 export { formatRejectedSpecs, loadLiveSpecs } from "./liveSpecs.js";
 export type { LiveSpecLoad, RejectedSpec } from "./liveSpecs.js";
 export {
+  canonicalSpecBody,
   formatUnreviewedSpecs,
   specBodySha256,
   verifySpecReview,

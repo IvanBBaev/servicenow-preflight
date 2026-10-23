@@ -615,10 +615,12 @@ WHAT IT DOES
     "review": { "bodySha256": "<hex>", "reviewer": "<id>" }
   onto that spec's .manifest.json entry. Commit the manifest with the review.
 
-  The digest is the lowercase hex SHA-256 of the file's exact text as UTF-8 —
-  no newline, BOM, whitespace or Unicode normalisation — so it covers exactly
-  what the ATF step executes. Any edit, a CRLF conversion included, voids the
-  review: \`run --live\` then refuses the spec until it is reviewed again.
+  The digest is the lowercase hex SHA-256 of the file's text as UTF-8 with
+  each CRLF folded to LF — no other newline, BOM, whitespace or Unicode
+  normalisation. \`run --live\` projects that same LF text, so the digest
+  covers exactly what the ATF step executes, and a checkout that converts
+  line endings keeps the review. Any other edit voids it: \`run --live\` then
+  refuses the spec until it is reviewed again.
 
   The reviewer is an attestation recorded in a reviewed file, not
   authentication; git history over .manifest.json is the control on it.

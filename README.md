@@ -655,7 +655,9 @@ flag > env > `tessera.config.json` > default; `run`, `review`, `status`,
 env or the credential store, never from a config file.
 
 `tess run --live` refuses (exit `4`) any unit spec that has no `tess review`
-record or whose body no longer matches the reviewed hash.
+record or whose body no longer matches the reviewed hash. The hash is taken
+after CRLF line endings are folded to LF, and the live run executes that same
+folded text, so a checkout that converts line endings keeps the review.
 
 `tess generate --provider anthropic` sends redacted instance data to a third
 party, so it also needs an `egress` section in `tessera.config.json` that records

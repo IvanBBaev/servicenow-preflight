@@ -47,7 +47,7 @@ import {
   isInside,
   type RejectedSpec,
 } from "../liveSpecs.js";
-import { specBodySha256 } from "../specReview.js";
+import { canonicalSpecBody, specBodySha256 } from "../specReview.js";
 
 /** The `--json` result kind. */
 export const REVIEW_RESULT_KIND = "tessera.review";
@@ -193,7 +193,8 @@ export async function reviewCommand(
         `spec \`${spec.ref.id}\` resolves outside the tests root (${spec.ref.path})`,
       );
     }
-    const body = await readFile(file, "utf8");
+    // Gated and hashed in the canonical form `run --live` projects.
+    const body = canonicalSpecBody(await readFile(file, "utf8"));
     const verdict = gateUnitSpecBody(spec, body);
     if (!verdict.ok) {
       rejected.push({

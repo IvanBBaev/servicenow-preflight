@@ -80,10 +80,10 @@ export interface ManifestSpecEntry {
  * Who read a spec body, and exactly which body they read (PA-10 fix 3).
  *
  * `bodySha256` is lowercase hex SHA-256 over the spec file's text exactly as
- * `tess run --live` would project it: decoded as UTF-8 and hashed as UTF-8,
- * with NO normalisation — no newline, BOM, whitespace or Unicode folding. The
- * canonical form is the identity on purpose: the hash covers the bytes that
- * execute, so any change a script engine could observe needs a new review.
+ * `tess run --live` projects it: decoded as UTF-8, every CRLF folded to LF
+ * (and nothing else — no lone-CR, BOM, whitespace or Unicode folding), hashed
+ * as UTF-8. The live run executes that same folded text, so the hash covers
+ * exactly what runs and any other change needs a new review.
  *
  * `reviewer` is the identity given by `--reviewer` on `tess review`. It is an
  * attestation recorded in a reviewed diff, not an authentication.

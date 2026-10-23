@@ -40,7 +40,11 @@ import {
 import { readSpecInventory, type InventoryNote } from "@tessera/specs";
 import { untrusted, unwrapUntrusted, type TestSpec } from "@tessera/types";
 
-import { verifySpecReview, type UnreviewedSpec } from "./specReview.js";
+import {
+  canonicalSpecBody,
+  verifySpecReview,
+  type UnreviewedSpec,
+} from "./specReview.js";
 
 /** The unwrap boundary: what a cleared body is about to cross. */
 const PROJECTION_BOUNDARY =
@@ -138,7 +142,9 @@ export async function loadLiveSpecs(testsRoot: string): Promise<LiveSpecLoad> {
         `spec \`${spec.ref.id}\` resolves outside the tests root (${spec.ref.path})`,
       );
     }
-    const body = await readFile(file, "utf8");
+    // The canonical text (CRLF folded to LF) is what is gated, hashed against
+    // the review AND projected, so the digest covers exactly what runs.
+    const body = canonicalSpecBody(await readFile(file, "utf8"));
     const verdict = gateUnitSpecBody(spec, body);
     if (!verdict.ok) {
       rejected.push({

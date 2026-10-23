@@ -54,8 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spec's `.manifest.json` entry now carries
   `"review": { "bodySha256": "<hex>", "reviewer": "<id>" }`, written by the
   new `tess review --tests-root <dir> --spec <id>... --reviewer <id>`. The
-  digest is the lowercase hex SHA-256 of the body's exact UTF-8 text (no
-  newline, BOM, whitespace or Unicode normalisation), and `--reviewer` is
+  digest is the lowercase hex SHA-256 of the body's UTF-8 text with CRLF
+  line endings folded to LF (no other newline, BOM, whitespace or Unicode
+  normalisation), and `--reviewer` is
   required and never defaulted from git config or `$USER`. `tess review`
   holds each body to the TM-3 gate first and records nothing if one fails
   (exit `4`). `tess run --live` refuses (exit `4`, `REFUSED (TM-5 review)`,
@@ -273,6 +274,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tessera review digests survive a CRLF checkout** (PA-10) — `tess review`
+  and `tess run --live` now read a unit spec through one canonical form,
+  `canonicalSpecBody` (exported from `@tessera/cli`), which folds every run
+  of CRs ending in an LF to one LF and touches nothing else. The folded text
+  is what the TM-3 gate inspects, what the digest covers and what the ATF
+  step executes, so a body reviewed on an LF checkout still matches on a
+  `core.autocrlf` checkout and the digest still covers exactly what runs. A
+  lone CR, a BOM, trailing whitespace and the Unicode form still change the
+  digest. Reviews recorded before this change over a body that contained
+  CRLF no longer match and must be recorded again.
 - Test suite is hermetic against the host's proxy environment: every test
   process preloads `test/setup/hermetic-env.js`, which scrubs `SNPF_PROXY`,
   `HTTPS_PROXY`, `NO_PROXY` and their variants, so a machine exporting them no
