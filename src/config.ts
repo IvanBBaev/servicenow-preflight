@@ -39,7 +39,11 @@ export interface PreflightConfig {
   updateSetId?: string;
   /** Check selection: run only these / skip these (by check name). */
   select?: CheckSelection;
-  /** Per-check options, keyed by check name. */
+  /**
+   * Per-check options, keyed by check name: each entry is shallow-merged over
+   * {@link options} for that check only (`PreflightContext.checkOptions`).
+   * Unknown check names are a usage error.
+   */
   checks?: Record<string, Record<string, unknown>>;
   /** Arbitrary options forwarded to checks. */
   options?: Record<string, unknown>;
@@ -491,14 +495,54 @@ function assertSafeQueryInputs(config: PreflightConfig): void {
   };
   check(config.scope, "Config scope");
   check(config.updateSetId, "Config updateSetId");
-  const langs = config.options?.languages;
-  const codes = Array.isArray(langs)
-    ? langs
-    : typeof langs === "string"
-      ? langs.split(",")
-      : [];
-  for (const code of codes) check(code, "Config language");
-  check(config.options?.baseLanguage, "Config baseLanguage");
+  // Per-check entries override `options` for their check, so they carry the
+  // same query-bound keys and get the same load-time guard.
+  const optionSets: Array<[Record<string, unknown> | undefined, string]> = [
+    [config.options, "Config"],
+    ...Object.entries(config.checks ?? {}).map(
+      ([name, opts]): [Record<string, unknown>, string] => [
+        opts,
+        `Config checks["${name}"]`,
+      ],
+    ),
+  ];
+  for (const [opts, prefix] of optionSets) {
+    const langs = opts?.languages;
+    const codes = Array.isArray(langs)
+      ? langs
+      : typeof langs === "string"
+        ? langs.split(",")
+        : [];
+    for (const code of codes) check(code, `${prefix} language`);
+    check(opts?.baseLanguage, `${prefix} baseLanguage`);
+  }
+}
+
+/**
+ * Reject a `checks` config value that is not an object of objects: a JSON
+ * config file is untyped at runtime, and a non-object entry would otherwise be
+ * spread into a check's options as nonsense (a string spreads to indexed
+ * characters) instead of surfacing as the config mistake it is.
+ */
+function assertCheckOptionsConfigType(config: PreflightConfig): void {
+  const value: unknown = config.checks;
+  if (value === undefined) return;
+  if (!isPlainObject(value)) {
+    throw new UsageError(
+      `Config checks must be an object mapping check names to option objects, got ${describeJson(value)}.`,
+    );
+  }
+  for (const [name, opts] of Object.entries(value)) {
+    if (!isPlainObject(opts)) {
+      throw new UsageError(
+        `Config checks["${name}"] must be an object of options, got ${describeJson(opts)}.`,
+      );
+    }
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -636,6 +680,7 @@ export async function loadConfig(
   assertProxyConfigTypes(config);
   assertBaselineConfigType(config);
   assertSeverityConfigType(config);
+  assertCheckOptionsConfigType(config);
 
   // Fail closed at load time on config values that would inject into an encoded
   // query (SR-1), after env fallbacks so env-supplied values are covered too.

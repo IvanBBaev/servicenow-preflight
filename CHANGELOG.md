@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-check options (`checks` config key)** — `PreflightConfig.checks` was
+  declared but never read. Each entry is now shallow-merged over `options`
+  for its check only (new `PreflightContext.checkOptions`, honoured by
+  `runPreflight`); a non-object value or an unknown check name is a usage
+  error (exit 2), and per-check `languages` / `baseLanguage` get the same
+  SR-1 load-time query-injection guard as `options`.
 - **`notification-conditions` check** — install hygiene (advisory): an
   active `sysevent_email_action` in scope that is sent on update, has no
   event, no condition and no advanced condition fires on every update of

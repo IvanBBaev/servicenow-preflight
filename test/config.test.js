@@ -890,3 +890,52 @@ test("loadConfig still succeeds when .env is simply absent", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("loadConfig keeps a well-formed per-check options map", async () => {
+  const loaded = await loadWithConfig({
+    checks: { "i18n-completeness": { languages: ["fr"] } },
+  });
+  assert.deepEqual(loaded.config.checks, {
+    "i18n-completeness": { languages: ["fr"] },
+  });
+});
+
+test("loadConfig rejects a non-object checks value", async () => {
+  await assert.rejects(
+    loadWithConfig({ checks: ["i18n-completeness"] }),
+    (err) =>
+      err instanceof UsageError &&
+      /Config checks must be an object/.test(err.message),
+  );
+});
+
+test("loadConfig rejects a non-object per-check entry", async () => {
+  await assert.rejects(
+    loadWithConfig({ checks: { "i18n-completeness": "fr" } }),
+    (err) =>
+      err instanceof UsageError &&
+      /checks\["i18n-completeness"\] must be an object/.test(err.message),
+  );
+});
+
+test("loadConfig rejects an operator in a per-check language (SR-1)", async () => {
+  // A per-check entry overrides `options` for its check, so it must not be a
+  // way around the load-time query-injection guard.
+  await assert.rejects(
+    loadWithConfig({
+      checks: { "i18n-completeness": { languages: ["fr", "de^ORx=1"] } },
+    }),
+    (err) =>
+      err instanceof UsageError &&
+      /checks\["i18n-completeness"\] language/.test(err.message),
+  );
+});
+
+test("loadConfig rejects an operator in a per-check baseLanguage (SR-1)", async () => {
+  await assert.rejects(
+    loadWithConfig({
+      checks: { "i18n-completeness": { baseLanguage: "en^ORx=1" } },
+    }),
+    (err) => err instanceof UsageError && /baseLanguage/.test(err.message),
+  );
+});

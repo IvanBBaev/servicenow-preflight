@@ -1119,3 +1119,45 @@ test("CLI sync writes the manifest and reports what it pulled", async () => {
     await instance.stop();
   }
 });
+
+test("CLI rejects per-check options naming an unknown check (exit 2)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-cli-"));
+  const cfgPath = join(dir, "preflight.config.json");
+  writeFileSync(
+    cfgPath,
+    JSON.stringify({
+      instanceUrl: "https://dev12345.service-now.com",
+      checks: { "i18n-completness": { languages: ["fr"] } },
+    }),
+  );
+  try {
+    const res = runCli(["--config", cfgPath, "--format", "json"], { cwd: dir });
+    assert.equal(res.status, 2);
+    assert.match(
+      res.stderr,
+      /Config checks names unknown check\(s\): i18n-completness/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI accepts per-check options for a known check", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-cli-"));
+  const cfgPath = join(dir, "preflight.config.json");
+  writeFileSync(
+    cfgPath,
+    JSON.stringify({
+      instanceUrl: "https://dev12345.service-now.com",
+      select: { only: ["instance-url-configured"] },
+      checks: { "instance-url-configured": { note: "x" } },
+    }),
+  );
+  try {
+    const res = runCli(["--config", cfgPath, "--format", "json"], { cwd: dir });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(JSON.parse(res.stdout).results[0].status, "pass");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -749,6 +749,17 @@ async function runOneInstance(
     policy,
     defaultChecks.map((c) => c.name),
   );
+  // Per-check options naming an unknown check are a typo, not a no-op.
+  const checkOptions = loaded.config.checks;
+  if (checkOptions) {
+    const known = [...defaultChecks, testDrift].map((c) => c.name);
+    const unknown = Object.keys(checkOptions).filter((n) => !known.includes(n));
+    if (unknown.length > 0) {
+      throw new UsageError(
+        `Config checks names unknown check(s): ${unknown.join(", ")}. Run "servicenow-preflight list".`,
+      );
+    }
+  }
   const offByPolicy = policySkips(policy);
   const baseSkip = args.skip ?? loaded.config.select?.skip;
   const select = {
@@ -802,6 +813,7 @@ async function runOneInstance(
     manifest,
     select,
     options: loaded.config.options,
+    ...(checkOptions ? { checkOptions } : {}),
   };
 
   // Post-processing order: runPreflight → policy → baseline. Policy expresses

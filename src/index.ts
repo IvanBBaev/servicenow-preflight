@@ -257,6 +257,19 @@ function coerceResult(check: Check, produced: unknown): CheckResult {
 }
 
 /**
+ * The context one check runs with: `ctx` itself, or — when
+ * `ctx.checkOptions` has an entry for the check — a copy whose `options` are
+ * `ctx.options` with that entry shallow-merged over them. Own properties only,
+ * so a check named like an `Object.prototype` member never picks up a
+ * prototype value.
+ */
+function contextFor(ctx: PreflightContext, check: Check): PreflightContext {
+  const own = ctx.checkOptions;
+  if (!own || !Object.hasOwn(own, check.name)) return ctx;
+  return { ...ctx, options: { ...ctx.options, ...own[check.name] } };
+}
+
+/**
  * Run a set of preflight checks against a target ServiceNow instance and
  * return an aggregate report. The run is considered failing (`ok: false`)
  * if any check returns a `fail` status.
@@ -311,7 +324,9 @@ export async function runPreflight(
   const results: CheckResult[] = [];
   for (const check of selected) {
     try {
-      results.push(coerceResult(check, await check.run(ctx)));
+      results.push(
+        coerceResult(check, await check.run(contextFor(ctx, check))),
+      );
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       results.push({

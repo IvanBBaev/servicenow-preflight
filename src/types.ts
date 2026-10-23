@@ -81,6 +81,12 @@ export interface PreflightContext {
   select?: CheckSelection;
   /** Arbitrary options forwarded from the CLI or a programmatic caller. */
   options?: Record<string, unknown>;
+  /**
+   * Per-check options, keyed by check name. {@link runPreflight} shallow-merges
+   * the entry for a check over {@link options} and hands that check the merged
+   * `options`; every other check sees `options` unchanged.
+   */
+  checkOptions?: Record<string, Record<string, unknown>>;
 }
 
 /** Result produced by running a single check. */

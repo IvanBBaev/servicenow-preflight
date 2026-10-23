@@ -313,3 +313,44 @@ test("SnTruncationError is re-exported from the package root (WP-A extra)", () =
   assert.equal(err.cap, 10000);
   assert.equal(err.name, "SnTruncationError");
 });
+
+test("runPreflight merges a check's checkOptions entry over options for that check only", async () => {
+  const seen = {};
+  const probe = (name) => ({
+    name,
+    description: name,
+    run: async (c) => {
+      seen[name] = c.options;
+      return { name, status: "pass", message: "ok" };
+    },
+  });
+  const report = await runPreflight(
+    ctx({
+      options: { a: 1, b: 2 },
+      checkOptions: { first: { b: 3, c: 4 } },
+    }),
+    [probe("first"), probe("second")],
+  );
+  assert.equal(report.ok, true);
+  assert.deepEqual(seen.first, { a: 1, b: 3, c: 4 });
+  assert.deepEqual(seen.second, { a: 1, b: 2 });
+});
+
+test("runPreflight ignores inherited checkOptions keys", async () => {
+  let seen;
+  const report = await runPreflight(
+    ctx({ options: { a: 1 }, checkOptions: {} }),
+    [
+      {
+        name: "toString",
+        description: "named like an Object.prototype member",
+        run: async (c) => {
+          seen = c.options;
+          return { name: "toString", status: "pass", message: "ok" };
+        },
+      },
+    ],
+  );
+  assert.equal(report.ok, true);
+  assert.deepEqual(seen, { a: 1 });
+});
