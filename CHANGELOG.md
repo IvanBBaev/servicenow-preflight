@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Timeouts and cancellation** — `--timeout <dur>` (or
+  `SNPF_CHECK_TIMEOUT`) fails a check that runs too long and moves on;
+  `--run-timeout <dur>` bounds the whole run; durations accept `ms`. Ctrl-C
+  aborts in-flight requests, still prints the partial report and exits `130`.
+  Library: `runPreflight(ctx, checks, { signal, timeoutMs, runTimeoutMs })`,
+  a per-check `PreflightContext.signal`, `{ signal }` on every `SnClient` call
+  (`SnCallOptions`) and `withSignal(client, signal)`. An aborted request
+  rejects with `SnNetworkError`, its `cause` the abort reason.
 - **`loadConfig(cwd, { env, dotenv })`** — resolve config and credentials
   from an injected environment (default `process.env`) and an optional `.env`
   (`dotenv`, default `true`). The result carries the merged `env`, and

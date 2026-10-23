@@ -10,6 +10,7 @@ import {
   SnHttpError,
   SnResponseError,
   SnTruncationError,
+  withSignal,
 } from "../../build/http/client.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
 
@@ -1443,4 +1444,153 @@ test("SN-6: a 429 Retry-After given as an HTTP-date is honoured", async () => {
   const rec = await client().table("incident").get("z");
   assert.deepEqual(rec, { sys_id: "z" });
   assert.equal(hits, 2);
+});
+
+// F-X-4: cancellation. A transport that never answers must not hang a caller
+// whose signal aborts, and the CI/CD poll must stop between polls.
+
+test("a pre-aborted signal rejects before any request is sent", async () => {
+  handler = () => fakeResponse({ body: { result: [] } });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    client().table("incident").query({}, { signal: controller.signal }),
+    (err) =>
+      err instanceof SnNetworkError &&
+      /was aborted/.test(err.message) &&
+      err.cause?.name === "AbortError",
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("aborting mid-request rejects promptly even if the transport hangs", async () => {
+  handler = () => new Promise(() => {});
+  const controller = new AbortController();
+  const started = Date.now();
+  const pending = client().request("GET", "/api/now/table/incident", {
+    signal: controller.signal,
+  });
+  setTimeout(() => controller.abort(), 5);
+  await assert.rejects(pending, (err) => {
+    assert.ok(err instanceof SnNetworkError);
+    assert.match(err.message, /was aborted/);
+    return true;
+  });
+  assert.ok(Date.now() - started < 1000);
+});
+
+test("the per-request timeout still applies when a signal is passed", async (t) => {
+  handler = () => new Promise(() => {});
+  const controller = new AbortController();
+  // AbortSignal.timeout is unref'd and the fake transport holds no socket, so
+  // keep the event loop alive for the timer to fire.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
+  await assert.rejects(
+    client({ timeoutMs: 20 })
+      .table("incident")
+      .get("x", undefined, { signal: controller.signal }),
+    (err) =>
+      err instanceof SnNetworkError && /timed out after 20ms/.test(err.message),
+  );
+});
+
+test("cicd.runTestSuite stops polling when its signal aborts", async () => {
+  const controller = new AbortController();
+  handler = (url) => {
+    if (url.includes("/progress/")) controller.abort();
+    return fakeResponse({
+      body: {
+        result: {
+          status: 1,
+          links: { progress: { id: "p1", url: "/api/sn_cicd/progress/p1" } },
+        },
+      },
+    });
+  };
+  await assert.rejects(
+    client().cicd.runTestSuite("suite-1", {
+      signal: controller.signal,
+    }),
+    (err) => err instanceof SnNetworkError && /was aborted/.test(err.message),
+  );
+});
+
+test("cicd.runTestSuite's poll sleep is cut short by an abort", async () => {
+  const controller = new AbortController();
+  handler = () =>
+    fakeResponse({
+      body: {
+        result: {
+          status: 1,
+          links: { progress: { id: "p1", url: "/api/sn_cicd/progress/p1" } },
+        },
+      },
+    });
+  const started = Date.now();
+  const pending = client({ cicdPollIntervalMs: 60_000 }).cicd.runTestSuite(
+    "suite-1",
+    { signal: controller.signal },
+  );
+  setTimeout(() => controller.abort(), 10);
+  await assert.rejects(pending, SnNetworkError);
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(calls.length, 1);
+});
+
+test("a 429 Retry-After wait is cut short by an abort", async () => {
+  const controller = new AbortController();
+  handler = () => {
+    setTimeout(() => controller.abort(), 5);
+    return fakeResponse({ status: 429, headers: { "retry-after": "60" } });
+  };
+  const started = Date.now();
+  await assert.rejects(
+    client().request("GET", "/api/now/table/incident", {
+      signal: controller.signal,
+    }),
+    (err) => err instanceof SnNetworkError && /was aborted/.test(err.message),
+  );
+  assert.ok(Date.now() - started < 1000);
+});
+
+test("withSignal binds a signal to every call and merges a caller's own", async () => {
+  const seen = [];
+  const inner = {
+    table: (name) => ({
+      get: (id, params, opts) => (seen.push(["get", name, opts]), null),
+      query: (params, opts) => (seen.push(["query", name, opts]), []),
+      queryWithMeta: (params, opts) => (
+        seen.push(["meta", name, opts]),
+        { rows: [], securityTrimmed: false }
+      ),
+    }),
+    cicd: {
+      runTestSuite: (id, opts) => (seen.push(["cicd", id, opts]), {}),
+    },
+    request: (method, path, opts) => (
+      seen.push(["request", path, opts]),
+      { status: 200, body: null }
+    ),
+  };
+  const bound = new AbortController();
+  const own = new AbortController();
+  const http = withSignal(inner, bound.signal);
+  http.table("t").get("1");
+  http.table("t").query({ a: "b" });
+  http.table("t").queryWithMeta(undefined, { signal: own.signal });
+  http.cicd.runTestSuite("s");
+  http.request("GET", "/x", { query: { q: "1" } });
+  assert.deepEqual(
+    seen.map(([kind]) => kind),
+    ["get", "query", "meta", "cicd", "request"],
+  );
+  for (const [, , opts] of seen) assert.ok(opts.signal instanceof AbortSignal);
+  assert.equal(seen[0][2].signal, bound.signal);
+  assert.deepEqual(seen[4][2].query, { q: "1" });
+  // The merged signal follows either source.
+  const merged = seen[2][2].signal;
+  assert.equal(merged.aborted, false);
+  own.abort();
+  assert.equal(merged.aborted, true);
 });

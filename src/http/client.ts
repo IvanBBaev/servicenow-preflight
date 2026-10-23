@@ -19,6 +19,7 @@ import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { isIP, type Socket } from "node:net";
 import { createSign } from "node:crypto";
 
+import { abortReason, anySignal, raceAbort, sleep } from "./abort.js";
 import { openProxyTunnel, parseProxyUrl, resolveProxy } from "./proxy.js";
 
 /**
@@ -121,20 +122,27 @@ export interface SnTable {
   get(
     sysId: string,
     params?: Record<string, string>,
+    opts?: SnCallOptions,
   ): Promise<Record<string, unknown> | null>;
   /**
    * Query records with ServiceNow `sysparm_*` params (e.g.
    * `{ sysparm_query: "active=true", sysparm_limit: "10" }`). Resolves to the
    * matching rows (possibly empty).
    */
-  query(params?: Record<string, string>): Promise<Record<string, unknown>[]>;
+  query(
+    params?: Record<string, string>,
+    opts?: SnCallOptions,
+  ): Promise<Record<string, unknown>[]>;
   /**
    * Like {@link SnTable.query}, but also surfaces the `X-Total-Count` header and
    * a `securityTrimmed` signal (see {@link TableQueryResult}). Same pagination
    * and `sysparm_*` contract as `query`; use it when the caller must tell "no
    * matching rows" apart from "rows hidden by ACLs".
    */
-  queryWithMeta(params?: Record<string, string>): Promise<TableQueryResult>;
+  queryWithMeta(
+    params?: Record<string, string>,
+    opts?: SnCallOptions,
+  ): Promise<TableQueryResult>;
 }
 
 /** Result of kicking off / reading a CI/CD test suite run. */
@@ -159,7 +167,10 @@ export interface CicdTestSuiteResult {
 /** CI/CD (Automated Test Framework) surface. */
 export interface SnCicd {
   /** Run an ATF test suite by `sys_id` and resolve to its status/results. */
-  runTestSuite(suiteSysId: string): Promise<CicdTestSuiteResult>;
+  runTestSuite(
+    suiteSysId: string,
+    opts?: SnCallOptions,
+  ): Promise<CicdTestSuiteResult>;
 }
 
 /** A raw REST response: the HTTP status, the parsed JSON body, and headers. */
@@ -173,8 +184,18 @@ export interface SnRawResponse {
   headers?: Record<string, string>;
 }
 
+/** Per-call options every {@link SnClient} method accepts. */
+export interface SnCallOptions {
+  /**
+   * Cancels the call: an in-flight request is aborted and the call rejects
+   * with {@link SnNetworkError} (its `cause` is the abort reason). Combines
+   * with the client's own per-request timeout.
+   */
+  signal?: AbortSignal;
+}
+
 /** Options for a low-level {@link SnClient.request} call. */
-export interface SnRequestOptions {
+export interface SnRequestOptions extends SnCallOptions {
   query?: Record<string, string>;
   body?: unknown;
 }
@@ -205,8 +226,8 @@ export interface SnClient {
 
 /** Base class for every error this client raises. */
 export class SnError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = new.target.name;
   }
 }
@@ -222,8 +243,8 @@ export class SnAuthError extends SnError {
 
 /** The instance could not be reached (DNS, connection, timeout). */
 export class SnNetworkError extends SnError {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
   }
 }
 
@@ -1057,11 +1078,6 @@ function withStableOrder(rawQuery: string | undefined): string {
   return query ? `${query}^ORDERBYsys_id` : "ORDERBYsys_id";
 }
 
-/** Sleep for `ms` milliseconds (used to pace CI/CD progress polling). */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
  * How many times a 429 (rate-limited) response is retried, honouring its
  * `Retry-After`, before the request gives up and the 429 surfaces as an
@@ -1293,6 +1309,8 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     allowRefresh: boolean,
   ): Promise<RawResult> {
     const url = buildUrl(origin, path, opts.query);
+    const caller = opts.signal;
+    if (caller?.aborted) throw abortedError(caller);
     const headers: Record<string, string> = { Accept: "application/json" };
     const cred = await authProvider.header();
     if (cred) headers[cred.name] = cred.value;
@@ -1302,7 +1320,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       // CC-31: never follow redirects on an API call — a 3xx to an SSO/login
       // host would otherwise re-send the Authorization header off-instance.
       redirect: "error",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: anySignal([AbortSignal.timeout(timeoutMs), caller]),
     };
     if (opts.body !== undefined) {
       headers["Content-Type"] = "application/json";
@@ -1316,14 +1334,16 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       let resHeaders: Record<string, string>;
       let text: string;
       try {
-        const res = await transport(url, init);
+        // Race the signal too, so a transport that ignores it cannot hang us.
+        const res = await raceAbort(transport(url, init), init.signal);
         status = res.status;
         statusText = res.statusText;
         resHeaders = res.headers;
         // CC-7: read the body inside the try — a mid-body ECONNRESET or timeout
         // rejects here, and must surface as SnNetworkError rather than escape.
-        text = await res.text();
+        text = await raceAbort(res.text(), init.signal);
       } catch (cause) {
+        if (caller?.aborted) throw abortedError(caller);
         const err = cause instanceof Error ? cause : new Error(String(cause));
         const timedOut =
           err.name === "TimeoutError" || err.name === "AbortError";
@@ -1339,7 +1359,11 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       // An exhausted budget falls through and becomes an SnHttpError below.
       if (status === 429 && rateLimitAttempts < RATE_LIMIT_MAX_RETRIES) {
         rateLimitAttempts += 1;
-        await sleep(retryAfterMs(resHeaders["retry-after"]));
+        try {
+          await sleep(retryAfterMs(resHeaders["retry-after"]), caller);
+        } catch {
+          throw abortedError(caller as AbortSignal);
+        }
         continue;
       }
 
@@ -1391,6 +1415,13 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     }
   }
 
+  /** The {@link SnNetworkError} a caller-cancelled call rejects with. */
+  function abortedError(signal: AbortSignal): SnNetworkError {
+    return new SnNetworkError(`Request to ${origin} was aborted.`, {
+      cause: abortReason(signal),
+    });
+  }
+
   /** Build the {@link SnHttpError} for a non-2xx result, noting 429 retries. */
   function httpErrorFor(res: RawResult): SnHttpError {
     const detail = extractErrorDetail(res.body) ?? `HTTP ${res.status}`;
@@ -1439,24 +1470,32 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
    * out of polls). Returns the last payload seen — terminal when possible, the
    * latest pending snapshot otherwise (the caller maps that to a `warn`).
    */
-  async function pollCicdRun(payload: unknown): Promise<unknown> {
+  async function pollCicdRun(
+    payload: unknown,
+    signal: AbortSignal | undefined,
+  ): Promise<unknown> {
     let current = payload;
     let consecutiveErrors = 0;
     for (let attempt = 0; attempt < maxPolls; attempt++) {
       if (CICD_TERMINAL.has(cicdStatus(current))) return current;
       const url = cicdProgressUrl(current);
       if (!url) return current;
-      await sleep(pollIntervalMs);
+      try {
+        await sleep(pollIntervalMs, signal);
+      } catch {
+        throw abortedError(signal as AbortSignal);
+      }
       // CC-13: a suite that is genuinely running can answer a progress poll with
       // a transient 5xx, or an early 404 before its progress record is
       // committed. Tolerate a bounded run of consecutive failures rather than
       // abandon a suite that keeps executing server-side.
       let res: RawResult;
       try {
-        res = await requestOk("GET", url);
+        res = await requestOk("GET", url, { signal });
         consecutiveErrors = 0;
       } catch (err) {
         if (
+          !signal?.aborted &&
           (err instanceof SnHttpError || err instanceof SnNetworkError) &&
           (consecutiveErrors += 1) <= CICD_POLL_ERROR_TOLERANCE
         ) {
@@ -1485,7 +1524,8 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       // Shared by `query` and `queryWithMeta`: return the visible rows plus the
       // pre-trim `X-Total-Count` (SN-1), applying the same `sysparm_*` contract.
       async function runQuery(
-        params?: Record<string, string>,
+        params: Record<string, string> | undefined,
+        signal: AbortSignal | undefined,
       ): Promise<TableQueryResult> {
         // When the caller bounds the result set (`sysparm_limit`), honour it
         // verbatim — a single page, their offset and ordering included. An
@@ -1493,6 +1533,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         if (paramPresent(params?.sysparm_limit)) {
           const res = await requestOk("GET", base, {
             query: { ...params, sysparm_limit: params.sysparm_limit.trim() },
+            signal,
           });
           return toQueryResult(
             asRows(unwrapResult(res.body)),
@@ -1526,6 +1567,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
               sysparm_limit: String(pageSize),
               sysparm_offset: String(offset),
             },
+            signal,
           });
           if (totalCount === undefined) {
             totalCount = parseTotalCount(res.headers);
@@ -1559,11 +1601,11 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       }
 
       return {
-        async get(sysId, params) {
+        async get(sysId, params, opts) {
           const res = await sendRequest(
             "GET",
             `${base}/${encodeURIComponent(sysId)}`,
-            { query: params },
+            { query: params, signal: opts?.signal },
             true,
           );
           if (res.status === 404) return null;
@@ -1576,10 +1618,10 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           }
           return null;
         },
-        async query(params) {
-          return (await runQuery(params)).rows;
+        async query(params, opts) {
+          return (await runQuery(params, opts?.signal)).rows;
         },
-        async queryWithMeta(params) {
+        async queryWithMeta(params, opts) {
           // `securityTrimmed` is derived from `totalCount > rows.length`, which
           // only means "ACLs hid rows" when the client fetched every page. Under
           // a caller-pinned `sysparm_limit` a short result is just the page
@@ -1596,21 +1638,51 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
                 `limit to auto-paginate, or use query() if you only need a page.`,
             );
           }
-          return runQuery(params);
+          return runQuery(params, opts?.signal);
         },
       };
     },
     cicd: {
-      async runTestSuite(suiteSysId: string): Promise<CicdTestSuiteResult> {
+      async runTestSuite(
+        suiteSysId: string,
+        opts?: SnCallOptions,
+      ): Promise<CicdTestSuiteResult> {
         // Kick off the (asynchronous) suite run, then poll its progress link
         // until the run reaches a terminal state before reading the result.
         const res = await requestOk("POST", `/api/sn_cicd/testsuite/run`, {
           query: { test_suite_sys_id: suiteSysId },
+          signal: opts?.signal,
         });
-        const settled = await pollCicdRun(unwrapResult(res.body));
+        const settled = await pollCicdRun(unwrapResult(res.body), opts?.signal);
         return normalizeCicdRun(settled);
       },
     },
     request,
+  };
+}
+
+/**
+ * A view of `client` whose every call is also cancelled by `signal` (combined
+ * with any signal the caller passes). The runner hands each check one bound to
+ * its own timeout, so existing checks get cancellation without code changes.
+ */
+export function withSignal(client: SnClient, signal: AbortSignal): SnClient {
+  const merge = <T extends SnCallOptions>(opts?: T): T =>
+    ({ ...opts, signal: anySignal([signal, opts?.signal]) }) as T;
+  return {
+    table(name) {
+      const table = client.table(name);
+      return {
+        get: (sysId, params, opts) => table.get(sysId, params, merge(opts)),
+        query: (params, opts) => table.query(params, merge(opts)),
+        queryWithMeta: (params, opts) =>
+          table.queryWithMeta(params, merge(opts)),
+      };
+    },
+    cicd: {
+      runTestSuite: (suiteSysId, opts) =>
+        client.cicd.runTestSuite(suiteSysId, merge(opts)),
+    },
+    request: (method, path, opts) => client.request(method, path, merge(opts)),
   };
 }

@@ -196,16 +196,31 @@ function cell(row: Record<string, unknown>, name: string): string {
 }
 
 /**
- * Per-run cache of scope resolutions, keyed on the {@link PreflightContext} the
- * checks share (so a scope is resolved ONCE per run, even across checks — the
- * ACL check and the i18n check that name the same scope trigger a single
- * `sys_scope` read). The value is the in-flight Promise, so concurrent callers
+ * Per-run cache of scope resolutions, keyed on the run's root
+ * {@link PreflightContext} (see {@link linkRunContext}), so a scope is resolved
+ * ONCE per run, even across checks: the ACL check and the i18n check that
+ * name the same scope trigger a single `sys_scope` read. The value is the in-flight Promise, so concurrent callers
  * dedupe rather than racing two identical reads.
  */
 const scopeCache = new WeakMap<
   PreflightContext,
-  Map<string, Promise<ResolvedScope>>
+  Map<string, { promise: Promise<ResolvedScope>; signal?: AbortSignal }>
 >();
+
+/**
+ * The run-level context each per-check context derives from. The runner gives
+ * every check its own context (its signal, its bound client, its options), so
+ * the scope cache keys on the shared root instead.
+ */
+const runRoots = new WeakMap<PreflightContext, PreflightContext>();
+
+/** Record that the per-check context `child` belongs to the run of `root`. */
+export function linkRunContext(
+  child: PreflightContext,
+  root: PreflightContext,
+): void {
+  runRoots.set(child, runRoots.get(root) ?? root);
+}
 
 /** Look the scope up in `sys_scope` (by sys_id OR scope name) and build its clause. */
 async function lookupScope(
@@ -250,15 +265,18 @@ export function resolveScope(
   scope: string,
 ): Promise<ResolvedScope> {
   const input = String(scope).trim();
-  let perCtx = scopeCache.get(ctx);
+  const key = runRoots.get(ctx) ?? ctx;
+  let perCtx = scopeCache.get(key);
   if (!perCtx) {
     perCtx = new Map();
-    scopeCache.set(ctx, perCtx);
+    scopeCache.set(key, perCtx);
   }
-  let inflight = perCtx.get(input);
-  if (!inflight) {
-    inflight = lookupScope(ctx.http, input);
-    perCtx.set(input, inflight);
+  let entry = perCtx.get(input);
+  // A lookup started under a check that was since cancelled is not reused: it
+  // rejects (or already did) with that check's abort, not this caller's.
+  if (!entry || entry.signal?.aborted) {
+    entry = { promise: lookupScope(ctx.http, input), signal: ctx.signal };
+    perCtx.set(input, entry);
   }
-  return inflight;
+  return entry.promise;
 }

@@ -13,6 +13,9 @@
  */
 import { defaultChecks } from "./checks/index.js";
 import { sanitizeFindings } from "./findings.js";
+import { anySignal } from "./http/abort.js";
+import { withSignal } from "./http/client.js";
+import { linkRunContext } from "./http/query.js";
 import type {
   Check,
   CheckResult,
@@ -44,12 +47,14 @@ export type {
   SnTls,
   SnRawResponse,
   SnRequestOptions,
+  SnCallOptions,
   SnClientConfig,
   CicdTestSuiteResult,
   TableQueryResult,
 } from "./http/client.js";
 export {
   createSnClient,
+  withSignal,
   SnError,
   SnAuthError,
   SnNetworkError,
@@ -321,6 +326,107 @@ function contextFor(ctx: PreflightContext, check: Check): PreflightContext {
   return { ...ctx, options: { ...ctx.options, ...own[check.name] } };
 }
 
+/** Cancellation and time budgets for one {@link runPreflight} call. */
+export interface RunPreflightOptions {
+  /** Aborts the run: the running check is cut short, the rest do not start. */
+  signal?: AbortSignal;
+  /** Per-check budget in milliseconds; a check over it becomes a `fail` row. */
+  timeoutMs?: number;
+  /** Budget for the whole run in milliseconds; behaves like `signal` aborting. */
+  runTimeoutMs?: number;
+}
+
+/** Reject a budget that is not a positive, finite number of milliseconds. */
+function assertBudget(name: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new RangeError(
+      `runPreflight: ${name} must be a positive number of milliseconds (got ${String(value)}).`,
+    );
+  }
+}
+
+/** Why the run stopped: "Run aborted" or the run-timeout wording. */
+type RunStop = () => string;
+
+/**
+ * Run one check under its own AbortController, linked to the run signal and
+ * bounded by `timeoutMs`. Never rejects: a throw, a timeout and a run abort all
+ * become `fail` rows. The timer is always cleared, so it never holds the
+ * process open past the run — but it does keep a check that hangs on a bare
+ * promise from letting the event loop drain before the verdict.
+ */
+async function runCheck(
+  ctx: PreflightContext,
+  check: Check,
+  runSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+  stopReason: RunStop,
+): Promise<CheckResult> {
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const base = contextFor(ctx, check);
+  const checkCtx: PreflightContext = {
+    ...base,
+    signal: anySignal([base.signal, signal]) ?? signal,
+    http: withSignal(base.http, signal),
+  };
+  linkRunContext(checkCtx, ctx);
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // Removes the run-abort listener once this check is over.
+  const listeners = new AbortController();
+  const cut = new Promise<CheckResult>((resolve) => {
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        resolve({
+          name: check.name,
+          status: "fail",
+          message: `Check timed out after ${timeoutMs} ms (--timeout).`,
+        });
+        controller.abort(
+          new DOMException(
+            `Check timed out after ${timeoutMs} ms.`,
+            "TimeoutError",
+          ),
+        );
+      }, timeoutMs);
+    }
+    runSignal?.addEventListener(
+      "abort",
+      () => {
+        resolve({
+          name: check.name,
+          status: "fail",
+          message: `${stopReason()} while this check was running.`,
+        });
+        controller.abort(runSignal.reason);
+      },
+      { once: true, signal: listeners.signal },
+    );
+  });
+  const work = (async (): Promise<CheckResult> => {
+    try {
+      return coerceResult(check, await check.run(checkCtx));
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return {
+        name: check.name,
+        status: "fail",
+        message: `Check threw an error: ${detail}`,
+      };
+    }
+  })();
+  try {
+    return await Promise.race([work, cut]);
+  } finally {
+    clearTimeout(timer);
+    // A check that finished on its own keeps its signal un-aborted: aborting it
+    // now would reject any request it left floating.
+    listeners.abort();
+  }
+}
+
 /**
  * Run a set of preflight checks against a target ServiceNow instance and
  * return an aggregate report. The run is considered failing (`ok: false`)
@@ -328,11 +434,21 @@ function contextFor(ctx: PreflightContext, check: Check): PreflightContext {
  *
  * `ctx.select` (only / skip by check name) filters the supplied `checks`
  * before they run.
+ *
+ * `opts` adds cancellation and time budgets (see {@link RunPreflightOptions}).
+ * Each check gets `ctx.signal` and a `ctx.http` bound to it; a check over
+ * `timeoutMs` fails with "Check timed out after … ms", and an aborted or
+ * timed-out run fails the checks it did not finish. The report is always
+ * produced. Invalid budgets throw a `RangeError`.
  */
 export async function runPreflight(
   ctx: PreflightContext,
   checks: Check[] = defaultChecks,
+  opts: RunPreflightOptions = {},
 ): Promise<PreflightReport> {
+  assertBudget("timeoutMs", opts.timeoutMs);
+  assertBudget("runTimeoutMs", opts.runTimeoutMs);
+
   // Reject an ambiguous check set: two checks sharing a `name` make selection
   // (only/skip), result mapping, and reporting ambiguous. Fail closed rather
   // than run a set we cannot reason about.
@@ -393,20 +509,47 @@ export async function runPreflight(
   // Run each check in isolation: a check that throws or rejects must not abort
   // the whole run. Convert the throw into a `fail` result and keep going so the
   // report still renders and every other check still reports.
-  const results: CheckResult[] = [];
-  for (const check of selected) {
-    try {
-      results.push(
-        coerceResult(check, await check.run(contextFor(ctx, check))),
+  //
+  // A run budget or a caller abort stops the run fail-closed: the running check
+  // is cut short and every check that has not started yet becomes a `fail` row,
+  // so the report still lists the whole selection.
+  let runTimedOut = false;
+  let runTimer: ReturnType<typeof setTimeout> | undefined;
+  let runController: AbortController | undefined;
+  if (opts.runTimeoutMs !== undefined) {
+    const controller = new AbortController();
+    const budget = opts.runTimeoutMs;
+    runTimer = setTimeout(() => {
+      runTimedOut = true;
+      controller.abort(
+        new DOMException(`Run timed out after ${budget} ms.`, "TimeoutError"),
       );
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      results.push({
-        name: check.name,
-        status: "fail",
-        message: `Check threw an error: ${detail}`,
-      });
+    }, budget);
+    runController = controller;
+  }
+  const runSignal = anySignal([opts.signal, runController?.signal]);
+  const stopReason: RunStop = () =>
+    runTimedOut
+      ? `Run timed out after ${String(opts.runTimeoutMs)} ms (--run-timeout)`
+      : "Run aborted";
+
+  const results: CheckResult[] = [];
+  try {
+    for (const check of selected) {
+      if (runSignal?.aborted) {
+        results.push({
+          name: check.name,
+          status: "fail",
+          message: `${stopReason()} before this check started.`,
+        });
+        continue;
+      }
+      results.push(
+        await runCheck(ctx, check, runSignal, opts.timeoutMs, stopReason),
+      );
     }
+  } finally {
+    clearTimeout(runTimer);
   }
 
   // Summarise fail-closed: an unrecognised status is untrustworthy for a gate,

@@ -1231,3 +1231,140 @@ test("CLI accepts per-check options for a known check", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// F-X-4: --timeout / --run-timeout / SNPF_CHECK_TIMEOUT and SIGINT.
+
+/** A loopback instance that accepts every request and never answers it. */
+async function startHangingInstance() {
+  let received = 0;
+  const waiters = [];
+  const server = createHttpServer(() => {
+    received += 1;
+    for (const wake of waiters.splice(0)) wake();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}`,
+    /** Resolves once the server has seen at least one request. */
+    requested: () =>
+      received > 0 ? Promise.resolve() : new Promise((r) => waiters.push(r)),
+    async stop() {
+      server.closeAllConnections();
+      server.close();
+      await once(server, "close");
+    },
+  };
+}
+
+for (const [label, args, env] of [
+  ["--timeout abc", ["--timeout", "abc"], {}],
+  ["--timeout=0s", ["--timeout=0s"], {}],
+  ["--run-timeout=-5s", ["--run-timeout=-5s"], {}],
+  ["SNPF_CHECK_TIMEOUT=abc", [], { SNPF_CHECK_TIMEOUT: "abc" }],
+]) {
+  test(`CLI rejects an invalid budget (${label}) with exit 2`, () => {
+    const res = runCli(
+      [
+        ...args,
+        "--only",
+        "instance-url-configured",
+        "--instance",
+        "https://dev12345.service-now.com",
+      ],
+      { env },
+    );
+    assert.equal(res.status, 2);
+    assert.match(
+      res.stderr,
+      /Invalid (--timeout|--run-timeout|SNPF_CHECK_TIMEOUT)/,
+    );
+  });
+}
+
+test("CLI --timeout fails a check whose instance never answers", async () => {
+  const instance = await startHangingInstance();
+  try {
+    const res = await runCliAsync(
+      [
+        "--instance",
+        instance.url,
+        "--only",
+        "connectivity-auth",
+        "--timeout",
+        "200ms",
+        "--format",
+        "json",
+      ],
+      { env: { SNPF_USER: "u", SNPF_PASS: "p" } },
+    );
+    assert.equal(res.status, 1, res.stderr);
+    const row = reportOf(res.stdout).results.find(
+      (r) => r.name === "connectivity-auth",
+    );
+    assert.equal(row.status, "fail");
+    assert.match(row.message, /Check timed out after 200 ms \(--timeout\)/);
+  } finally {
+    await instance.stop();
+  }
+});
+
+test("CLI SNPF_CHECK_TIMEOUT sets the per-check budget", async () => {
+  const instance = await startHangingInstance();
+  try {
+    const res = await runCliAsync(
+      [
+        "--instance",
+        instance.url,
+        "--only",
+        "connectivity-auth",
+        "--format",
+        "json",
+      ],
+      { env: { SNPF_USER: "u", SNPF_PASS: "p", SNPF_CHECK_TIMEOUT: "150ms" } },
+    );
+    assert.equal(res.status, 1, res.stderr);
+    assert.match(res.stdout, /Check timed out after 150 ms/);
+  } finally {
+    await instance.stop();
+  }
+});
+
+test("CLI exits 130 on SIGINT and still prints the partial report", async () => {
+  const instance = await startHangingInstance();
+  const cleanEnv = { ...process.env };
+  for (const key of Object.keys(cleanEnv)) {
+    if (key.startsWith("SNPF_")) delete cleanEnv[key];
+  }
+  const child = spawn(
+    process.execPath,
+    [
+      BIN,
+      "--instance",
+      instance.url,
+      "--only",
+      "connectivity-auth",
+      "--format",
+      "json",
+    ],
+    { cwd: tmpdir(), env: { ...cleanEnv, SNPF_USER: "u", SNPF_PASS: "p" } },
+  );
+  let stdout = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  try {
+    await instance.requested();
+    child.kill("SIGINT");
+    const [status] = await once(child, "close");
+    assert.equal(status, 130);
+    const row = reportOf(stdout).results.find(
+      (r) => r.name === "connectivity-auth",
+    );
+    assert.equal(row.status, "fail");
+    assert.match(row.message, /Run aborted while this check was running/);
+  } finally {
+    child.kill("SIGKILL");
+    await instance.stop();
+  }
+});

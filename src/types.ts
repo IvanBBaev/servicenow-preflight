@@ -44,6 +44,13 @@ export interface PreflightContext {
    */
   http: SnClient;
   /**
+   * Cancels the current check. The runner sets it for every check — it aborts
+   * when the check's `timeoutMs` budget runs out or the whole run is aborted —
+   * and `http` is already bound to it. Checks doing long CPU work can poll
+   * `signal.aborted`.
+   */
+  signal?: AbortSignal;
+  /**
    * Target scope, when relevant. Accepts EITHER a scoped-app `sys_scope` sys_id
    * (32 lowercase hex) OR a scope name (e.g. `x_acme_app`) — the two are
    * resolved to one canonical `sys_scope` filter once per run (cached and shared

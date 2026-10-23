@@ -8,6 +8,7 @@ import {
   defaultChecks,
   SnError,
   SnTruncationError,
+  resolveScope,
 } from "../build/index.js";
 import { createFakeSnClient } from "../build/http/fake.js";
 
@@ -416,4 +417,183 @@ test("runPreflight ignores inherited checkOptions keys", async () => {
   );
   assert.equal(report.ok, true);
   assert.deepEqual(seen, { a: 1 });
+});
+
+// F-X-4: per-check and run timeouts, external cancellation.
+
+/** A check that never settles on its own, but records the signal it was given. */
+function hangingCheck(id, seen = {}) {
+  return {
+    name: id,
+    description: id,
+    run: (c) => {
+      seen.signal = c.signal;
+      return new Promise(() => {});
+    },
+  };
+}
+
+const passing = (id) => ({
+  name: id,
+  description: id,
+  run: () => ({ name: id, status: "pass", message: "ok" }),
+});
+
+test("a check over its timeout fails, aborts its signal, and the run goes on", async () => {
+  const seen = {};
+  const report = await runPreflight(
+    ctx(),
+    [hangingCheck("slow", seen), passing("after")],
+    { timeoutMs: 30 },
+  );
+  assert.equal(report.ok, false);
+  const [slow, after] = report.results;
+  assert.equal(slow.status, "fail");
+  assert.match(slow.message, /Check timed out after 30 ms \(--timeout\)\./);
+  assert.equal(after.status, "pass");
+  assert.equal(seen.signal.aborted, true);
+  assert.equal(seen.signal.reason.name, "TimeoutError");
+});
+
+test("a check that finishes in time leaves its signal un-aborted", async () => {
+  const seen = {};
+  const report = await runPreflight(
+    ctx(),
+    [
+      {
+        name: "quick",
+        description: "quick",
+        run: (c) => {
+          seen.signal = c.signal;
+          return { name: "quick", status: "pass", message: "ok" };
+        },
+      },
+    ],
+    { timeoutMs: 1000 },
+  );
+  assert.equal(report.ok, true);
+  assert.equal(seen.signal.aborted, false);
+});
+
+test("an external abort fails the running check and every check not yet started", async () => {
+  const controller = new AbortController();
+  const seen = {};
+  const running = {
+    name: "running",
+    description: "running",
+    run: (c) => {
+      seen.signal = c.signal;
+      setTimeout(() => controller.abort(), 5);
+      return new Promise(() => {});
+    },
+  };
+  const report = await runPreflight(
+    ctx(),
+    [passing("first"), running, passing("later")],
+    { signal: controller.signal },
+  );
+  const [first, cut, later] = report.results;
+  assert.equal(first.status, "pass");
+  assert.equal(cut.status, "fail");
+  assert.match(cut.message, /Run aborted while this check was running\./);
+  assert.equal(later.status, "fail");
+  assert.match(later.message, /Run aborted before this check started\./);
+  assert.equal(seen.signal.aborted, true);
+});
+
+test("a run timeout cuts the run and names --run-timeout", async () => {
+  const report = await runPreflight(
+    ctx(),
+    [hangingCheck("stuck"), passing("never")],
+    { runTimeoutMs: 30 },
+  );
+  const [stuck, never] = report.results;
+  assert.match(
+    stuck.message,
+    /Run timed out after 30 ms \(--run-timeout\) while this check was running\./,
+  );
+  assert.match(never.message, /before this check started\./);
+});
+
+test("a pre-aborted signal runs no check at all", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let ran = false;
+  const report = await runPreflight(
+    ctx(),
+    [
+      {
+        name: "x",
+        description: "x",
+        run: () => ((ran = true), passing("x").run()),
+      },
+    ],
+    { signal: controller.signal },
+  );
+  assert.equal(ran, false);
+  assert.equal(report.results[0].status, "fail");
+});
+
+test("runPreflight rejects a budget that is not a positive finite number", async () => {
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    await assert.rejects(
+      runPreflight(ctx(), [], { timeoutMs: bad }),
+      RangeError,
+    );
+    await assert.rejects(
+      runPreflight(ctx(), [], { runTimeoutMs: bad }),
+      RangeError,
+    );
+  }
+});
+
+test("the scope lookup is shared across checks, but redone after a cancelled check", async () => {
+  let reads = 0;
+  const http = createFakeSnClient({
+    tables: { sys_scope: [{ sys_id: "a".repeat(32), scope: "x_app" }] },
+    queryFilter: (table, rows) => {
+      if (table === "sys_scope") reads += 1;
+      return rows;
+    },
+  });
+  const usesScope = (id) => ({
+    name: id,
+    description: id,
+    run: async (c) => {
+      const scope = await resolveScope(c, "x_app");
+      return { name: id, status: "pass", message: scope.clause };
+    },
+  });
+  const report = await runPreflight({ http }, [
+    usesScope("one"),
+    usesScope("two"),
+  ]);
+  assert.equal(report.ok, true);
+  assert.equal(reads, 1);
+
+  // A check that starts the lookup and then times out poisons nothing: the
+  // next check resolves the scope afresh rather than reusing the aborted entry.
+  reads = 0;
+  const slowHttp = createFakeSnClient({
+    tables: { sys_scope: [{ sys_id: "b".repeat(32), scope: "x_app" }] },
+    queryFilter: (table, rows) => {
+      if (table === "sys_scope") reads += 1;
+      return rows;
+    },
+  });
+  const starter = {
+    name: "starter",
+    description: "starter",
+    run: (c) => {
+      void resolveScope(c, "x_app");
+      return new Promise(() => {});
+    },
+  };
+  const second = await runPreflight(
+    { http: slowHttp },
+    [starter, usesScope("next")],
+    { timeoutMs: 20 },
+  );
+  assert.equal(second.results[1].status, "pass");
+  assert.equal(reads, 2);
 });

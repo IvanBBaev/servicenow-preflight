@@ -106,6 +106,10 @@ interface ParsedArgs {
   format: OutputFormat;
   /** `drift`: max manifest age before the compare hard-fails (milliseconds). */
   maxAgeMs?: number;
+  /** Per-check time budget (milliseconds); `SNPF_CHECK_TIMEOUT` otherwise. */
+  timeoutMs?: number;
+  /** Time budget for each instance's whole run (milliseconds). */
+  runTimeoutMs?: number;
   /** `drift`: downgrade a skipped pipeline stage from fail to warn. */
   allowStageSkip: boolean;
   /**
@@ -146,6 +150,7 @@ function parseFormat(value: string | undefined): OutputFormat {
 }
 
 const DURATION_UNIT_MS: Record<string, number> = {
+  ms: 1,
   s: 1000,
   m: 60_000,
   h: 3_600_000,
@@ -154,22 +159,32 @@ const DURATION_UNIT_MS: Record<string, number> = {
 };
 
 /**
- * Parse a `--max-age` duration: an integer or decimal followed by a single
- * unit — `s` (seconds), `m` (minutes), `h` (hours), `d` (days) or `w` (weeks),
- * e.g. `30d`, `24h`, `1.5h`. Returns milliseconds. Throws {@link UsageError} on
- * a malformed value (so it maps to exit 2).
+ * Parse a duration (`--max-age`, `--timeout`, `--run-timeout`): an integer or
+ * decimal followed by a single unit — `ms`, `s` (seconds), `m` (minutes), `h`
+ * (hours), `d` (days) or `w` (weeks), e.g. `30d`, `24h`, `1.5h`, `500ms`.
+ * Returns milliseconds. Throws {@link UsageError} on a malformed value (so it
+ * maps to exit 2), naming `flag`.
  */
-function parseDuration(value: string): number {
-  const match = /^(\d+(?:\.\d+)?)(s|m|h|d|w)$/.exec(value.trim());
+function parseDuration(value: string, flag = "--max-age"): number {
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h|d|w)$/.exec(value.trim());
   const amount = match?.[1];
   const unit = match?.[2];
   const unitMs = unit ? DURATION_UNIT_MS[unit] : undefined;
   if (amount === undefined || unitMs === undefined) {
     throw new UsageError(
-      `Invalid --max-age "${value}". Use <number><unit> with unit s, m, h, d or w (e.g. 7d, 24h).`,
+      `Invalid ${flag} "${value}". Use <number><unit> with unit ms, s, m, h, d or w (e.g. 7d, 24h).`,
     );
   }
   return Number.parseFloat(amount) * unitMs;
+}
+
+/** Parse a time budget: a {@link parseDuration} value that must not be zero. */
+function parseBudget(value: string, flag: string): number {
+  const ms = Math.ceil(parseDuration(value, flag));
+  if (ms <= 0) {
+    throw new UsageError(`Invalid ${flag} "${value}": it must be above zero.`);
+  }
+  return ms;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -304,6 +319,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--max-age":
         args.maxAgeMs = parseDuration(takeValue(arg));
         break;
+      case "--timeout":
+        args.timeoutMs = parseBudget(takeValue(arg), arg);
+        break;
+      case "--run-timeout":
+        args.runTimeoutMs = parseBudget(takeValue(arg), arg);
+        break;
       default:
         if (arg?.startsWith("--instance=")) {
           args.instanceUrl = arg.slice("--instance=".length);
@@ -321,6 +342,16 @@ function parseArgs(argv: string[]): ParsedArgs {
           args.format = parseFormat(arg.slice("--format=".length));
         } else if (arg?.startsWith("--max-age=")) {
           args.maxAgeMs = parseDuration(arg.slice("--max-age=".length));
+        } else if (arg?.startsWith("--timeout=")) {
+          args.timeoutMs = parseBudget(
+            arg.slice("--timeout=".length),
+            "--timeout",
+          );
+        } else if (arg?.startsWith("--run-timeout=")) {
+          args.runTimeoutMs = parseBudget(
+            arg.slice("--run-timeout=".length),
+            "--run-timeout",
+          );
         } else if (arg?.startsWith("--severity=")) {
           const [name, level] = parseSeverityFlag(
             arg.slice("--severity=".length),
@@ -406,8 +437,15 @@ Options:
                          ::error/::warning annotations; GitHub jobs only)
       --json             Shorthand for --format json
       --max-age <dur>    drift: fail if a compared manifest is older than <dur>.
-                         Duration is <number><unit>, unit s|m|h|d|w (e.g. 7d,
-                         24h). Without it, a manifest older than 30d only warns.
+                         Duration is <number><unit>, unit ms|s|m|h|d|w (e.g.
+                         7d, 24h). Without it, a manifest older than 30d only
+                         warns.
+      --timeout <dur>    run: fail a check that runs longer than <dur> and
+                         abort its requests (default: none; env
+                         SNPF_CHECK_TIMEOUT). The other checks still run
+      --run-timeout <dur>
+                         run: budget for each instance's whole run; checks
+                         not finished in time fail as aborted
       --allow-stage-skip drift: warn instead of fail when <dst> is further down
                          the registry's promotesTo pipeline than the next stage
       --baseline [path]  run: demote findings recorded in a baseline file to
@@ -433,9 +471,11 @@ Exit codes:
   1  a check failed (including a selection that matched zero checks, and a
      drift/promote or manifest-age gate that blocked)
   2  a usage or configuration error (unknown option, missing flag value,
-     bad --format / --max-age, a required registry absent, a --registry path
+     bad --format / --max-age / --timeout, a required registry absent, a --registry path
      that does not exist, an invalid config, registry or state manifest
      file, a drift manifest that was never synced)
+  130 interrupted (Ctrl-C): the partial report is printed first; checks cut
+     short or never started fail as aborted
 
 Authentication (via environment / .env — never the config file, never logged):
   Per instance, prefix any SNPF_* var with the instance name, e.g.
@@ -846,7 +886,22 @@ async function runOneInstance(
 
   // Post-processing order: runPreflight → policy → baseline. Policy expresses
   // intent; the baseline accepts the resulting state.
-  const report = applyPolicy(await runPreflight(ctx), policy);
+  const envTimeout = loaded.env.SNPF_CHECK_TIMEOUT;
+  const timeoutMs =
+    args.timeoutMs ??
+    (envTimeout !== undefined && envTimeout.trim() !== ""
+      ? parseBudget(envTimeout, "SNPF_CHECK_TIMEOUT")
+      : undefined);
+  const report = applyPolicy(
+    await runPreflight(ctx, defaultChecks, {
+      signal: interrupt.signal,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(args.runTimeoutMs !== undefined
+        ? { runTimeoutMs: args.runTimeoutMs }
+        : {}),
+    }),
+    policy,
+  );
 
   if (writePath) {
     const b = baselineFromReport(report, target.name, new Date());
@@ -1046,7 +1101,9 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
     manifest: source,
     driftTarget: target,
   };
-  const report = await runPreflight(ctx, [testDrift]);
+  const report = await runPreflight(ctx, [testDrift], {
+    signal: interrupt.signal,
+  });
 
   // Fold in a manifest-freshness check: a manifest older than the warn
   // threshold (30d) surfaces a warning; with --max-age, one older than that
@@ -1164,6 +1221,13 @@ function commandExplain(args: ParsedArgs): void {
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 
+/**
+ * Aborted on the first SIGINT: the running check is cut short, the remaining
+ * ones report as aborted, the partial report is still printed, and the process
+ * exits 130. A second SIGINT gets Node's default (immediate exit).
+ */
+const interrupt = new AbortController();
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.version) {
@@ -1200,7 +1264,13 @@ async function main(): Promise<void> {
       await commandDrift(args, cwd);
       return;
     default:
+      process.once("SIGINT", () => {
+        interrupt.abort(
+          new DOMException("Interrupted (SIGINT).", "AbortError"),
+        );
+      });
       await commandRun(args, cwd);
+      if (interrupt.signal.aborted) process.exitCode = 130;
   }
 }
 

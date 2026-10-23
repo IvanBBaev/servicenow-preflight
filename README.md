@@ -141,7 +141,9 @@ suites you configure).
 selection matched zero checks (nothing verified — treated as a failure, never a
 vacuous pass), or when the CLI hit an unexpected runtime error; `2` for a usage
 error — a bad invocation or config caught before any check runs (unknown option,
-invalid `--format` value, malformed `--max-age`, missing required argument).
+invalid `--format` value, malformed `--max-age` or `--timeout`, missing required
+argument); `130` when the run was interrupted with Ctrl-C (SIGINT) — the checks
+cut short are reported as `fail` rows in the report that is still printed.
 
 ## CLI
 
@@ -181,6 +183,13 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--write-baseline [path]`    | `run`: record every non-pass result as a new baseline file.                                                                   |
 | `--force`                    | `--write-baseline`: overwrite an existing baseline file.                                                                      |
 | `--severity <check>=<level>` | `run`: report a check's non-pass result as `fail` or `warn`, or skip it (`off`). Repeatable; wins over the config `severity`. |
+| `--timeout <dur>`            | `run`: fail any check still running after `<dur>` (e.g. `30s`, `500ms`) and move on. Default: none; `SNPF_CHECK_TIMEOUT`.     |
+| `--run-timeout <dur>`        | `run`: stop the run (per instance) after `<dur>`; unfinished checks become `fail` rows.                                       |
+
+Durations take a unit: `ms`, `s`, `m`, `h`, `d` or `w`. A timed-out check is
+cancelled — its in-flight requests are aborted — and reported as
+`Check timed out after 30000 ms (--timeout).`; the per-request HTTP timeout
+still applies inside it.
 
 `--instance`, `--only` and `--skip` override the matching config-file values. The
 `scope` and `updateSetId` a run targets come from the config file (or the
@@ -609,8 +618,20 @@ const report = await runPreflight({
 console.log(report.ok, report.summary); // e.g. false { pass: 2, warn: 4, fail: 1 }
 ```
 
-- **`runPreflight(ctx, checks?)`** → `Promise<PreflightReport>`. Defaults to
-  `defaultChecks`; `ctx.select` (only / skip by name) filters before they run.
+- **`runPreflight(ctx, checks?, opts?)`** → `Promise<PreflightReport>`. Defaults
+  to `defaultChecks`; `ctx.select` (only / skip by name) filters before they run.
+  `opts` (`RunPreflightOptions`) takes `signal` (an `AbortSignal` that cancels
+  the run), `timeoutMs` (per check) and `runTimeoutMs` (whole run); a budget
+  that is not a positive finite number throws `RangeError`. Every check gets
+  its own `ctx.signal`, aborted when it times out or the run stops, and a
+  `ctx.http` bound to that signal, so a check that only uses `ctx.http` is
+  cancelled with no extra code; pass `ctx.signal` on to any other async work.
+  A cut-short check and every check not yet started become `fail` rows.
+- **`withSignal(client, signal)`** → an `SnClient` that passes `signal` (merged
+  with any per-call one) to every call. `table().get/query/queryWithMeta`,
+  `cicd.runTestSuite` and `request` all accept `{ signal }` (`SnCallOptions`);
+  an abort rejects with `SnNetworkError` ("… was aborted", `cause` set to the
+  abort reason), including during a `Retry-After` wait or a CI/CD poll.
 - **`selectChecks`**, **`defaultChecks`**, and each individual check
   (`instanceUrlConfigured`, `connectivityAuth`, …) are exported to compose your
   own list.
