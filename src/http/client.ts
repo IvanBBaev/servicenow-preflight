@@ -320,6 +320,11 @@ export interface SnClientConfig {
    * with an optional `:port`, or `*` to force direct connections.
    */
   noProxy?: string;
+  /**
+   * Environment for the standard `HTTPS_PROXY`/`NO_PROXY` variables (default
+   * `process.env`). Pass `loadConfig()`'s `env` so `.env` values apply.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Minimal response shape the client consumes (a subset of `fetch`'s Response). */
@@ -1255,7 +1260,11 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
   // env-sourced proxy value throws here and surfaces as SnNetworkError (OPP-7)
   // rather than ever silently bypassing the proxy (OPP-4).
   const transport: Transport = async (url, init) => {
-    const proxy = resolveProxy(url, { proxy: cfg.proxy, noProxy: cfg.noProxy });
+    const proxy = resolveProxy(url, {
+      proxy: cfg.proxy,
+      noProxy: cfg.noProxy,
+      ...(cfg.env ? { env: cfg.env } : {}),
+    });
     if (!proxy) return directTransport(url, init);
     return proxiedNodeRequest(url, init, proxy, cfg.tls);
   };

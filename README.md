@@ -252,7 +252,9 @@ a JWT key/assertion is, else `oauth-password` if user + pass are, else
 `oauth-client`) → `SNPF_TOKEN` → `SNPF_API_KEY` → `SNPF_USER` + `SNPF_PASS` → no
 header auth. Mutual TLS (`SNPF_MTLS_*`) resolves **independently** and attaches on
 top of whatever is selected. A `.env` file in the working directory is loaded
-automatically, but **real environment variables always win** over it. With no
+automatically, but **real environment variables always win** over it. Its
+values are read into a private copy and are never exported into
+`process.env`. With no
 credentials at all, `connectivity-auth` reports `warn` (not `fail`) and
 network-dependent checks degrade to advisory warnings.
 
@@ -622,6 +624,12 @@ timeoutMs?, cicdPollIntervalMs?, cicdMaxPolls?, maxRows?, proxy?, noProxy? }`),
   `SNPF_NO_PROXY` and `NO_PROXY` / `no_proxy`.
 - **`formatJUnit`** / **`formatSarif`**, and **`loadConfig`** /
   **`resolveAuthFromEnv`** / **`resolveTlsFromEnv`** (the CLI's own resolution).
+  `loadConfig(cwd, { env, dotenv })` resolves from `env` (default
+  `process.env`) plus `.env` (`dotenv`, default `true`) without writing to
+  either, so several instances can be loaded in one process. It returns the
+  merged `env`; pass it to `createSnClient({ env })` so `HTTPS_PROXY` /
+  `NO_PROXY` from `.env` apply. `skipDotEnv` is a deprecated alias of
+  `dotenv: false`.
 - **`describeChecks(checks, defaults?)`** → `CheckDescriptor[]` (`name`,
   `description`, `meta`, `inDefaultSuite`), in the order given, and
   **`findCheck(name)`** (searches the default suite plus `test-drift`). Every

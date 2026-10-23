@@ -766,6 +766,22 @@ test("a malformed HTTPS_PROXY surfaces per request as SnNetworkError — never a
   );
 });
 
+test("SnClientConfig.env replaces process.env for proxy variables (F-X-9)", async () => {
+  delete process.env.HTTPS_PROXY;
+  const http = createSnClient({
+    instanceUrl: "https://dev12345.service-now.com",
+    env: { HTTPS_PROXY: "::injected bad::" },
+  });
+  await assert.rejects(
+    () => http.table("incident").get("x"),
+    (err) => {
+      assert.ok(err instanceof SnNetworkError);
+      assert.match(err.message, /HTTPS_PROXY/);
+      return true;
+    },
+  );
+});
+
 test("an invalid SnClientConfig.proxy fails fast at construction with SnError (OPP-4)", () => {
   assert.throws(
     () =>

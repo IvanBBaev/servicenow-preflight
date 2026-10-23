@@ -993,6 +993,33 @@ async function startCapturingProxy() {
   };
 }
 
+test("CLI applies HTTPS_PROXY from .env without exporting it (F-X-9)", async () => {
+  // `.env` no longer mutates process.env, so its proxy variable reaches the
+  // client only through loadConfig's env copy. A CONNECT proves it did.
+  const proxy = await startCapturingProxy();
+  const dir = mkdtempSync(join(tmpdir(), "snpf-dotenv-proxy-"));
+  try {
+    writeFileSync(
+      join(dir, ".env"),
+      [
+        `HTTPS_PROXY=${proxy.url}`,
+        "SNPF_INSTANCE=https://localhost:39998",
+        "SNPF_USER=u",
+        "SNPF_PASS=p",
+        "",
+      ].join("\n"),
+    );
+    await runCliAsync(["--only", "connectivity-auth"], { cwd: dir });
+    assert.ok(
+      proxy.connects.some((c) => c.includes("localhost:39998")),
+      `expected a CONNECT to the instance, got ${JSON.stringify(proxy.connects)}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await proxy.stop();
+  }
+});
+
 test("CLI forwards the --config proxy / noProxy settings to the client (SR-5)", async () => {
   // Regression guard for cli.ts runOneInstance: the loaded config's `proxy` and
   // `noProxy` must be forwarded to createSnClient. The proxy is configured ONLY

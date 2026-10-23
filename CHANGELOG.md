@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`loadConfig(cwd, { env, dotenv })`** — resolve config and credentials
+  from an injected environment (default `process.env`) and an optional `.env`
+  (`dotenv`, default `true`). The result carries the merged `env`, and
+  `createSnClient({ env })` reads proxy variables from it. `skipDotEnv` is
+  deprecated in favour of `dotenv: false`.
 - **State manifest versioning** — `sync` writes `"version": 1` as the first
   key of `.preflight/state/<env>.state.json` (a one-time extra line on the
   next sync). A manifest without `version` still reads as version 1; any other
@@ -269,6 +274,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`.env` no longer mutates `process.env`** — `.env` values merge into a
+  private copy, so library embedders that load several configs in one process
+  no longer leak credentials between them. Code that read a `.env` value back
+  from `process.env` after `loadConfig` should read `loaded.env` instead. The
+  CLI behaves as before, including `HTTPS_PROXY` / `NO_PROXY` set in `.env`.
 - **State manifest errors exit 2** — a malformed state manifest (invalid
   JSON, not an object, an element without an `id`, or one that declares a
   different instance) and a `drift` side that was never synced are now usage

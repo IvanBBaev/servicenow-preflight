@@ -827,6 +827,7 @@ async function runOneInstance(
     // configuration, outranking HTTPS_PROXY/https_proxy (SR-5).
     ...(loaded.config.proxy ? { proxy: loaded.config.proxy } : {}),
     ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
+    env: loaded.env,
   });
 
   const ctx: PreflightContext = {
@@ -971,6 +972,7 @@ async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
     ...(loaded.tls ? { tls: loaded.tls } : {}),
     ...(loaded.config.proxy ? { proxy: loaded.config.proxy } : {}),
     ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
+    env: loaded.env,
   });
 
   const existing = await loadManifest(env, cwd);

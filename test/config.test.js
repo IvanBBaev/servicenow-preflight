@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
   loadConfig,
+  readDotEnv,
   resolveAuthFromEnv,
   resolveTlsFromEnv,
   namespacedEnv,
@@ -938,4 +939,88 @@ test("loadConfig rejects an operator in a per-check baseLanguage (SR-1)", async 
     }),
     (err) => err instanceof UsageError && /baseLanguage/.test(err.message),
   );
+});
+
+// --- no process.env mutation (F-X-9) ---------------------------------------
+
+test("loadConfig reads .env into the result, never into process.env (F-X-9)", async () => {
+  const dir = tempDir();
+  writeFileSync(
+    join(dir, ".env"),
+    "SNPF_INSTANCE=https://dotenv.service-now.com\nSNPF_TOKEN=dot-tok\n",
+  );
+  const prev = {
+    instance: process.env.SNPF_INSTANCE,
+    token: process.env.SNPF_TOKEN,
+  };
+  delete process.env.SNPF_INSTANCE;
+  delete process.env.SNPF_TOKEN;
+  try {
+    const loaded = await loadConfig(dir);
+    assert.equal(loaded.config.instanceUrl, "https://dotenv.service-now.com");
+    assert.deepEqual(loaded.auth, { kind: "oauth", token: "dot-tok" });
+    assert.equal(loaded.env.SNPF_TOKEN, "dot-tok");
+    assert.equal(process.env.SNPF_INSTANCE, undefined);
+    assert.equal(process.env.SNPF_TOKEN, undefined);
+  } finally {
+    if (prev.instance !== undefined) process.env.SNPF_INSTANCE = prev.instance;
+    if (prev.token !== undefined) process.env.SNPF_TOKEN = prev.token;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig with injected env objects does not cross-contaminate (F-X-9)", async () => {
+  const dir = tempDir();
+  writeFileSync(join(dir, ".env"), "SNPF_USER=shared\nSNPF_PASS=dotpass\n");
+  try {
+    const a = { SNPF_PASS: "pass-a" };
+    const b = { SNPF_TOKEN: "tok-b" };
+    const first = await loadConfig(dir, { env: a });
+    const second = await loadConfig(dir, { env: b });
+    // The injected env wins over .env; .env fills only the gaps.
+    assert.deepEqual(first.auth, {
+      kind: "basic",
+      user: "shared",
+      pass: "pass-a",
+    });
+    assert.deepEqual(second.auth, { kind: "oauth", token: "tok-b" });
+    assert.equal(second.env.SNPF_PASS, "dotpass");
+    // Neither input object was written.
+    assert.deepEqual(a, { SNPF_PASS: "pass-a" });
+    assert.deepEqual(b, { SNPF_TOKEN: "tok-b" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig with dotenv: false ignores .env (F-X-9)", async () => {
+  const dir = tempDir();
+  writeFileSync(join(dir, ".env"), "SNPF_TOKEN=dot-tok\n");
+  try {
+    const off = await loadConfig(dir, { env: {}, dotenv: false });
+    assert.equal(off.auth, undefined);
+    assert.deepEqual(off.env, {});
+    const legacy = await loadConfig(dir, { env: {}, skipDotEnv: true });
+    assert.equal(legacy.auth, undefined);
+    // An explicit `dotenv` wins over the deprecated alias.
+    const on = await loadConfig(dir, {
+      env: {},
+      dotenv: true,
+      skipDotEnv: true,
+    });
+    assert.deepEqual(on.auth, { kind: "oauth", token: "dot-tok" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readDotEnv returns the parsed map, or an empty one without a .env", async () => {
+  const dir = tempDir();
+  try {
+    assert.deepEqual(await readDotEnv(dir), {});
+    writeFileSync(join(dir, ".env"), "# c\nexport A=1\nB='two'\nbad\n");
+    assert.deepEqual(await readDotEnv(dir), { A: "1", B: "two" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

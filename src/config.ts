@@ -91,6 +91,12 @@ export interface LoadedConfig {
   tls?: SnTls;
   /** Absolute path of the config file that was loaded, if any. */
   configPath?: string;
+  /**
+   * The environment the config was resolved from: the `env` option (or
+   * `process.env`) with `.env` values filled in. Pass it to
+   * `createSnClient({ env })` so proxy variables from `.env` apply too.
+   */
+  env: NodeJS.ProcessEnv;
 }
 
 /** Config file names probed, in precedence order. */
@@ -222,12 +228,15 @@ function parseDotEnvValue(raw: string): string {
 }
 
 /**
- * Parse a minimal `.env` file into `process.env` (only keys not already set,
- * so real environment variables win). Supports `KEY=value`, a leading `export `
- * on the key, whole-line and inline `#` comments, and optional surrounding
- * quotes. No dependency — a tiny hand-rolled parser.
+ * Read a minimal `.env` file from `cwd` into a fresh key → value map (empty
+ * when there is no `.env`). Pure: it never touches `process.env` (F-X-9) — the
+ * caller decides how the values merge with the real environment. Supports
+ * `KEY=value`, a leading `export ` on the key, whole-line and inline `#`
+ * comments, and optional surrounding quotes. No dependency — a tiny
+ * hand-rolled parser.
  */
-async function loadDotEnv(cwd: string): Promise<void> {
+export async function readDotEnv(cwd: string): Promise<Record<string, string>> {
+  const values: Record<string, string> = {};
   const envPath = resolve(cwd, ".env");
   let text: string;
   try {
@@ -239,7 +248,7 @@ async function loadDotEnv(cwd: string): Promise<void> {
     // would continue unauthenticated, report warns rather than failures, and
     // exit 0 — a green build that verified nothing. Same rule as a missing
     // `@`-file, which already throws.
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return values;
     const detail = err instanceof Error ? err.message : String(err);
     throw new UsageError(`Could not read ${envPath}: ${detail}`);
   }
@@ -255,11 +264,24 @@ async function loadDotEnv(cwd: string): Promise<void> {
       .slice(0, eq)
       .trim()
       .replace(/^export\s+/, "");
-    const value = parseDotEnvValue(line.slice(eq + 1).trim());
-    if (process.env[key] === undefined) {
-      process.env[key] = value;
-    }
+    values[key] = parseDotEnvValue(line.slice(eq + 1).trim());
   }
+  return values;
+}
+
+/**
+ * Overlay `.env` values onto a COPY of `env`, only for keys `env` leaves
+ * unset, so real environment variables always win. Neither input is written.
+ */
+function mergeDotEnv(
+  env: NodeJS.ProcessEnv,
+  dotenv: Record<string, string>,
+): NodeJS.ProcessEnv {
+  const merged: NodeJS.ProcessEnv = { ...env };
+  for (const [key, value] of Object.entries(dotenv)) {
+    if (merged[key] === undefined) merged[key] = value;
+  }
+  return merged;
 }
 
 /**
@@ -620,7 +642,14 @@ function assertSeverityConfigType(config: PreflightConfig): void {
 export interface LoadConfigOptions {
   /** Explicit config file path (overrides auto-discovery). */
   configPath?: string;
-  /** Skip reading a `.env` file (env vars only). */
+  /**
+   * Environment to resolve `SNPF_*` (and proxy) variables from. Defaults to
+   * `process.env`; it is never written — `.env` values merge into a copy.
+   */
+  env?: NodeJS.ProcessEnv;
+  /** Read a `.env` file from `cwd` (default `true`). */
+  dotenv?: boolean;
+  /** @deprecated Use `dotenv: false`. Skip reading a `.env` file. */
   skipDotEnv?: boolean;
   /**
    * Credential env namespace for a selected instance (e.g. `DEV`). When set,
@@ -640,14 +669,19 @@ export async function loadConfig(
   cwd: string = process.cwd(),
   opts: LoadConfigOptions = {},
 ): Promise<LoadedConfig> {
-  if (!opts.skipDotEnv) {
-    await loadDotEnv(cwd);
-  }
+  // F-X-9: `.env` values merge into a private copy of the environment and
+  // never into `process.env`, so several loads in one process (library
+  // embedders, MCP hosts) cannot leak credentials into each other.
+  const useDotEnv = opts.dotenv ?? !opts.skipDotEnv;
+  const baseEnv = opts.env ?? process.env;
+  const fullEnv = useDotEnv
+    ? mergeDotEnv(baseEnv, await readDotEnv(cwd))
+    : { ...baseEnv };
 
   const configPath = findConfigFile(cwd, opts.configPath);
   const config = configPath ? await readConfigFile(configPath) : {};
 
-  const env = namespacedEnv(process.env, opts.envPrefix);
+  const env = namespacedEnv(fullEnv, opts.envPrefix);
 
   // The instance URL may come from the config file or the environment.
   if (!config.instanceUrl) {
@@ -686,8 +720,8 @@ export async function loadConfig(
   // query (SR-1), after env fallbacks so env-supplied values are covered too.
   assertSafeQueryInputs(config);
 
-  const auth = resolveAuthFromEnv(process.env, opts.envPrefix);
-  const tls = resolveTlsFromEnv(process.env, opts.envPrefix);
+  const auth = resolveAuthFromEnv(fullEnv, opts.envPrefix);
+  const tls = resolveTlsFromEnv(fullEnv, opts.envPrefix);
 
-  return { config, auth, tls, configPath };
+  return { config, auth, tls, configPath, env: fullEnv };
 }
