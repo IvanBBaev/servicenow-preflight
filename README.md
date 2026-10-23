@@ -430,7 +430,9 @@ except each instance looks up a **namespaced** variable first: an instance whose
   diff. `--with-last-run` also records each test's most recent result. The
   manifest also captures the instance's **platform identity**
   (`glide.buildname` / `glide.war`) and its **installed apps and plugins** with
-  versions, feeding the parity gates below.
+  versions, feeding the parity gates below. Manifests carry `"version": 1`;
+  one without a version reads as 1, and a newer version is refused (exit `2`)
+  with a hint to upgrade the tool. A malformed manifest also exits `2`.
 - **`drift <src> <dst>`** compares two committed manifests **offline** by logical
   `id`. A test **active upstream but missing downstream** fails the gate (exit 1)
   — it would ship a promote without coverage upstream has validated. Extra tests

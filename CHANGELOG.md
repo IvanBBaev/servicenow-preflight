@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **State manifest versioning** — `sync` writes `"version": 1` as the first
+  key of `.preflight/state/<env>.state.json` (a one-time extra line on the
+  next sync). A manifest without `version` still reads as version 1; any other
+  value is refused with exit `2` and "upgrade the tool", so an older CLI never
+  silently mis-reads a newer format. `MANIFEST_VERSION` is exported.
 - **Record-level findings (`Finding`)** — `CheckResult` gains optional
   `findings` (`id`, `kind`, `message`, `status?`, `location?`) and
   `findingsTruncated`. New exports `findingId` (stable `f1:` fingerprint over

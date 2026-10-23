@@ -22,6 +22,7 @@ import {
   loadManifest,
   writeManifest,
   mergeManifest,
+  MANIFEST_VERSION,
 } from "../../build/state/manifest.js";
 import { PREFLIGHT_DIR } from "../../build/registry.js";
 
@@ -481,8 +482,9 @@ test("writeManifest sorts tests and suites (and testIds) by id for a stable diff
       ["s/alpha", "s/beta"],
     );
     assert.deepEqual(parsed.suites[1].testIds, ["s/apple", "s/zebra"]);
-    // `instance` is emitted first.
-    assert.equal(Object.keys(parsed)[0], "instance");
+    // `version` is emitted first, then `instance` (F-R-13).
+    assert.deepEqual(Object.keys(parsed).slice(0, 2), ["version", "instance"]);
+    assert.equal(parsed.version, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1371,3 +1373,67 @@ function manifestPathWithMkdir(dir, instance) {
   mkdirSync(join(dir, PREFLIGHT_DIR, STATE_DIR), { recursive: true });
   return p;
 }
+
+// --- version (F-R-13) ------------------------------------------------------
+
+test("MANIFEST_VERSION is 1", () => {
+  assert.equal(MANIFEST_VERSION, 1);
+});
+
+test("loadManifest accepts an absent or explicit version 1", async () => {
+  const dir = tempDir();
+  try {
+    const file = manifestPathWithMkdir(dir, "dev");
+    for (const version of [undefined, 1]) {
+      writeFileSync(
+        file,
+        JSON.stringify({ version, instance: "dev", tests: [], suites: [] }),
+      );
+      const m = await loadManifest("dev", dir);
+      assert.equal(m.instance, "dev");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest refuses any other version with an upgrade hint", async () => {
+  const dir = tempDir();
+  try {
+    const file = manifestPathWithMkdir(dir, "dev");
+    for (const version of [2, 0, "1", 1.5, null]) {
+      writeFileSync(
+        file,
+        JSON.stringify({ version, instance: "dev", tests: [], suites: [] }),
+      );
+      await assert.rejects(
+        () => loadManifest("dev", dir),
+        (err) =>
+          err.name === "UsageError" &&
+          err.message.includes(
+            `has version ${JSON.stringify(version)}; this servicenow-preflight ` +
+              "supports version 1 — upgrade the tool.",
+          ),
+        `version ${JSON.stringify(version)}`,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a load → write round trip stamps version 1 on a pre-versioning manifest", async () => {
+  const dir = tempDir();
+  try {
+    const file = manifestPathWithMkdir(dir, "dev");
+    writeFileSync(
+      file,
+      JSON.stringify({ instance: "dev", tests: [], suites: [] }),
+    );
+    await writeManifest(await loadManifest("dev", dir), dir);
+    const text = readFileSync(file, "utf8");
+    assert.ok(text.startsWith('{\n  "version": 1,\n  "instance": "dev"'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

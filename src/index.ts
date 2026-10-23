@@ -113,6 +113,7 @@ export {
   logicalId,
   slugify,
   STATE_DIR,
+  MANIFEST_VERSION,
   type StateManifest,
   type AtfTestState,
   type AtfSuiteState,

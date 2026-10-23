@@ -128,8 +128,17 @@ export interface InstalledAppState {
   version?: string;
 }
 
+/** The manifest format version this build reads and writes. */
+export const MANIFEST_VERSION = 1;
+
 /** The parsed `<instance>.state.json`. */
 export interface StateManifest {
+  /**
+   * Format version. `sync` always writes {@link MANIFEST_VERSION}; an absent
+   * value reads as 1 (manifests written before versioning), any other value is
+   * refused.
+   */
+  version?: 1;
   /** Registry instance name this manifest belongs to. */
   instance: string;
   /** Instance base URL at sync time (informational). */
@@ -217,6 +226,17 @@ export async function loadManifest(
   const m = parsed as Partial<StateManifest> | null;
   if (!m || typeof m !== "object" || Array.isArray(m)) {
     throw new UsageError(`Manifest ${path} is not a JSON object.`);
+  }
+  // F-R-13: only version 1 is understood. A newer format could carry fields
+  // this build would silently drop or mis-read, so refuse it outright; an
+  // ABSENT version is a pre-versioning manifest and reads as 1.
+  const version: unknown = m.version;
+  if (version !== undefined && version !== MANIFEST_VERSION) {
+    throw new UsageError(
+      `State manifest ${path} has version ${JSON.stringify(version)}; ` +
+        `this servicenow-preflight supports version ${MANIFEST_VERSION} — ` +
+        `upgrade the tool.`,
+    );
   }
   // CC-36: a manifest that declares a *different* instance than the one it is
   // being loaded as was almost certainly copied or renamed — trusting it would
@@ -402,6 +422,7 @@ function serialize(m: StateManifest): string {
       }
     : {};
   const out = {
+    version: MANIFEST_VERSION,
     instance: m.instance,
     ...(m.url ? { url: m.url } : {}),
     ...(m.scope ? { scope: m.scope } : {}),

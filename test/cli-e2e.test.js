@@ -563,7 +563,7 @@ test("CLI drift errors when a manifest is missing", () => {
   }
 });
 
-test("CLI drift exits 2 on a corrupt or mismatched manifest", () => {
+test("CLI drift exits 2 on a corrupt, mismatched or newer manifest", () => {
   const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
   try {
     writeStateManifest(dir, "staging", {
@@ -583,6 +583,15 @@ test("CLI drift exits 2 on a corrupt or mismatched manifest", () => {
     const mismatch = runCli(["drift", "staging", "prod"], { cwd: dir });
     assert.equal(mismatch.status, 2);
     assert.match(mismatch.stderr, /declares instance "staging"/);
+    writeStateManifest(dir, "prod", {
+      version: 2,
+      instance: "prod",
+      tests: [],
+      suites: [],
+    });
+    const newer = runCli(["drift", "staging", "prod"], { cwd: dir });
+    assert.equal(newer.status, 2);
+    assert.match(newer.stderr, /has version 2; .* upgrade the tool\./);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
