@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `runPreflight`); a non-object value or an unknown check name is a usage
   error (exit 2), and per-check `languages` / `baseLanguage` get the same
   SR-1 load-time query-injection guard as `options`.
+- **`deprecated-apis` check** — scope-unavailable and synchronous API calls
+  (blocker, no checklist rule): a `Packages.` Java call in an active in-scope
+  server script → **fail** (not available in scoped apps); in client
+  scripts a synchronous `getXMLWait(` (rule 3.3 spirit), a callback-less
+  `g_form.getReference(…)` (rule 4.7) or the server-only `gs.hasRole` →
+  **warn**. Messages name the artifact, field and line, never the matched
+  text; a security-trimmed script read fails closed. Uses the shared script
+  scanner.
 - **`log-leftovers` check** — certification rule 4.3 (advisory): active
   in-scope client scripts, UI Scripts, UI Policy scripts and UI Action
   client scripts are scanned for `console.log(` / `console.debug(` /

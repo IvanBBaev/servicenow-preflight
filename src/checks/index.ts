@@ -27,6 +27,7 @@ import { propertyPrivacy } from "./property-privacy.js";
 import { inactiveArtifacts } from "./inactive-artifacts.js";
 import { notificationConditions } from "./notification-conditions.js";
 import { logLeftovers } from "./log-leftovers.js";
+import { deprecatedApis } from "./deprecated-apis.js";
 
 export { connectivityAuth } from "./connectivity-auth.js";
 export { updateSetState } from "./update-set-state.js";
@@ -56,6 +57,7 @@ export { propertyPrivacy } from "./property-privacy.js";
 export { inactiveArtifacts } from "./inactive-artifacts.js";
 export { notificationConditions } from "./notification-conditions.js";
 export { logLeftovers } from "./log-leftovers.js";
+export { deprecatedApis } from "./deprecated-apis.js";
 export { testDrift } from "./test-drift.js";
 
 /**
@@ -167,4 +169,5 @@ export const defaultChecks: Check[] = [
   inactiveArtifacts,
   notificationConditions,
   logLeftovers,
+  deprecatedApis,
 ];

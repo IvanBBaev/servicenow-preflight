@@ -60,7 +60,7 @@ test("certification rule ids look like CHECKLIST headings", () => {
 
 test("describeChecks covers the default suite in order", () => {
   const described = describeChecks(defaultChecks);
-  assert.equal(described.length, 29);
+  assert.equal(described.length, 30);
   assert.deepEqual(
     described.map((d) => d.name),
     defaultChecks.map((c) => c.name),

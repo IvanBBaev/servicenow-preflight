@@ -204,6 +204,7 @@ export {
   inactiveArtifacts,
   notificationConditions,
   logLeftovers,
+  deprecatedApis,
   testDrift,
 } from "./checks/index.js";
 
