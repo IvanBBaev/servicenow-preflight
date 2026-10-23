@@ -316,6 +316,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Tessera TM-3 gate validates and caps declared Script Include targets**
+  (`@tessera/generate`, PA-10) — a spec's `sys_script_include` target names
+  come from the manifest and become constructible classes in the AST
+  allowlist. Each name must now be a plain ASCII JavaScript identifier of at
+  most `MAX_TARGET_CLASS_NAME_CHARS` (100) characters that is not an ES5
+  reserved word, and a spec may declare at most `MAX_TARGET_CLASS_NAMES` (16)
+  distinct targets. Either breach refuses the whole body fail-closed
+  (`ast-target-name-invalid`, `ast-too-many-targets`), so `run --live` and
+  `tess review` refuse the spec. Before, a malformed name was silently ignored
+  and the count was unbounded. Findings never quote the name. Both constants
+  are exported.
 - Tessera's Anthropic adapter pins its base URL (AIS-5): `baseUrl` must be an
   `https:` origin with no userinfo, path, query or fragment, and it must be
   `https://api.anthropic.com` unless the caller passes

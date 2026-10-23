@@ -14,7 +14,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { inspectGeneratedSource } from "@tessera/generate";
+import {
+  MAX_TARGET_CLASS_NAMES,
+  inspectGeneratedSource,
+} from "@tessera/generate";
 import { S5_GENERATED_TEST_SCRIPT, S5_TARGET_NAME } from "@tessera/phase05";
 import { untrusted } from "@tessera/types";
 
@@ -101,6 +104,37 @@ describe("loadLiveSpecs requires the AST layer (PA-10)", () => {
     assert.ok(
       load.rejected[0].violations.some(
         (violation) => violation.rule === "ast-new-outside-allowlist",
+      ),
+    );
+  });
+
+  it("a malformed declared target name refuses the spec (PA-10)", async () => {
+    const load = await loadLiveSpecs(
+      await root(GOOD_BODY, [
+        include("LiveDiscount"),
+        include("Live-Discount; gs.log"),
+      ]),
+    );
+    assert.equal(load.kind, "rejected");
+    const lines = formatRejectedSpecs(load.rejected);
+    assert.ok(
+      lines.some((line) =>
+        /outside-allowlist\/ast-target-name-invalid/.test(line),
+      ),
+    );
+    assert.ok(lines.every((line) => !line.includes("Live-Discount")));
+  });
+
+  it("more than MAX_TARGET_CLASS_NAMES declared targets refuses the spec", async () => {
+    const targets = Array.from(
+      { length: MAX_TARGET_CLASS_NAMES + 1 },
+      (_, index) => include(`LiveDiscount${index}`),
+    );
+    const load = await loadLiveSpecs(await root(GOOD_BODY, targets));
+    assert.equal(load.kind, "rejected");
+    assert.ok(
+      load.rejected[0].violations.some(
+        (violation) => violation.rule === "ast-too-many-targets",
       ),
     );
   });

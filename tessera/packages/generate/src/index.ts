@@ -91,6 +91,8 @@ export type {
 export {
   AST_ALLOWLIST,
   AST_RULE_DETAILS,
+  MAX_TARGET_CLASS_NAME_CHARS,
+  MAX_TARGET_CLASS_NAMES,
   astGateRuleNames,
 } from "./astGate.js";
 export type {

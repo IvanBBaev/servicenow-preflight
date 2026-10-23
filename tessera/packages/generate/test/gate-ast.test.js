@@ -25,6 +25,8 @@ import {
   GATE_CATEGORIES,
   MAX_GATED_SOURCE_CHARS,
   astGateRuleNames,
+  MAX_TARGET_CLASS_NAME_CHARS,
+  MAX_TARGET_CLASS_NAMES,
   createAtfServerScriptGate,
   inspectAtfServerScript,
   inspectGeneratedSource,
@@ -184,7 +186,25 @@ const RULE_FIXTURES = {
   "ast-syntax-outside-allowlist": "try { gs.info('x'); } catch (e) {}",
   "ast-assignment-outside-allowlist": "gs.level = 1;",
   "ast-redeclaration": "var a = 1; var a = 2;",
+  "ast-target-name-invalid": {
+    source: "gs.info('x');",
+    targets: ["Bad-Name"],
+  },
+  "ast-too-many-targets": {
+    source: "gs.info('x');",
+    targets: Array.from(
+      { length: MAX_TARGET_CLASS_NAMES + 1 },
+      (_, index) => `Target${index}`,
+    ),
+  },
 };
+
+/** A fixture is a body, or a body plus the targets it declares. */
+function gatedFixture(fixture) {
+  return typeof fixture === "string"
+    ? gated(fixture)
+    : gated(fixture.source, fixture.targets);
+}
 
 describe("TM-3 layer 1 — every rule fires", () => {
   it("there is exactly one fixture per rule, in both directions", () => {
@@ -193,9 +213,9 @@ describe("TM-3 layer 1 — every rule fires", () => {
     ]);
   });
 
-  for (const [rule, source] of Object.entries(RULE_FIXTURES)) {
+  for (const [rule, fixture] of Object.entries(RULE_FIXTURES)) {
     it(`${rule} fires`, () => {
-      const verdict = gated(source);
+      const verdict = gatedFixture(fixture);
       assert.ok(
         astRules(verdict).includes(rule),
         `${rule} not in ${JSON.stringify(astRules(verdict))}`,
@@ -205,8 +225,8 @@ describe("TM-3 layer 1 — every rule fires", () => {
 
   it("every finding has a lexical-style shape and a constant detail", () => {
     const categories = new Set([...GATE_CATEGORIES, "outside-allowlist"]);
-    for (const source of Object.values(RULE_FIXTURES)) {
-      const verdict = gated(source);
+    for (const fixture of Object.values(RULE_FIXTURES)) {
+      const verdict = gatedFixture(fixture);
       for (const violation of verdict.violations) {
         assert.deepEqual(Object.keys(violation).sort(), [
           "category",
@@ -593,6 +613,56 @@ describe("TM-3 layered gate — both layers, fail closed", () => {
       const verdict = gated(`var x = new ${name}();`, [name]);
       assert.equal(verdict.ok, false, name);
     }
+  });
+
+  it("a malformed declared target name refuses the whole body", () => {
+    const body = "var d = new LiveDiscount(); d.apply(1);";
+    assert.equal(gated(body, ["LiveDiscount"]).ok, true);
+    for (const name of [
+      "bad-name",
+      "Nаme",
+      "",
+      "1Class",
+      "My Util",
+      "x_scope.Util",
+      "Util()",
+      "new",
+      "class",
+      "null",
+      "A".repeat(MAX_TARGET_CLASS_NAME_CHARS + 1),
+    ]) {
+      const verdict = gated(body, ["LiveDiscount", name]);
+      assert.deepEqual(astRules(verdict), ["ast-target-name-invalid"], name);
+      assert.equal(verdict.violations[0].line, 0);
+      // TM-1: the finding never echoes the name.
+      if (name.length > 3) {
+        assert.ok(!JSON.stringify(verdict).includes(name), name);
+      }
+    }
+    assert.equal(
+      gated(body, ["LiveDiscount", "A".repeat(MAX_TARGET_CLASS_NAME_CHARS)]).ok,
+      true,
+    );
+  });
+
+  it("a malformed target is reported next to an unparseable body", () => {
+    assert.deepEqual(astRules(gated("var x = ;", ["bad-name"])).sort(), [
+      "ast-target-name-invalid",
+      "ast-unparseable",
+    ]);
+  });
+
+  it("at most MAX_TARGET_CLASS_NAMES distinct targets; duplicates count once", () => {
+    const names = Array.from(
+      { length: MAX_TARGET_CLASS_NAMES },
+      (_, index) => `Target${index}`,
+    );
+    const body = "var d = new Target0(); d.run();";
+    assert.equal(gated(body, names).ok, true);
+    assert.equal(gated(body, [...names, ...names]).ok, true);
+    assert.deepEqual(astRules(gated(body, [...names, "Extra"])), [
+      "ast-too-many-targets",
+    ]);
   });
 
   it("layer 2 runs even when layer 1 rejects, and its findings follow", () => {

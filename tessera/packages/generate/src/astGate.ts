@@ -38,7 +38,10 @@
 //   * The target class names come from the spec manifest. A manifest that names
 //     a Script Include as a target makes that class constructible here; the
 //     manifest is reviewed repo content (TM-5), so this layer trusts it exactly
-//     as far as the review does.
+//     as far as the review does — and no further: every declared name must be
+//     a plain ASCII identifier that is not a reserved word, and a body may
+//     declare at most `MAX_TARGET_CLASS_NAMES` of them, or the whole body is
+//     refused (`ast-target-name-invalid`, `ast-too-many-targets`).
 //   * acorn parses ES5 as the standard defines it. Rhino accepts extensions
 //     (E4X, `for each`, Java member access through `Packages`) that acorn
 //     refuses — refusal is the safe direction, but a Rhino quirk that PARSES
@@ -87,7 +90,9 @@ export type AstGateRuleName =
   | "ast-unknown-identifier"
   | "ast-syntax-outside-allowlist"
   | "ast-assignment-outside-allowlist"
-  | "ast-redeclaration";
+  | "ast-redeclaration"
+  | "ast-target-name-invalid"
+  | "ast-too-many-targets";
 
 export interface AstGateViolation {
   readonly rule: AstGateRuleName;
@@ -101,12 +106,35 @@ export interface AstGateViolation {
 export interface AstGateOptions {
   /**
    * Script Include class names the body may construct with `new <Name>(…)` —
-   * the spec's declared targets. A name that is not a plain ASCII identifier,
-   * or that collides with a platform class, a global or a denied name, is
+   * the spec's declared targets, read from the reviewed manifest.
+   *
+   * Each name must be a plain ASCII JavaScript identifier of at most
+   * `MAX_TARGET_CLASS_NAME_CHARS` characters that is not an ES5 reserved
+   * word, and there may be at most `MAX_TARGET_CLASS_NAMES` distinct names.
+   * Anything else rejects the WHOLE body (`ast-target-name-invalid`,
+   * `ast-too-many-targets`): a manifest that declares a target the gate
+   * cannot read is not a manifest the gate can vouch for. A well-formed name
+   * that collides with a platform class, a global or a denied name is still
    * ignored (fail closed: it simply stays unconstructible).
    */
   readonly targetClassNames?: readonly string[];
 }
+
+/**
+ * The most distinct Script Include classes one body may declare as targets.
+ * A unit spec exercises the Script Include under test and, rarely, a helper
+ * it is built from; each declared class is one more name whose methods the
+ * allowlist admits wholesale (AIS-2), so the bound keeps that surface small
+ * enough for a reviewer to hold in mind. Sixteen is generous for any real
+ * spec and far below the generator's per-spec target cap.
+ */
+export const MAX_TARGET_CLASS_NAMES = 16;
+
+/**
+ * The longest declared target class name admitted, in characters — the
+ * length of `sys_script_include.name` on the platform (100).
+ */
+export const MAX_TARGET_CLASS_NAME_CHARS = 100;
 
 const RULES: Readonly<
   Record<AstGateRuleName, { category: AstGateCategory; detail: string }>
@@ -229,6 +257,14 @@ const RULES: Readonly<
     category: "outside-allowlist",
     detail:
       "a name is declared twice, or a declaration shadows an allowlisted global or wrapper parameter; each name must mean one thing for the whole body",
+  },
+  "ast-target-name-invalid": {
+    category: "outside-allowlist",
+    detail: `a declared Script Include target name is not a plain ASCII JavaScript identifier of at most ${MAX_TARGET_CLASS_NAME_CHARS} characters that is not an ES5 reserved word; fix the spec's \`targets[].name\` in the manifest`,
+  },
+  "ast-too-many-targets": {
+    category: "outside-allowlist",
+    detail: `the spec declares more than ${MAX_TARGET_CLASS_NAMES} distinct Script Include targets; each one widens the call surface the allowlist admits, so split the spec`,
   },
 };
 
@@ -353,6 +389,92 @@ const TABLE_LITERAL = /^[a-z][a-z0-9_]{0,79}$/;
 /** What a plain ASCII identifier looks like. */
 const ASCII_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
+/**
+ * ES5 reserved words (§7.6.1: keywords, future reserved words in both modes,
+ * and the `null` / `true` / `false` literals). None can be a class name.
+ */
+const ES5_RESERVED_WORDS: ReadonlySet<string> = new Set([
+  "break",
+  "case",
+  "catch",
+  "continue",
+  "debugger",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "finally",
+  "for",
+  "function",
+  "if",
+  "in",
+  "instanceof",
+  "new",
+  "return",
+  "switch",
+  "this",
+  "throw",
+  "try",
+  "typeof",
+  "var",
+  "void",
+  "while",
+  "with",
+  "class",
+  "const",
+  "enum",
+  "export",
+  "extends",
+  "import",
+  "super",
+  "implements",
+  "interface",
+  "let",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "static",
+  "yield",
+  "null",
+  "true",
+  "false",
+]);
+
+/** Whether a declared target class name is well-formed (see `AstGateOptions`). */
+function isWellFormedTargetName(name: unknown): boolean {
+  return (
+    typeof name === "string" &&
+    name.length <= MAX_TARGET_CLASS_NAME_CHARS &&
+    ASCII_IDENTIFIER.test(name) &&
+    !ES5_RESERVED_WORDS.has(name)
+  );
+}
+
+/**
+ * Whole-body findings about the declared targets themselves: a name the gate
+ * cannot read, or more names than it admits. Never echoes a name (TM-1).
+ */
+function targetListViolations(
+  names: readonly string[] | undefined,
+): AstGateViolation[] {
+  const found: AstGateViolation[] = [];
+  const list = names ?? [];
+  const finding = (rule: AstGateRuleName): AstGateViolation => ({
+    rule,
+    category: RULES[rule].category,
+    line: 0,
+    detail: RULES[rule].detail,
+  });
+  if (!list.every(isWellFormedTargetName)) {
+    found.push(finding("ast-target-name-invalid"));
+  }
+  if (new Set(list).size > MAX_TARGET_CLASS_NAMES) {
+    found.push(finding("ast-too-many-targets"));
+  }
+  return found;
+}
+
 type DeniedRule =
   | "ast-denied-dynamic-code"
   | "ast-denied-dml"
@@ -470,7 +592,9 @@ function isReservedName(name: string): boolean {
 function admittedTargets(names: readonly string[] | undefined): Set<string> {
   const admitted = new Set<string>();
   for (const name of names ?? []) {
-    if (!ASCII_IDENTIFIER.test(name)) continue;
+    // A malformed name is also a whole-body finding (`targetListViolations`);
+    // skipping it here keeps the walker's tables free of it either way.
+    if (!isWellFormedTargetName(name)) continue;
     if (isReservedName(name)) continue;
     if (PLATFORM_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
     admitted.add(name);
@@ -1192,6 +1316,7 @@ export function inspectAstAllowlist(
   text: string,
   options: AstGateOptions = {},
 ): readonly AstGateViolation[] {
+  const targetFindings = targetListViolations(options.targetClassNames);
   let program: A.Program;
   try {
     program = parse(text, {
@@ -1204,19 +1329,20 @@ export function inspectAstAllowlist(
     });
   } catch (error) {
     const { category, detail } = RULES["ast-unparseable"];
-    return [
+    return orderAndDedupe([
+      ...targetFindings,
       {
         rule: "ast-unparseable",
         category,
         line: parseErrorLine(error),
         detail,
       },
-    ];
+    ]);
   }
   const state: WalkState = {
     targets: admittedTargets(options.targetClassNames),
     locals: new Map(),
-    found: [],
+    found: [...targetFindings],
   };
   scanNames(program, state);
   collectDeclarations(program, state);
