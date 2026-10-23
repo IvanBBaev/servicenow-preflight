@@ -264,6 +264,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`--format json` prints a versioned envelope** —
+  `{ schemaVersion: 1, tool: { name, version }, generatedAt, ok, runs: [{ instance?, url?, report }] }`
+  for single-instance, `--all` and `drift` runs alike, replacing the bare
+  `PreflightReport` and the `--all` `{ ok, instances }` object. Single-instance
+  runs now keep the registry instance name; `url` is the instance origin only.
+  Read a single report with `.runs[0].report`. New JSON Schemas
+  `schemas/report.v1.json` and `schemas/finding.v1.json` (draft 2020-12),
+  generated from the types by `npm run gen:schema`, shipped and exported by the
+  package, published on the docs site and drift-checked by `npm run check`. New
+  library exports `toEnvelope`, `formatJson` and `REPORT_SCHEMA_VERSION`.
 - Check names `preflight`, `baseline` and any `preflight:` prefix are now
   reserved: `runPreflight` rejects a check set that uses one with a single
   failing `preflight` row, like duplicate names.

@@ -21,6 +21,8 @@
       "import": "./build/index.js",
       "default": "./build/index.js"
     },
+    "./schemas/report.v1.json": "./schemas/report.v1.json",
+    "./schemas/finding.v1.json": "./schemas/finding.v1.json",
     "./package.json": "./package.json"
   },
   "bin": {
@@ -33,6 +35,7 @@
     "build",
     "bin",
     "src",
+    "schemas",
     "CHANGELOG.md",
     "!build/tessera/.stage-tessera.json",
     "!build/tessera/.npmignore"
@@ -63,8 +66,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "verify": "npm run build && npm run lint && npm run format:check && node --test --import ./test/setup/hermetic-env.js $(find test -name '*.test.js')",
-    "check": "npm run build && npm run gen:site -- --check && npm run lint && npm run format:check && npm run test:coverage",
+    "check": "npm run build && npm run gen:site -- --check && npm run gen:schema -- --check && npm run lint && npm run format:check && npm run test:coverage",
     "gen:site": "node scripts/gen-site.mjs",
+    "gen:schema": "node scripts/gen-schema.mjs",
     "prepublishOnly": "npm run check",
     "stage:tessera": "node scripts/stage-tessera.mjs",
     "prepack": "node scripts/stage-tessera.mjs",

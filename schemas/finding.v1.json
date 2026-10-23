@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ivanbbaev.github.io/servicenow-preflight/schemas/finding.v1.json",
+  "title": "servicenow-preflight finding (v1)",
+  "description": "One record-level finding behind a check's verdict.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "description": "Stable fingerprint, `\"f1:\"` plus 16 hex digits (see `findingId`).",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Check-local kind, e.g. `\"pattern:gs.log\"` or `\"acl-missing:create\"`.",
+      "type": "string"
+    },
+    "message": {
+      "description": "One line; never echoes secrets or matched source text.",
+      "type": "string"
+    },
+    "status": {
+      "description": "Verdict of this finding; defaults to the row's status.",
+      "$ref": "#/$defs/CheckStatus"
+    },
+    "location": {
+      "$ref": "#/$defs/FindingLocation"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "message"
+  ],
+  "$defs": {
+    "CheckStatus": {
+      "description": "Outcome of a single preflight check.",
+      "enum": [
+        "pass",
+        "warn",
+        "fail"
+      ]
+    },
+    "FindingLocation": {
+      "description": "Where a finding lives: a record (table + sys_id + field, optionally a line in a script) or, for subjects that are not a single record, a logical id (`\"scope/slug\"`, `\"instance\"`, `\"app:<scope>\"`).",
+      "type": "object",
+      "properties": {
+        "table": {
+          "description": "Table of the offending record, e.g. `\"sys_script_include\"`.",
+          "type": "string"
+        },
+        "sysId": {
+          "description": "`sys_id` of the offending record.",
+          "type": "string"
+        },
+        "recordName": {
+          "description": "Display label of the record (`name`, falling back to the sys_id).",
+          "type": "string"
+        },
+        "field": {
+          "description": "Field holding the offending value, e.g. `\"script\"`.",
+          "type": "string"
+        },
+        "line": {
+          "description": "1-based line within `field`, for script findings.",
+          "type": "number"
+        },
+        "logicalId": {
+          "description": "Identity of a subject that is not one record.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

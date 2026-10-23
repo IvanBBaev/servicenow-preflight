@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ivanbbaev.github.io/servicenow-preflight/schemas/report.v1.json",
+  "title": "servicenow-preflight JSON report (v1)",
+  "description": "The top-level JSON report document.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "tool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "const": "servicenow-preflight"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "generatedAt": {
+      "description": "ISO 8601 timestamp of when the envelope was built.",
+      "type": "string"
+    },
+    "ok": {
+      "description": "`true` when every run's report is ok.",
+      "type": "boolean"
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ReportRun"
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "tool",
+    "generatedAt",
+    "ok",
+    "runs"
+  ],
+  "$defs": {
+    "CheckResult": {
+      "description": "Result produced by running a single check.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CheckStatus"
+        },
+        "message": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "Set on synthetic rows only; absent means `\"check\"`.",
+          "$ref": "#/$defs/CheckResultKind"
+        },
+        "findings": {
+          "description": "The record-level findings behind the verdict, when the check reports them. Omitted when there are none; capped at 500 by the runner.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Finding"
+          }
+        },
+        "findingsTruncated": {
+          "description": "How many findings were dropped by the cap.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "message"
+      ]
+    },
+    "CheckResultKind": {
+      "description": "Who produced a result row: a check (`\"check\"`, the default when absent), the runner itself (`\"runner\"`: the duplicate-name and empty-selection guards) or the baseline (`\"baseline\"`: expired-entry notices).",
+      "enum": [
+        "check",
+        "runner",
+        "baseline"
+      ]
+    },
+    "CheckStatus": {
+      "description": "Outcome of a single preflight check.",
+      "enum": [
+        "pass",
+        "warn",
+        "fail"
+      ]
+    },
+    "Finding": {
+      "description": "One record-level finding behind a check's verdict.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable fingerprint, `\"f1:\"` plus 16 hex digits (see `findingId`).",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Check-local kind, e.g. `\"pattern:gs.log\"` or `\"acl-missing:create\"`.",
+          "type": "string"
+        },
+        "message": {
+          "description": "One line; never echoes secrets or matched source text.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Verdict of this finding; defaults to the row's status.",
+          "$ref": "#/$defs/CheckStatus"
+        },
+        "location": {
+          "$ref": "#/$defs/FindingLocation"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "message"
+      ]
+    },
+    "FindingLocation": {
+      "description": "Where a finding lives: a record (table + sys_id + field, optionally a line in a script) or, for subjects that are not a single record, a logical id (`\"scope/slug\"`, `\"instance\"`, `\"app:<scope>\"`).",
+      "type": "object",
+      "properties": {
+        "table": {
+          "description": "Table of the offending record, e.g. `\"sys_script_include\"`.",
+          "type": "string"
+        },
+        "sysId": {
+          "description": "`sys_id` of the offending record.",
+          "type": "string"
+        },
+        "recordName": {
+          "description": "Display label of the record (`name`, falling back to the sys_id).",
+          "type": "string"
+        },
+        "field": {
+          "description": "Field holding the offending value, e.g. `\"script\"`.",
+          "type": "string"
+        },
+        "line": {
+          "description": "1-based line within `field`, for script findings.",
+          "type": "number"
+        },
+        "logicalId": {
+          "description": "Identity of a subject that is not one record.",
+          "type": "string"
+        }
+      }
+    },
+    "PreflightReport": {
+      "description": "Aggregate outcome of a full preflight run.",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "description": "`true` when no check returned a `fail` status.",
+          "type": "boolean"
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckResult"
+          }
+        },
+        "summary": {
+          "type": "object",
+          "properties": {
+            "pass": {
+              "type": "number"
+            },
+            "warn": {
+              "type": "number"
+            },
+            "fail": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "pass",
+            "warn",
+            "fail"
+          ]
+        }
+      },
+      "required": [
+        "ok",
+        "results",
+        "summary"
+      ]
+    },
+    "ReportRun": {
+      "description": "One instance's run inside the envelope.",
+      "type": "object",
+      "properties": {
+        "instance": {
+          "description": "Registry instance name (`dev`…); absent for an ad-hoc `--instance` run.",
+          "type": "string"
+        },
+        "url": {
+          "description": "The instance origin (`https://host`), without credentials or a path.",
+          "type": "string"
+        },
+        "report": {
+          "$ref": "#/$defs/PreflightReport"
+        }
+      },
+      "required": [
+        "report"
+      ]
+    }
+  }
+}

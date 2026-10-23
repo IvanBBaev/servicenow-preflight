@@ -19,6 +19,7 @@ import { runPreflight } from "../build/index.js";
 import { formatJUnit } from "../build/report/junit.js";
 import { formatSarif } from "../build/report/sarif.js";
 import { createFakeSnClient } from "../build/http/fake.js";
+import { reportOf } from "./helpers/json-report.js";
 
 // Absolute path to the CommonJS launcher (the real process entry).
 const BIN = fileURLToPath(
@@ -83,7 +84,7 @@ test("CLI --only runs just the named check and exits 0 on pass", () => {
     "json",
   ]);
   assert.equal(res.status, 0);
-  const report = JSON.parse(res.stdout);
+  const report = reportOf(res.stdout);
   assert.equal(report.results.length, 1);
   assert.equal(report.results[0].name, "instance-url-configured");
   assert.equal(report.results[0].status, "pass");
@@ -93,7 +94,7 @@ test("CLI --only runs just the named check and exits 0 on pass", () => {
 test("CLI exits 1 when a check fails (no instance URL)", () => {
   const res = runCli(["--only", "instance-url-configured", "--format", "json"]);
   assert.equal(res.status, 1);
-  const report = JSON.parse(res.stdout);
+  const report = reportOf(res.stdout);
   assert.equal(report.ok, false);
   assert.equal(report.summary.fail, 1);
 });
@@ -108,7 +109,7 @@ test("CLI --skip drops the named check from the default run", () => {
     "json",
   ]);
   assert.equal(res.status, 0, res.stderr);
-  const report = JSON.parse(res.stdout);
+  const report = reportOf(res.stdout);
   const names = report.results.map((r) => r.name);
   assert.ok(!names.includes("instance-url-configured"));
   // The remaining default checks all ran.
@@ -251,7 +252,7 @@ test("CLI reads instance + selection from a --config file", () => {
   try {
     const res = runCli(["--config", cfgPath, "--format", "json"], { cwd: dir });
     assert.equal(res.status, 0, res.stderr);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.results.length, 1);
     assert.equal(report.results[0].name, "instance-url-configured");
     assert.equal(report.results[0].status, "pass");
@@ -321,7 +322,7 @@ test("CLI run <env> resolves the instance URL from the registry", () => {
       { cwd: dir },
     );
     assert.equal(res.status, 0, res.stderr);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.results[0].name, "instance-url-configured");
     assert.equal(report.results[0].status, "pass");
     assert.match(report.results[0].message, /dev12345/);
@@ -342,10 +343,18 @@ test("CLI run --all aggregates a report per instance", () => {
     );
     assert.equal(res.status, 0, res.stderr);
     const out = JSON.parse(res.stdout);
+    assert.equal(out.schemaVersion, 1);
     assert.equal(out.ok, true);
-    assert.deepEqual(Object.keys(out.instances).sort(), ["dev", "prod"]);
-    assert.equal(out.instances.dev.results[0].status, "pass");
-    assert.equal(out.instances.prod.results[0].status, "pass");
+    assert.deepEqual(
+      out.runs.map((r) => r.instance),
+      ["dev", "prod"],
+    );
+    assert.deepEqual(
+      out.runs.map((r) => r.url),
+      ["https://dev12345.service-now.com", "https://prod98765.service-now.com"],
+    );
+    assert.equal(out.runs[0].report.results[0].status, "pass");
+    assert.equal(out.runs[1].report.results[0].status, "pass");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -500,7 +509,7 @@ test("CLI drift passes (exit 0) when the target has every active source test", (
       cwd: dir,
     });
     assert.equal(res.status, 0, res.stderr);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.ok, true);
     assert.equal(report.results[0].name, "test-drift");
     assert.equal(report.results[0].status, "pass");
@@ -529,7 +538,7 @@ test("CLI drift fails (exit 1) when the target is missing an active source test"
       cwd: dir,
     });
     assert.equal(res.status, 1);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.ok, false);
     assert.equal(report.results[0].status, "fail");
     assert.match(report.results[0].message, /missing on "prod"/);
@@ -577,7 +586,7 @@ test("CLI fails closed (exit 1) when --only matches no checks (Q-1 vacuous guard
     "json",
   ]);
   assert.equal(res.status, 1);
-  const report = JSON.parse(res.stdout);
+  const report = reportOf(res.stdout);
   assert.equal(report.ok, false);
   assert.equal(report.summary.fail, 1);
   assert.equal(report.results[0].name, "preflight");
@@ -912,7 +921,7 @@ test("CLI splits exit codes: a check failure is 1, a usage error is 2 (CC-41)", 
     "json",
   ]);
   assert.equal(failed.status, 1);
-  const report = JSON.parse(failed.stdout);
+  const report = reportOf(failed.stdout);
   assert.equal(report.ok, false);
 
   // A malformed invocation never runs a check → exit 2.
@@ -1156,7 +1165,7 @@ test("CLI accepts per-check options for a known check", () => {
   try {
     const res = runCli(["--config", cfgPath, "--format", "json"], { cwd: dir });
     assert.equal(res.status, 0, res.stderr);
-    assert.equal(JSON.parse(res.stdout).results[0].status, "pass");
+    assert.equal(reportOf(res.stdout).results[0].status, "pass");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

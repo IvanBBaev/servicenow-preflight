@@ -11,6 +11,7 @@ import {
 } from "./report/github.js";
 import { formatMarkdown, formatMarkdownAll } from "./report/markdown.js";
 import { formatSarif } from "./report/sarif.js";
+import { formatJson, toEnvelope, type ReportRun } from "./report/json.js";
 import {
   loadRegistry,
   resolveInstance,
@@ -475,16 +476,23 @@ function ranChecks(
   return pool.filter((c) => names.has(c.name));
 }
 
+/** The JSON envelope for the given runs, stamped with this tool's version. */
+function renderJson(runs: readonly ReportRun[]): string {
+  return formatJson(toEnvelope(runs, { version: readVersion() }));
+}
+
 /**
  * Render one report in the requested format to a string. `instance` names the
- * target in formats that show it (markdown, github); the others ignore it.
- * `checks` are the checks that ran; markdown uses them for remediation hints.
+ * target in formats that show it (markdown, github, json); the others ignore
+ * it. `checks` are the checks that ran; markdown uses them for remediation
+ * hints. `url` is the instance URL the json envelope records (origin only).
  */
 function render(
   report: PreflightReport,
   format: OutputFormat,
   instance?: string,
   checks?: readonly Check[],
+  url?: string,
 ): string {
   switch (format) {
     case "markdown":
@@ -492,7 +500,13 @@ function render(
     case "github":
       return formatGitHubAnnotations(report, instance);
     case "json":
-      return `${JSON.stringify(report, null, 2)}\n`;
+      return renderJson([
+        {
+          ...(instance !== undefined ? { instance } : {}),
+          ...(url !== undefined ? { url } : {}),
+          report,
+        },
+      ]);
     case "junit":
       return formatJUnit(report);
     case "sarif":
@@ -513,6 +527,8 @@ function render(
 interface NamedReport {
   name: string;
   report: PreflightReport;
+  /** The instance URL the run targeted, when one was resolved. */
+  url?: string;
 }
 
 /** Append extra results to a report, recomputing its summary and `ok`. */
@@ -571,9 +587,13 @@ function renderAll(
 ): string {
   const ok = reports.every((r) => r.report.ok);
   if (format === "json") {
-    const instances: Record<string, PreflightReport> = {};
-    for (const r of reports) instances[r.name] = r.report;
-    return `${JSON.stringify({ ok, instances }, null, 2)}\n`;
+    return renderJson(
+      reports.map((r) => ({
+        instance: r.name,
+        ...(r.url !== undefined ? { url: r.url } : {}),
+        report: r.report,
+      })),
+    );
   }
   if (format === "pretty") {
     const blocks = reports.map(
@@ -721,12 +741,18 @@ function resolveRunTargets(
   return [{ instanceUrl: args.instanceUrl }];
 }
 
+/** One instance's report plus the URL it ran against. */
+interface InstanceRun {
+  report: PreflightReport;
+  url?: string;
+}
+
 /** Run the check suite against one resolved instance. */
 async function runOneInstance(
   target: RunTarget,
   args: ParsedArgs,
   cwd: string,
-): Promise<PreflightReport> {
+): Promise<InstanceRun> {
   const loaded = await loadConfig(cwd, {
     configPath: args.configPath,
     envPrefix: target.envPrefix,
@@ -828,9 +854,12 @@ async function runOneInstance(
         b.entries.length === 1 ? "y" : "ies"
       } → ${writePath}\n`,
     );
-    return report;
+    return { report, ...(instanceUrl ? { url: instanceUrl } : {}) };
   }
-  return baseline ? applyBaseline(report, baseline, new Date()) : report;
+  return {
+    report: baseline ? applyBaseline(report, baseline, new Date()) : report,
+    ...(instanceUrl ? { url: instanceUrl } : {}),
+  };
 }
 
 /**
@@ -870,13 +899,14 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
   const [firstTarget] = targets;
   if (!args.all && targets.length === 1 && firstTarget && !firstTarget.name) {
     // Single-instance: preserve the original single-report output exactly.
-    const report = await runOneInstance(firstTarget, args, cwd);
+    const { report, url } = await runOneInstance(firstTarget, args, cwd);
     process.stdout.write(
       render(
         report,
         args.format,
         undefined,
         ranChecks(defaultChecks, [report]),
+        url,
       ),
     );
     process.exitCode = report.ok ? 0 : 1;
@@ -885,8 +915,12 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
 
   const reports: NamedReport[] = [];
   for (const target of targets) {
-    const report = await runOneInstance(target, args, cwd);
-    reports.push({ name: target.name ?? "instance", report });
+    const { report, url } = await runOneInstance(target, args, cwd);
+    reports.push({
+      name: target.name ?? "instance",
+      report,
+      ...(url !== undefined ? { url } : {}),
+    });
   }
 
   const ran = ranChecks(
@@ -896,7 +930,13 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
   const [firstReport] = reports;
   if (reports.length === 1 && firstReport) {
     process.stdout.write(
-      render(firstReport.report, args.format, firstReport.name, ran),
+      render(
+        firstReport.report,
+        args.format,
+        firstReport.name,
+        ran,
+        firstReport.url,
+      ),
     );
   } else {
     process.stdout.write(renderAll(reports, args.format, ran));

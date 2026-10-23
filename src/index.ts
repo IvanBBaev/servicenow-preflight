@@ -150,6 +150,16 @@ export {
 } from "./report/junit.js";
 export { formatSarif } from "./report/sarif.js";
 export {
+  REPORT_SCHEMA_VERSION,
+  toEnvelope,
+  formatJson,
+} from "./report/json.js";
+export type {
+  EnvelopeOptions,
+  ReportEnvelope,
+  ReportRun,
+} from "./report/json.js";
+export {
   formatMarkdown,
   formatMarkdownAll,
   type MarkdownOptions,

@@ -2,6 +2,9 @@ build/
 coverage/
 node_modules/
 
+# Generated JSON Schemas (scripts/gen-schema.mjs) — the generator owns the layout
+schemas/
+
 # Standalone static docs site — kept out of the library's format gate
 site/
 

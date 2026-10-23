@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { reportOf } from "./helpers/json-report.js";
 
 // Absolute path to the CommonJS launcher (the real process entry).
 const BIN = fileURLToPath(
@@ -109,7 +110,7 @@ test("drift --format json reports ok:false and a failing test-drift result", () 
       cwd: dir,
     });
     assert.equal(res.status, 1);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.ok, false);
     // test-drift, promotion-order, and the two version-parity results
     // (OPP-1 / OPP-5) — all three advisory warns here: there is no registry and
@@ -147,7 +148,7 @@ test("drift ignores an inactive source test missing downstream (not a regression
       cwd: dir,
     });
     assert.equal(res.status, 0, res.stderr);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.ok, true);
     assert.equal(report.results[0].status, "pass");
   } finally {
@@ -204,7 +205,7 @@ test("drift warns (exit 0) when the target only carries extra tests", () => {
       cwd: dir,
     });
     assert.equal(res.status, 0, res.stderr);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.ok, true);
     assert.equal(report.results[0].status, "warn");
     assert.match(report.results[0].message, /Extra/);
@@ -408,7 +409,7 @@ test("--registry <path> points drift at a custom registry location", () => {
       { cwd: dir },
     );
     assert.equal(res.status, 0, res.stderr);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.results[0].name, "test-drift");
     assert.equal(report.results[0].status, "pass");
     const order = report.results.find((r) => r.name === "promotion-order");
@@ -542,7 +543,7 @@ test("drift warns (exit 0) when a compared manifest is older than 30 days", () =
       cwd: dir,
     });
     assert.equal(res.status, 0, res.stderr);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.ok, true);
     const freshness = report.results.find(
       (r) => r.name === "manifest-freshness",
@@ -703,7 +704,7 @@ test("drift on pre-capture manifests reports advisory version-parity warns (exit
       cwd: dir,
     });
     assert.equal(res.status, 0, res.stderr);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.ok, true);
     const instance = report.results.find(
       (r) => r.name === "instance-version-parity",
@@ -746,7 +747,7 @@ test("drift blocks (exit 1) on a platform build-name mismatch (OPP-1)", () => {
       cwd: dir,
     });
     assert.equal(res.status, 1);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.ok, false);
     const instance = report.results.find(
       (r) => r.name === "instance-version-parity",
@@ -828,7 +829,7 @@ test("drift passes cleanly (exit 0) when identity and apps match on both sides",
       cwd: dir,
     });
     assert.equal(res.status, 0, res.stderr);
-    const report = JSON.parse(res.stdout);
+    const report = reportOf(res.stdout);
     assert.equal(report.ok, true);
     // Full capture on both sides: every result is a positive pass — no warns.
     assert.equal(report.summary.warn, 0);
@@ -871,7 +872,7 @@ function seedPipeline(dir) {
 /** Run `drift` as JSON and return `{ res, order }` (the promotion-order row). */
 function driftOrder(dir, args) {
   const res = runCli(["drift", ...args, "--format", "json"], { cwd: dir });
-  const report = JSON.parse(res.stdout);
+  const report = reportOf(res.stdout);
   return {
     res,
     report,

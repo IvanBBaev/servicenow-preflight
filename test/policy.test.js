@@ -14,6 +14,7 @@ import {
   readBaseline,
 } from "../build/index.js";
 import { UsageError } from "../build/config.js";
+import { reportOf } from "./helpers/json-report.js";
 
 const BIN = fileURLToPath(
   new URL("../bin/servicenow-preflight.cjs", import.meta.url),
@@ -177,7 +178,7 @@ test("CLI: --severity demotes a failing check; the flag wins over config", () =>
       { cwd: dir },
     );
     assert.equal(demoted.status, 0, demoted.stderr);
-    const out = JSON.parse(demoted.stdout);
+    const out = reportOf(demoted.stdout);
     assert.match(out.results[0].message, /\[severity: warn by policy\]$/);
 
     writeFileSync(
@@ -203,7 +204,7 @@ test("CLI: severity off skips the check (the empty-selection guard still fails)"
     "--json",
   ]);
   assert.equal(res.status, 1);
-  const out = JSON.parse(res.stdout);
+  const out = reportOf(res.stdout);
   assert.equal(
     out.results.some((r) => r.name === "instance-url-configured"),
     false,

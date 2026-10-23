@@ -22,6 +22,7 @@ import {
   BASELINE_ROW,
 } from "../build/index.js";
 import { UsageError } from "../build/config.js";
+import { reportOf } from "./helpers/json-report.js";
 
 const BIN = fileURLToPath(
   new URL("../bin/servicenow-preflight.cjs", import.meta.url),
@@ -333,7 +334,7 @@ test("CLI: --write-baseline then --baseline turns a known fail into a pass", () 
       cwd: dir,
     });
     assert.equal(applied.status, 0, applied.stderr);
-    const out = JSON.parse(applied.stdout);
+    const out = reportOf(applied.stdout);
     assert.equal(out.ok, true);
     assert.match(
       out.results[0].message,

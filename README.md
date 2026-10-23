@@ -459,8 +459,8 @@ snpf run prod                     # only if the gate passes
 Selected with `--format` (or `--json`):
 
 - **`pretty`** _(default)_ — human-readable lines (`✓ / ! / ✗`) plus a summary.
-- **`json`** — the full `PreflightReport` (`ok`, `results[]`, `summary`) as
-  pretty-printed JSON.
+- **`json`** — a versioned envelope, the same shape for single-instance and
+  `--all` runs (see [JSON output](#json-output)).
 - **`junit`** — a JUnit XML document with **one `<testcase>` per check**: `fail`
   → `<failure>`, `warn` → a passing case with a `<system-out>` note, `pass` → an
   empty passing case. XML-1.0-illegal control characters are stripped and the five
@@ -483,10 +483,45 @@ Selected with `--format` (or `--json`):
 ```bash
 snpf --format junit > preflight-junit.xml
 snpf --format sarif > preflight.sarif
-snpf --json | jq '.summary'
+snpf --json | jq '.runs[0].report.summary'
 snpf --format markdown > preflight.md
 gh pr comment "$PR_NUMBER" --body-file preflight.md
 ```
+
+### JSON output
+
+`--format json` prints one envelope (plus a trailing newline):
+
+```json
+{
+  "schemaVersion": 1,
+  "tool": { "name": "servicenow-preflight", "version": "0.5.0" },
+  "generatedAt": "2026-10-24T08:00:00.000Z",
+  "ok": false,
+  "runs": [
+    {
+      "instance": "dev",
+      "url": "https://dev12345.service-now.com",
+      "report": { "ok": false, "results": [], "summary": {} }
+    }
+  ]
+}
+```
+
+`ok` is `true` only when every run is ok. Each run's `report` is the full
+`PreflightReport` (`ok`, `results[]` with any `findings`, `summary`). `instance`
+is the registry name and is left out for an ad-hoc `--instance` run; `url` is
+the instance origin only, so credentials and paths never appear. `drift`
+prints the same envelope with one run. `schemaVersion` changes only on a
+breaking shape change.
+
+The JSON Schema (draft 2020-12) ships in the package as
+`servicenow-preflight/schemas/report.v1.json` (and `finding.v1.json` for a
+single `Finding`) and is published at
+<https://ivanbbaev.github.io/servicenow-preflight/schemas/report.v1.json>. It is
+generated from the TypeScript types (`npm run gen:schema`), and `npm run check`
+fails when the committed copy is stale. The library builds the same envelope
+with `toEnvelope(runs, { version })` and `formatJson(envelope)`.
 
 ## CI integration
 
