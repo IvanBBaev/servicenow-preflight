@@ -2,7 +2,7 @@
   "name": "@tessera/mcp",
   "private": true,
   "version": "0.0.0",
-  "description": "MCP server over the one composition root — four read-only preflight tools and one §11-guarded apply (Phase 9)",
+  "description": "MCP server over the one composition root — thirteen preflight tools: nine read-only, three §11-guarded writers and one repo-writing generator",
   "type": "module",
   "main": "build/index.js",
   "types": "build/index.d.ts",
