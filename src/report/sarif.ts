@@ -69,6 +69,7 @@ export function formatSarif(
     ruleId: result.name,
     level: LEVEL_BY_STATUS[result.status as Exclude<CheckStatus, "pass">],
     message: { text: result.message },
+    ...(result.kind !== undefined ? { properties: { kind: result.kind } } : {}),
     // The report is not tied to a source file; anchor every result to the run
     // itself so the required physical location is well-formed rather than fake.
     locations: [

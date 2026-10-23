@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name or message), `makeFinding`, `capFindings` and `MAX_FINDINGS` (500).
   `runPreflight` sanitises returned findings and caps them; results without
   findings are unchanged.
+- **Synthetic-row `kind`** — `CheckResult.kind` (`"check" | "runner" |
+"baseline"`, new `CheckResultKind` export) marks the runner's `preflight`
+  guard rows (`"runner"`) and expired-baseline rows (`"baseline"`); check rows
+  omit it and a check cannot set it. SARIF results carry it as
+  `properties.kind`.
 - **Per-check options (`checks` config key)** — `PreflightConfig.checks` was
   declared but never read. Each entry is now shallow-merged over `options`
   for its check only (new `PreflightContext.checkOptions`, honoured by
@@ -258,6 +263,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Release runbook (`docs/RELEASING.md`) and OIDC provenance publishing.
 
 ### Changed
+
+- Check names `preflight`, `baseline` and any `preflight:` prefix are now
+  reserved: `runPreflight` rejects a check set that uses one with a single
+  failing `preflight` row, like duplicate names.
 
 - The registry now validates `promotesTo` at load time: an undeclared target,
   a self-reference, a non-string value or a cycle is a usage error (exit 2)

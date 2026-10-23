@@ -122,11 +122,20 @@ export interface Finding {
   location?: FindingLocation;
 }
 
+/**
+ * Who produced a result row: a check (`"check"`, the default when absent), the
+ * runner itself (`"runner"`: the duplicate-name and empty-selection guards) or
+ * the baseline (`"baseline"`: expired-entry notices).
+ */
+export type CheckResultKind = "check" | "runner" | "baseline";
+
 /** Result produced by running a single check. */
 export interface CheckResult {
   name: string;
   status: CheckStatus;
   message: string;
+  /** Set on synthetic rows only; absent means `"check"`. */
+  kind?: CheckResultKind;
   /**
    * The record-level findings behind the verdict, when the check reports them.
    * Omitted when there are none; capped at 500 by the runner.

@@ -136,6 +136,7 @@ test("applyBaseline ignores an expired entry and appends a baseline warn row", (
   assert.deepEqual(out.results[1], {
     name: BASELINE_ROW,
     status: "warn",
+    kind: "baseline",
     message:
       "Baseline entry for table-crud-acl expired on 2026-10-21; the finding fails again next run if still present.",
   });

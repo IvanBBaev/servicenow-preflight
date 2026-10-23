@@ -152,3 +152,17 @@ test("formatSarif enriches rules[] for known checks only", () => {
     shortDescription: { text: "Bare check." },
   });
 });
+
+test("formatSarif carries a synthetic row's kind in result properties (F-R-17)", () => {
+  const { runs } = JSON.parse(
+    formatSarif(
+      report([
+        { name: "preflight", status: "fail", message: "dup", kind: "runner" },
+        { name: "updateSetOpen", status: "fail", message: "none" },
+      ]),
+    ),
+  );
+  const byRule = Object.fromEntries(runs[0].results.map((r) => [r.ruleId, r]));
+  assert.deepEqual(byRule.preflight.properties, { kind: "runner" });
+  assert.equal(Object.hasOwn(byRule.updateSetOpen, "properties"), false);
+});

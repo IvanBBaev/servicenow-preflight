@@ -228,6 +228,7 @@ export function applyBaseline(
     results.push({
       name: BASELINE_ROW,
       status: "warn",
+      kind: "baseline",
       message: `Baseline entry for ${e.check} expired on ${String(
         e.expires,
       )}; the finding fails again next run if still present.`,

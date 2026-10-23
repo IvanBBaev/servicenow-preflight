@@ -26,6 +26,7 @@ export type {
   Check,
   CheckMeta,
   CheckResult,
+  CheckResultKind,
   CheckSeverity,
   CheckStatus,
   CheckSelection,
@@ -262,10 +263,16 @@ function coerceResult(check: Check, produced: unknown): CheckResult {
   // by the summariser below, but `name` is what identifies the row, so a
   // missing one falls back to the check that produced it.
   const candidate = produced as CheckResult;
-  const named =
+  let named =
     typeof candidate.name === "string"
       ? candidate
       : { ...candidate, name: check.name };
+  // `kind` marks rows the runner and the baseline synthesise; a check cannot
+  // claim it.
+  if (Object.hasOwn(named, "kind")) {
+    named = { ...named };
+    delete named.kind;
+  }
   if (
     !Object.hasOwn(named, "findings") &&
     !Object.hasOwn(named, "findingsTruncated")
@@ -278,6 +285,16 @@ function coerceResult(check: Check, produced: unknown): CheckResult {
   if (findings.length > 0) result.findings = findings;
   if (truncated > 0) result.findingsTruncated = truncated;
   return result;
+}
+
+/**
+ * Whether `name` is kept for synthetic rows: `"preflight"` (runner guards),
+ * `"baseline"` (expired-entry notices) or any `"preflight:"` prefix.
+ */
+function isReservedCheckName(name: string): boolean {
+  return (
+    name === "preflight" || name === "baseline" || name.startsWith("preflight:")
+  );
 }
 
 /**
@@ -310,16 +327,36 @@ export async function runPreflight(
   // than run a set we cannot reason about.
   const seen = new Set<string>();
   const duplicates = new Set<string>();
+  const reserved = new Set<string>();
   for (const check of checks) {
     if (seen.has(check.name)) duplicates.add(check.name);
     seen.add(check.name);
+    if (isReservedCheckName(check.name)) reserved.add(check.name);
   }
-  if (duplicates.size > 0) {
-    const names = [...duplicates].sort().join(", ");
-    const message = `Duplicate check name(s): ${names}. Check names must be unique.`;
+  if (duplicates.size > 0 || reserved.size > 0) {
+    const problems: string[] = [];
+    if (duplicates.size > 0) {
+      const names = [...duplicates].sort().join(", ");
+      problems.push(
+        `Duplicate check name(s): ${names}. Check names must be unique.`,
+      );
+    }
+    if (reserved.size > 0) {
+      const names = [...reserved].sort().join(", ");
+      problems.push(
+        `Reserved check name(s): ${names}. "preflight", "baseline" and names starting with "preflight:" are kept for rows the runner and the baseline produce.`,
+      );
+    }
     return {
       ok: false,
-      results: [{ name: "preflight", status: "fail", message }],
+      results: [
+        {
+          name: "preflight",
+          status: "fail",
+          message: problems.join(" "),
+          kind: "runner",
+        },
+      ],
       summary: { pass: 0, warn: 0, fail: 1 },
     };
   }
@@ -337,7 +374,7 @@ export async function runPreflight(
         : "No checks matched the selection (ctx.select.only/skip); nothing was verified.";
     return {
       ok: false,
-      results: [{ name: "preflight", status: "fail", message }],
+      results: [{ name: "preflight", status: "fail", message, kind: "runner" }],
       summary: { pass: 0, warn: 0, fail: 1 },
     };
   }

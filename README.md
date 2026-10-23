@@ -624,6 +624,14 @@ entries are dropped, a bad `id` is recomputed) and caps the list at
 `MAX_FINDINGS` (500), counting the overflow in `findingsTruncated`. `findings`
 is optional and omitted when empty, and never changes the row's status.
 
+Rows the tool synthesises carry a **`kind`**: `"runner"` on the `preflight`
+guard rows (duplicate or reserved check names, an empty selection) and
+`"baseline"` on expired-baseline notices. Check rows leave it out (meaning
+`"check"`), and a `kind` a check sets itself is stripped. The names
+`preflight`, `baseline` and any `preflight:` prefix are reserved: a check set
+that uses one fails with a single `preflight` row. SARIF results carry the kind
+in `properties.kind`.
+
 ## Tessera (preview): `tess` and `tessera-mcp`
 
 The package also carries **Tessera**, a test framework for ServiceNow that runs

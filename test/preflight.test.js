@@ -119,6 +119,7 @@ test("runPreflight fails closed when a selection matches no checks (vacuous guar
   assert.equal(report.summary.fail, 1);
   assert.equal(report.results.length, 1);
   assert.equal(report.results[0].name, "preflight");
+  assert.equal(report.results[0].kind, "runner");
   assert.match(report.results[0].message, /nothing was verified/i);
 });
 
@@ -225,8 +226,70 @@ test("runPreflight rejects a check set with duplicate names (CC-46)", async () =
   assert.equal(report.ok, false);
   assert.equal(report.summary.fail, 1);
   assert.equal(report.results[0].name, "preflight");
+  assert.equal(report.results[0].kind, "runner");
   assert.match(report.results[0].message, /[Dd]uplicate/);
   assert.match(report.results[0].message, /dup/);
+});
+
+for (const reservedName of ["preflight", "baseline", "preflight:extra"]) {
+  test(`runPreflight rejects the reserved check name ${reservedName} (F-R-17)`, async () => {
+    let ran = false;
+    const check = {
+      name: reservedName,
+      description: "claims a reserved name",
+      run() {
+        ran = true;
+        return { name: reservedName, status: "pass", message: "ok" };
+      },
+    };
+    const report = await runPreflight(ctx(), [check]);
+    assert.equal(ran, false);
+    assert.equal(report.ok, false);
+    assert.equal(report.results.length, 1);
+    assert.equal(report.results[0].name, "preflight");
+    assert.equal(report.results[0].kind, "runner");
+    assert.match(report.results[0].message, /[Rr]eserved/);
+    assert.ok(report.results[0].message.includes(reservedName));
+  });
+}
+
+test("runPreflight reports duplicate and reserved names in one row", async () => {
+  const mk = (name) => ({
+    name,
+    description: name,
+    run: () => ({ name, status: "pass", message: "ok" }),
+  });
+  const report = await runPreflight(ctx(), [mk("a"), mk("a"), mk("baseline")]);
+  assert.equal(report.results.length, 1);
+  assert.match(report.results[0].message, /Duplicate check name\(s\): a\./);
+  assert.match(
+    report.results[0].message,
+    /Reserved check name\(s\): baseline\./,
+  );
+});
+
+test("runPreflight strips a kind a check tries to set on its own row", async () => {
+  const check = {
+    name: "forger",
+    description: "claims to be the runner",
+    run: () => ({
+      name: "forger",
+      status: "warn",
+      message: "hi",
+      kind: "runner",
+    }),
+  };
+  const report = await runPreflight(ctx(), [check]);
+  assert.equal(report.results[0].status, "warn");
+  assert.equal(Object.hasOwn(report.results[0], "kind"), false);
+});
+
+test("runPreflight leaves kind off ordinary check rows", async () => {
+  const report = await runPreflight(
+    ctx({ instanceUrl: "https://x.service-now.com" }),
+    [instanceUrlConfigured],
+  );
+  assert.equal(Object.hasOwn(report.results[0], "kind"), false);
 });
 
 // --- coerceResult: a bad check return must fail only that check ---------
