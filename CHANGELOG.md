@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `runPreflight`); a non-object value or an unknown check name is a usage
   error (exit 2), and per-check `languages` / `baseLanguage` get the same
   SR-1 load-time query-injection guard as `options`.
+- **`log-leftovers` check** — certification rule 4.3 (advisory): active
+  in-scope client scripts, UI Scripts, UI Policy scripts and UI Action
+  client scripts are scanned for `console.log(` / `console.debug(` /
+  `console.dir(` and debug `alert(` calls, and server scripts for
+  `gs.print(` / `gs.log(` (unavailable in scoped apps) → **warn** naming the
+  artifact, field and line, never the matched text; a security-trimmed
+  script read fails closed. Uses the shared script scanner.
 - **`notification-conditions` check** — install hygiene (advisory): an
   active `sysevent_email_action` in scope that is sent on update, has no
   event, no condition and no advanced condition fires on every update of

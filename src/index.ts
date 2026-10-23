@@ -203,6 +203,7 @@ export {
   propertyPrivacy,
   inactiveArtifacts,
   notificationConditions,
+  logLeftovers,
   testDrift,
 } from "./checks/index.js";
 

@@ -55,6 +55,7 @@ export const RULE_TITLES: Readonly<Record<string, string>> = {
   "2.2": "UI Pages have read ACLs",
   "2.6": "Service Portal widgets & pages have roles",
   "2.8": "No client-side eval(); validate GlideScopedEvaluator sources",
+  "4.3": "Use jslog() not console.log()",
   "4.5": "No hard-coded URLs/constants",
   "4.10":
     "Remove empty/commented Fix Scripts & duplicate-named Script Includes",

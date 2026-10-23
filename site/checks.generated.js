@@ -252,5 +252,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "Never — install hygiene stays advisory.",
     "warn": "A Notification fires on every update of its table, no scope set, or an unreadable table.",
     "pass": "Every active Notification in scope is event-driven or conditioned, or the scope ships none."
+  },
+  {
+    "code": "29",
+    "name": "log-leftovers",
+    "tag": "scope",
+    "desc": "No console.log/debug/dir or debug alert() in client scripts and no gs.print/gs.log on the server. Advisory.",
+    "fail": "A script table read was security-trimmed.",
+    "warn": "A console/alert call on the client or gs.print/gs.log on the server, no scope, or an ambiguous zero-row read.",
+    "pass": "No log leftover in any in-scope script, or the scope ships none."
   }
 ];
