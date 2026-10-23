@@ -434,7 +434,8 @@ Exit codes:
      drift/promote or manifest-age gate that blocked)
   2  a usage or configuration error (unknown option, missing flag value,
      bad --format / --max-age, a required registry absent, a --registry path
-     that does not exist, an invalid config or registry file)
+     that does not exist, an invalid config, registry or state manifest
+     file, a drift manifest that was never synced)
 
 Authentication (via environment / .env — never the config file, never logged):
   Per instance, prefix any SNPF_* var with the instance name, e.g.
@@ -1019,17 +1020,17 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
   }
   // Delegated decision 2026-09-28 (wave 13): resolve the registry BEFORE the
   // manifests, so a mistyped explicit --registry is a usage error (exit 2)
-  // rather than masked by a missing-manifest runtime error (exit 1).
+  // rather than masked by a missing-manifest error.
   const registry = await loadRegistry(cwd, args.registryPath);
   const source = await loadManifest(src, cwd);
   const target = await loadManifest(dst, cwd);
   if (!source) {
-    throw new Error(
+    throw new UsageError(
       `No manifest for "${src}"; run: servicenow-preflight sync ${src}.`,
     );
   }
   if (!target) {
-    throw new Error(
+    throw new UsageError(
       `No manifest for "${dst}"; run: servicenow-preflight sync ${dst}.`,
     );
   }

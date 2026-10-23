@@ -264,6 +264,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **State manifest errors exit 2** — a malformed state manifest (invalid
+  JSON, not an object, an element without an `id`, or one that declares a
+  different instance) and a `drift` side that was never synced are now usage
+  errors (exit `2`) instead of exit `1`, so CI can tell a broken checkout apart
+  from a blocked release. A check failure still exits `1`.
 - **`--format json` prints a versioned envelope** —
   `{ schemaVersion: 1, tool: { name, version }, generatedAt, ok, runs: [{ instance?, url?, report }] }`
   for single-instance, `--all` and `drift` runs alike, replacing the bare

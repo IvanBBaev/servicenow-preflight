@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, rename, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, resolve, dirname } from "node:path";
+import { UsageError } from "../config.js";
 import { PREFLIGHT_DIR, validateInstanceName } from "../registry.js";
 
 /**
@@ -193,7 +194,7 @@ export function emptyManifest(
 
 /**
  * Load one instance's manifest, or `undefined` when it has never been synced.
- * Throws on a present-but-malformed file.
+ * Throws a {@link UsageError} (CLI exit 2) on a present-but-malformed file.
  */
 export async function loadManifest(
   instance: string,
@@ -211,18 +212,18 @@ export async function loadManifest(
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error(`Manifest ${path} is not valid JSON.`);
+    throw new UsageError(`Manifest ${path} is not valid JSON.`);
   }
   const m = parsed as Partial<StateManifest> | null;
   if (!m || typeof m !== "object" || Array.isArray(m)) {
-    throw new Error(`Manifest ${path} is not a JSON object.`);
+    throw new UsageError(`Manifest ${path} is not a JSON object.`);
   }
   // CC-36: a manifest that declares a *different* instance than the one it is
   // being loaded as was almost certainly copied or renamed — trusting it would
   // let one instance's coverage masquerade as another's. Reject the mismatch;
   // an ABSENT instance field is fine and falls back to the requested name.
   if (typeof m.instance === "string" && m.instance !== instance) {
-    throw new Error(
+    throw new UsageError(
       `Manifest ${path} declares instance "${m.instance}" but was loaded as ` +
         `"${instance}". The file was likely copied or renamed; re-sync ` +
         `"${instance}" or load the correct file.`,
@@ -327,7 +328,7 @@ function validateElements(
   items.forEach((item, index) => {
     const id = (item as { id?: unknown } | null)?.id;
     if (typeof id !== "string" || id.length === 0) {
-      throw new Error(
+      throw new UsageError(
         `Manifest ${path}: ${kind}[${index}] is missing a non-empty string "id".`,
       );
     }

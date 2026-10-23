@@ -556,8 +556,33 @@ test("CLI drift errors when a manifest is missing", () => {
       suites: [],
     });
     const res = runCli(["drift", "staging", "prod"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /No manifest for "prod"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI drift exits 2 on a corrupt or mismatched manifest", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-mi-"));
+  try {
+    writeStateManifest(dir, "staging", {
+      instance: "staging",
+      tests: [],
+      suites: [],
+    });
+    writeFileSync(join(dir, ".preflight", "state", "prod.state.json"), "{");
+    const corrupt = runCli(["drift", "staging", "prod"], { cwd: dir });
+    assert.equal(corrupt.status, 2);
+    assert.match(corrupt.stderr, /is not valid JSON/);
+    writeStateManifest(dir, "prod", {
+      instance: "staging",
+      tests: [],
+      suites: [],
+    });
+    const mismatch = runCli(["drift", "staging", "prod"], { cwd: dir });
+    assert.equal(mismatch.status, 2);
+    assert.match(mismatch.stderr, /declares instance "staging"/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

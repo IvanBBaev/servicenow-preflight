@@ -328,7 +328,11 @@ test("loadManifest throws on a present-but-malformed JSON file", async () => {
   const dir = tempDir();
   try {
     writeFileSync(manifestPathWithMkdir(dir, "dev"), "{ not valid json ");
-    await assert.rejects(() => loadManifest("dev", dir), /is not valid JSON/);
+    await assert.rejects(
+      () => loadManifest("dev", dir),
+      (err) =>
+        err.name === "UsageError" && /is not valid JSON/.test(err.message),
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

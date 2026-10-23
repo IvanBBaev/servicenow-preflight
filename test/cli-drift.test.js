@@ -227,7 +227,7 @@ test("drift errors (exit 1) with sync guidance when the src manifest is missing"
     });
 
     const res = runCli(["drift", "staging", "prod"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /No manifest for "staging"/);
     assert.match(res.stderr, /servicenow-preflight sync staging/);
     // The message only — no stack trace echoed to the user.
@@ -248,7 +248,7 @@ test("drift errors (exit 1) with sync guidance when the dst manifest is missing"
     });
 
     const res = runCli(["drift", "staging", "prod"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     assert.match(res.stderr, /No manifest for "prod"/);
     assert.match(res.stderr, /servicenow-preflight sync prod/);
     assert.doesNotMatch(res.stderr, /at .*\.js:\d+/);
@@ -261,7 +261,7 @@ test("drift errors (exit 1) when both manifests are missing (reports the source 
   const dir = tempProject();
   try {
     const res = runCli(["drift", "staging", "prod"], { cwd: dir });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 2);
     // The source is checked before the target.
     assert.match(res.stderr, /No manifest for "staging"/);
   } finally {
@@ -468,7 +468,7 @@ test("drift without --registry and without a default registry still runs (no man
   const dir = tempProject();
   try {
     const res = runCli(["drift", "dev", "prod"], { cwd: dir });
-    assert.equal(res.status, 1, res.stderr);
+    assert.equal(res.status, 2, res.stderr);
     assert.match(res.stderr, /No manifest for "dev"/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
