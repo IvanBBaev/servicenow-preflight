@@ -1412,3 +1412,60 @@ test("CLI exits 130 on SIGINT and still prints the partial report", async () => 
     await instance.stop();
   }
 });
+
+// F-X-2: the CLI shares identical reads between checks; --no-cache /
+// SNPF_CACHE=0 restore one fetch per read without changing the report.
+test("CLI read cache cuts table GETs and leaves the report unchanged", async () => {
+  let gets = 0;
+  const server = createHttpServer((req, res) => {
+    if (req.method === "GET") gets += 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ result: [] }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const dir = mkdtempSync(join(tmpdir(), "snpf-cache-"));
+  writeFileSync(
+    join(dir, "preflight.config.json"),
+    JSON.stringify({ scope: "x_acme_app" }),
+  );
+  const env = { SNPF_USER: "u", SNPF_PASS: "p" };
+  const run = async (extra, extraEnv = {}) => {
+    gets = 0;
+    const res = await runCliAsync(
+      ["run", "--instance", url, "--format", "json", ...extra],
+      { cwd: dir, env: { ...env, ...extraEnv } },
+    );
+    return { gets, report: reportOf(res.stdout) };
+  };
+  try {
+    const cached = await run([]);
+    const flag = await run(["--no-cache"]);
+    const envOff = await run([], { SNPF_CACHE: "0" });
+    assert.ok(
+      cached.gets <= flag.gets * 0.75,
+      `cached ${cached.gets} vs uncached ${flag.gets}`,
+    );
+    assert.equal(envOff.gets, flag.gets);
+    assert.deepEqual(cached.report, flag.report);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI rejects an unknown SNPF_CACHE value with exit 2", () => {
+  const res = runCli(
+    [
+      "--only",
+      "instance-url-configured",
+      "--instance",
+      "https://dev12345.service-now.com",
+    ],
+    { env: { SNPF_CACHE: "maybe" } },
+  );
+  assert.equal(res.status, 2, res.stderr);
+  assert.match(res.stderr, /SNPF_CACHE must be one of/);
+});

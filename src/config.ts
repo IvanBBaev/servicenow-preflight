@@ -103,6 +103,11 @@ export interface LoadedConfig {
    * credentials), when set. Pass them to `createSnClient` (F-X-1).
    */
   limits: RequestLimits;
+  /**
+   * `SNPF_CACHE` as a switch (`0`/`false`/`off`/`no` or `1`/`true`/`on`/`yes`),
+   * when set. The CLI caches reads unless this is `false` (F-X-2).
+   */
+  cache?: boolean;
 }
 
 /** Client request limits (see `SnClientConfig.maxInFlight` / `rps`). */
@@ -128,6 +133,36 @@ export function parseRequestLimit(
     throw new UsageError(`${label} ${problem} (got "${value.trim()}").`);
   }
   return n;
+}
+
+const SWITCH_VALUES: Record<string, boolean> = {
+  "0": false,
+  false: false,
+  off: false,
+  no: false,
+  "1": true,
+  true: true,
+  on: true,
+  yes: true,
+};
+
+/**
+ * Parse an on/off env variable. Blank yields `undefined`; an unknown value is
+ * a {@link UsageError} naming `label`.
+ */
+export function parseSwitch(
+  value: string | undefined,
+  label: string,
+): boolean | undefined {
+  const v = value?.trim().toLowerCase();
+  if (v === undefined || v === "") return undefined;
+  const on = SWITCH_VALUES[v];
+  if (on === undefined) {
+    throw new UsageError(
+      `${label} must be one of 0, 1, false, true, off, on, no, yes (got "${value?.trim()}").`,
+    );
+  }
+  return on;
 }
 
 /** Config file names probed, in precedence order. */
@@ -170,6 +205,8 @@ const ENV = {
   maxInFlight: "SNPF_MAX_INFLIGHT",
   /** Client requests-per-second limit (F-X-1). */
   rps: "SNPF_RPS",
+  /** Per-run read cache switch (F-X-2). */
+  cache: "SNPF_CACHE",
 } as const;
 
 /**
@@ -768,5 +805,15 @@ export async function loadConfig(
   const rps = parseRequestLimit("rps", env[ENV.rps], ENV.rps);
   if (rps !== undefined) limits.rps = rps;
 
-  return { config, auth, tls, configPath, env: fullEnv, limits };
+  const cache = parseSwitch(env[ENV.cache], ENV.cache);
+
+  return {
+    config,
+    auth,
+    tls,
+    configPath,
+    env: fullEnv,
+    limits,
+    ...(cache !== undefined ? { cache } : {}),
+  };
 }

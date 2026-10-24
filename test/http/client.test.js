@@ -1682,3 +1682,105 @@ test("F-X-1: out-of-range maxInFlight / rps are refused with SnError", () => {
     );
   }
 });
+
+// --- F-X-2: per-run read cache -----------------------------------------------
+
+test("F-X-2: with cache on, identical queries share one fetch", async () => {
+  handler = () =>
+    fakeResponse({
+      body: { result: [{ sys_id: "a" }] },
+      headers: { "x-total-count": "1" },
+    });
+  const http = client({ cache: true });
+  const [a, b] = await Promise.all([
+    http
+      .table("sys_security_acl")
+      .query({ sysparm_query: "active=true", sysparm_fields: "name,sys_id" }),
+    http
+      .table("sys_security_acl")
+      .query({ sysparm_fields: "sys_id,name", sysparm_query: "active=true" }),
+  ]);
+  const meta = await http.table("sys_security_acl").queryWithMeta({
+    sysparm_query: "active=true",
+    sysparm_fields: "name,sys_id",
+  });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(a, [{ sys_id: "a" }]);
+  assert.deepEqual(b, a);
+  assert.deepEqual(meta, {
+    rows: [{ sys_id: "a" }],
+    totalCount: 1,
+    securityTrimmed: false,
+  });
+  // Each caller owns its array; the shared row objects are frozen.
+  assert.notEqual(a, b);
+  a.push({ sys_id: "mine" });
+  assert.equal(b.length, 1);
+  assert.ok(Object.isFrozen(b[0]));
+  // A different table or query is a different read.
+  await http
+    .table("sys_script_include")
+    .query({ sysparm_query: "active=true" });
+  assert.equal(calls.length, 2);
+});
+
+test("F-X-2: without the cache every query fetches", async () => {
+  handler = () => fakeResponse({ body: { result: [] } });
+  const http = client();
+  await http.table("t").query({ sysparm_query: "a=1" });
+  await http.table("t").query({ sysparm_query: "a=1" });
+  assert.equal(calls.length, 2);
+});
+
+test("F-X-2: get and request bypass the cache", async () => {
+  handler = () => fakeResponse({ body: { result: { sys_id: "z" } } });
+  const http = client({ cache: true });
+  await http.table("t").get("z");
+  await http.table("t").get("z");
+  await http.request("GET", "/api/now/table/t");
+  await http.request("GET", "/api/now/table/t");
+  assert.equal(calls.length, 4);
+});
+
+test("F-X-2: a failed read is not cached", async () => {
+  let hits = 0;
+  handler = () => {
+    hits += 1;
+    return hits === 1
+      ? fakeResponse({ status: 500, body: { error: { message: "boom" } } })
+      : fakeResponse({ body: { result: [{ sys_id: "ok" }] } });
+  };
+  const http = client({ cache: true });
+  await assert.rejects(
+    () => http.table("t").query({ sysparm_query: "a=1" }),
+    SnHttpError,
+  );
+  assert.deepEqual(await http.table("t").query({ sysparm_query: "a=1" }), [
+    { sys_id: "ok" },
+  ]);
+  assert.equal(hits, 2);
+});
+
+test("F-X-2: an abort while sharing a read rejects as an aborted SnNetworkError", async () => {
+  let respond;
+  handler = () =>
+    new Promise((resolve) => {
+      respond = () =>
+        resolve(fakeResponse({ body: { result: [{ sys_id: "x" }] } }));
+    });
+  const http = client({ cache: true });
+  const controller = new AbortController();
+  const quitter = http
+    .table("t")
+    .query({ sysparm_query: "a=1" }, { signal: controller.signal });
+  const stayer = http.table("t").query({ sysparm_query: "a=1" });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort(new Error("timed out"));
+  await assert.rejects(
+    quitter,
+    (err) => err instanceof SnNetworkError && /aborted/.test(err.message),
+  );
+  respond();
+  assert.deepEqual(await stayer, [{ sys_id: "x" }]);
+  assert.equal(calls.length, 1);
+});

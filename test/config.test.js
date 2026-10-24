@@ -1086,3 +1086,23 @@ for (const [name, value, pattern] of [
     }
   });
 }
+
+// --- F-X-2: SNPF_CACHE -------------------------------------------------------
+
+test("loadConfig reads SNPF_CACHE as a switch", async () => {
+  const dir = tempDir();
+  try {
+    const at = async (value) =>
+      (await loadConfig(dir, { dotenv: false, env: { SNPF_CACHE: value } }))
+        .cache;
+    assert.equal(await at(undefined), undefined);
+    assert.equal(await at(" "), undefined);
+    for (const off of ["0", "false", "OFF", "no"])
+      assert.equal(await at(off), false);
+    for (const on of ["1", "true", "On", "yes"])
+      assert.equal(await at(on), true);
+    await assert.rejects(at("maybe"), UsageError);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -187,6 +187,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--run-timeout <dur>`        | `run`: stop the run (per instance) after `<dur>`; unfinished checks become `fail` rows.                                       |
 | `--max-inflight <n>`         | Most requests in flight at once, 1–64. Default `4`; `SNPF_MAX_INFLIGHT`.                                                      |
 | `--rps <n>`                  | Requests started per second, 0.5–100. Default: unlimited; `SNPF_RPS`.                                                         |
+| `--no-cache`                 | `run`: fetch every read, instead of sharing identical reads between checks. Also `SNPF_CACHE=0`.                              |
 
 Durations take a unit: `ms`, `s`, `m`, `h`, `d` or `w`. A timed-out check is
 cancelled — its in-flight requests are aborted — and reported as
@@ -198,6 +199,11 @@ REST rate limit or starving its other integrations. A `429` answer also holds
 back every queued request for its `Retry-After` window. Both are read from the
 instance's env namespace (`SNPF_<ENV>_RPS`) like the credentials; an
 out-of-range value exits `2`.
+
+A run shares identical Table API reads between its checks: the first check to
+ask fetches, and the others reuse the result. The cache lives in memory for
+one run only, failed reads are never cached, and the report is the same with
+or without it. `--no-cache` (or `SNPF_CACHE=0`) turns it off.
 
 `--instance`, `--only` and `--skip` override the matching config-file values. The
 `scope` and `updateSetId` a run targets come from the config file (or the
@@ -645,7 +651,7 @@ console.log(report.ok, report.summary); // e.g. false { pass: 2, warn: 4, fail: 
   own list.
 - **`createSnClient(config)`** → `SnClient` (`{ instanceUrl, auth?, tls?,
 timeoutMs?, cicdPollIntervalMs?, cicdMaxPolls?, maxRows?, proxy?, noProxy?,
-maxInFlight?, rps? }`),
+maxInFlight?, rps?, cache? }`),
   backed by Node's global `fetch` (or `node:https` when `tls` is set).
   `table(name).query()` **auto-paginates** unless you pass a `sysparm_limit`, and
   throws `SnTruncationError` past `maxRows` (default 100000) rather than
@@ -654,7 +660,9 @@ maxInFlight?, rps? }`),
   `SNPF_NO_PROXY` and `NO_PROXY` / `no_proxy`.
   `maxInFlight` (1–64) and `rps` (0.5–100) are unset by default, so a library
   client is unlimited unless you opt in; out-of-range values throw `SnError`.
-  `loadConfig` returns them from the environment as `limits`.
+  `loadConfig` returns them from the environment as `limits`. `cache: true`
+  shares identical `query` / `queryWithMeta` reads for the client's lifetime
+  (default `false`; the CLI turns it on per run). Cached rows are frozen.
 - **`formatJUnit`** / **`formatSarif`**, and **`loadConfig`** /
   **`resolveAuthFromEnv`** / **`resolveTlsFromEnv`** (the CLI's own resolution).
   `loadConfig(cwd, { env, dotenv })` resolves from `env` (default

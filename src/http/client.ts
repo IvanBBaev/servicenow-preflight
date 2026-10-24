@@ -21,6 +21,7 @@ import { createSign } from "node:crypto";
 
 import { abortReason, anySignal, raceAbort, sleep } from "./abort.js";
 import { createLimiter, limitProblem, type Limiter } from "./limiter.js";
+import { createReadCache, deepFreeze, readKey } from "./cache.js";
 import { openProxyTunnel, parseProxyUrl, resolveProxy } from "./proxy.js";
 
 /**
@@ -337,6 +338,13 @@ export interface SnClientConfig {
    * holds back every queued request for its `Retry-After` window.
    */
   rps?: number;
+  /**
+   * Share identical `table().query` / `queryWithMeta` reads for the client's
+   * lifetime (F-X-2; default `false`). Concurrent identical reads make one
+   * fetch, failures are never cached, and every caller gets its own rows array
+   * over shared, frozen row objects. Use one client per run with it on.
+   */
+  cache?: boolean;
   /**
    * Outbound HTTP(S) forward proxy for reaching the instance (SR-5), e.g.
    * `http://proxy.example.com:3128` (Basic credentials may ride in the URL
@@ -1282,6 +1290,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           ...(cfg.rps !== undefined ? { rps: cfg.rps } : {}),
         })
       : undefined;
+  const cache = cfg.cache ? createReadCache() : undefined;
   // OPP-4: validate an explicitly configured proxy URL at construction — a
   // malformed value must fail fast here, never silently bypass the proxy.
   if (typeof cfg.proxy === "string" && cfg.proxy.trim() !== "") {
@@ -1647,6 +1656,28 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         return toQueryResult(all, totalCount);
       }
 
+      // F-X-2: with the cache on, the whole paginated result is the cached
+      // unit — never a partial page — and each caller gets a fresh array.
+      async function cachedQuery(
+        params: Record<string, string> | undefined,
+        signal: AbortSignal | undefined,
+      ): Promise<TableQueryResult> {
+        if (!cache) return runQuery(params, signal);
+        let shared: TableQueryResult;
+        try {
+          shared = await cache.get(
+            readKey(name, params),
+            async (loadSignal) =>
+              deepFreeze(await runQuery(params, loadSignal)),
+            signal,
+          );
+        } catch (err) {
+          if (signal?.aborted) throw abortedError(signal);
+          throw err;
+        }
+        return { ...shared, rows: [...shared.rows] };
+      }
+
       return {
         async get(sysId, params, opts) {
           const res = await sendRequest(
@@ -1666,7 +1697,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           return null;
         },
         async query(params, opts) {
-          return (await runQuery(params, opts?.signal)).rows;
+          return (await cachedQuery(params, opts?.signal)).rows;
         },
         async queryWithMeta(params, opts) {
           // `securityTrimmed` is derived from `totalCount > rows.length`, which
@@ -1685,7 +1716,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
                 `limit to auto-paginate, or use query() if you only need a page.`,
             );
           }
-          return runQuery(params, opts?.signal);
+          return cachedQuery(params, opts?.signal);
         },
       };
     },

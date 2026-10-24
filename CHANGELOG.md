@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Read cache** — a run fetches each identical Table API read once and
+  shares it between checks, which cuts the full registry's GETs by about 40%
+  with an unchanged report. Failed reads are not cached; one check's timeout
+  never fails another check waiting on the same read. Opt out with
+  `--no-cache` or `SNPF_CACHE=0`. Library: `SnClientConfig.cache` (default
+  `false`) and `LoadedConfig.cache`.
 - **Request limits** — `--max-inflight <n>` (default `4`, or
   `SNPF_MAX_INFLIGHT`) caps concurrent requests and `--rps <n>` (or
   `SNPF_RPS`) caps the request rate; a `429` pauses every queued request for

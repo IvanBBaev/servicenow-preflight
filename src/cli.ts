@@ -119,6 +119,8 @@ interface ParsedArgs {
   maxInFlight?: number;
   /** Client requests-per-second limit; `SNPF_RPS` otherwise (default none). */
   rps?: number;
+  /** `run`: `--no-cache` — fetch every read, even a repeated one (F-X-2). */
+  noCache: boolean;
   /** `drift`: downgrade a skipped pipeline stage from fail to warn. */
   allowStageSkip: boolean;
   /**
@@ -222,6 +224,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     all: false,
     withLastRun: false,
     allowEmpty: false,
+    noCache: false,
     allowStageSkip: false,
     format: "pretty",
     force: false,
@@ -352,6 +355,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--run-timeout":
         args.runTimeoutMs = parseBudget(takeValue(arg), arg);
+        break;
+      case "--no-cache":
+        args.noCache = true;
         break;
       case "--max-inflight":
         args.maxInFlight = parseRequestLimit(
@@ -501,6 +507,8 @@ Options:
       --rps <n>          run/sync: most requests started per second, 0.5-100
                          (default unlimited; env SNPF_RPS). A 429 also pauses
                          the other requests for its Retry-After
+      --no-cache         run: fetch every read instead of sharing identical
+                         reads between checks (env SNPF_CACHE=0)
       --allow-stage-skip drift: warn instead of fail when <dst> is further down
                          the registry's promotesTo pipeline than the next stage
       --baseline [path]  run: demote findings recorded in a baseline file to
@@ -924,6 +932,8 @@ async function runOneInstance(
     ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
     env: loaded.env,
     ...requestLimits(args, loaded.limits),
+    // F-X-2: share identical reads between the run's checks.
+    cache: !args.noCache && loaded.cache !== false,
   });
 
   const ctx: PreflightContext = {
