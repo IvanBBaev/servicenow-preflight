@@ -1594,3 +1594,91 @@ test("withSignal binds a signal to every call and merges a caller's own", async 
   own.abort();
   assert.equal(merged.aborted, true);
 });
+
+// --- F-X-1: in-flight cap and requests-per-second limiter -------------------
+
+test("F-X-1: maxInFlight caps concurrent requests", async () => {
+  let inFlight = 0;
+  let peak = 0;
+  handler = () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    return new Promise((resolve) =>
+      setTimeout(() => {
+        inFlight -= 1;
+        resolve(fakeResponse({ body: { result: [] } }));
+      }, 5),
+    );
+  };
+  const http = client({ maxInFlight: 2 });
+  await Promise.all(
+    Array.from({ length: 10 }, (_, i) =>
+      http
+        .table("incident")
+        .query({ sysparm_query: `n=${i}`, sysparm_limit: "1" }),
+    ),
+  );
+  assert.equal(calls.length, 10);
+  assert.equal(peak, 2);
+});
+
+test("F-X-1: a 429 with Retry-After holds back the queued sibling requests", async () => {
+  const startedAt = [];
+  handler = () => {
+    startedAt.push(Date.now());
+    return startedAt.length === 1
+      ? fakeResponse({ status: 429, headers: { "retry-after": "1" } })
+      : fakeResponse({ body: { result: { sys_id: "z" } } });
+  };
+  const http = client({ maxInFlight: 1 });
+  const [a, b] = await Promise.all([
+    http.table("incident").get("a"),
+    http.table("incident").get("b"),
+  ]);
+  assert.deepEqual(a, { sys_id: "z" });
+  assert.deepEqual(b, { sys_id: "z" });
+  assert.equal(startedAt.length, 3);
+  // The sibling queued behind the 429 waited out the Retry-After window too.
+  assert.ok(
+    startedAt[1] - startedAt[0] >= 950,
+    `gap ${startedAt[1] - startedAt[0]}`,
+  );
+});
+
+test("F-X-1: an abort while queued for a slot surfaces as an abort", async () => {
+  let releaseFirst;
+  handler = () =>
+    new Promise((resolve) => {
+      releaseFirst = () =>
+        resolve(fakeResponse({ body: { result: { sys_id: "a" } } }));
+    });
+  const http = client({ maxInFlight: 1 });
+  const first = http.table("incident").get("a");
+  const controller = new AbortController();
+  const queued = http
+    .table("incident")
+    .get("b", undefined, { signal: controller.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort(new Error("stop"));
+  await assert.rejects(queued);
+  assert.equal(calls.length, 1);
+  releaseFirst();
+  assert.deepEqual(await first, { sys_id: "a" });
+});
+
+test("F-X-1: out-of-range maxInFlight / rps are refused with SnError", () => {
+  for (const extra of [
+    { maxInFlight: 0 },
+    { maxInFlight: 65 },
+    { maxInFlight: 2.5 },
+    { rps: 0 },
+    { rps: 101 },
+  ]) {
+    assert.throws(
+      () => client(extra),
+      (err) =>
+        err instanceof SnError &&
+        /SnClientConfig\.(maxInFlight|rps)/.test(err.message),
+    );
+  }
+});

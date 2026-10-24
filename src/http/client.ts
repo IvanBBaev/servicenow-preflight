@@ -20,6 +20,7 @@ import { isIP, type Socket } from "node:net";
 import { createSign } from "node:crypto";
 
 import { abortReason, anySignal, raceAbort, sleep } from "./abort.js";
+import { createLimiter, limitProblem, type Limiter } from "./limiter.js";
 import { openProxyTunnel, parseProxyUrl, resolveProxy } from "./proxy.js";
 
 /**
@@ -326,6 +327,16 @@ export interface SnClientConfig {
    * explicitly with `sysparm_limit`/`sysparm_offset`.
    */
   maxRows?: number;
+  /**
+   * Most requests in flight at once, 1..64 (default: unlimited). Requests over
+   * the cap queue in FIFO order (F-X-1).
+   */
+  maxInFlight?: number;
+  /**
+   * Requests started per second, 0.5..100 (default: unlimited). A 429 also
+   * holds back every queued request for its `Retry-After` window.
+   */
+  rps?: number;
   /**
    * Outbound HTTP(S) forward proxy for reaching the instance (SR-5), e.g.
    * `http://proxy.example.com:3128` (Basic credentials may ride in the URL
@@ -1253,6 +1264,24 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
   }
   const origin = parsedUrl.origin;
   const timeoutMs = cfg.timeoutMs ?? 30_000;
+  for (const name of ["maxInFlight", "rps"] as const) {
+    const value = cfg[name];
+    const problem = value === undefined ? undefined : limitProblem(name, value);
+    if (problem) {
+      throw new SnError(`SnClientConfig.${name} ${problem} (got ${value}).`);
+    }
+  }
+  // F-X-1: no limiter at all unless one is configured, so the default path
+  // adds nothing.
+  const limiter: Limiter | undefined =
+    cfg.maxInFlight !== undefined || cfg.rps !== undefined
+      ? createLimiter({
+          ...(cfg.maxInFlight !== undefined
+            ? { maxInFlight: cfg.maxInFlight }
+            : {}),
+          ...(cfg.rps !== undefined ? { rps: cfg.rps } : {}),
+        })
+      : undefined;
   // OPP-4: validate an explicitly configured proxy URL at construction — a
   // malformed value must fail fast here, never silently bypass the proxy.
   if (typeof cfg.proxy === "string" && cfg.proxy.trim() !== "") {
@@ -1320,7 +1349,6 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       // CC-31: never follow redirects on an API call — a 3xx to an SSO/login
       // host would otherwise re-send the Authorization header off-instance.
       redirect: "error",
-      signal: anySignal([AbortSignal.timeout(timeoutMs), caller]),
     };
     if (opts.body !== undefined) {
       headers["Content-Type"] = "application/json";
@@ -1333,6 +1361,17 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       let statusText: string;
       let resHeaders: Record<string, string>;
       let text: string;
+      // F-X-1: wait for a limiter slot before the clock starts, so time spent
+      // queued never counts against the per-request timeout.
+      let release: (() => void) | undefined;
+      if (limiter) {
+        try {
+          release = await limiter.acquire(caller);
+        } catch {
+          throw abortedError(caller as AbortSignal);
+        }
+      }
+      init.signal = anySignal([AbortSignal.timeout(timeoutMs), caller]);
       try {
         // Race the signal too, so a transport that ignores it cannot hang us.
         const res = await raceAbort(transport(url, init), init.signal);
@@ -1342,6 +1381,11 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         // CC-7: read the body inside the try — a mid-body ECONNRESET or timeout
         // rejects here, and must surface as SnNetworkError rather than escape.
         text = await raceAbort(res.text(), init.signal);
+        // A 429 holds back every queued request too, not only this one — so
+        // pause before `finally` releases the slot to the next waiter.
+        if (status === 429) {
+          limiter?.pause(retryAfterMs(resHeaders["retry-after"]));
+        }
       } catch (cause) {
         if (caller?.aborted) throw abortedError(caller);
         const err = cause instanceof Error ? cause : new Error(String(cause));
@@ -1353,14 +1397,17 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
             ? `Request to ${origin} timed out after ${timeoutMs}ms.`
             : `Could not reach ServiceNow at ${origin}: ${err.message}`,
         );
+      } finally {
+        release?.();
       }
 
       // SN-6: honour Retry-After on a 429, up to a bounded number of attempts.
       // An exhausted budget falls through and becomes an SnHttpError below.
       if (status === 429 && rateLimitAttempts < RATE_LIMIT_MAX_RETRIES) {
         rateLimitAttempts += 1;
+        const waitMs = retryAfterMs(resHeaders["retry-after"]);
         try {
-          await sleep(retryAfterMs(resHeaders["retry-after"]), caller);
+          await sleep(waitMs, caller);
         } catch {
           throw abortedError(caller as AbortSignal);
         }

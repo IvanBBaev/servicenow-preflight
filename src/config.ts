@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { resolve, isAbsolute } from "node:path";
 import type { CheckSelection, PreflightAuth, SnTls } from "./types.js";
 import { isSafeIdentifier } from "./http/query.js";
+import { limitProblem } from "./http/limiter.js";
 import type { SeverityPolicy } from "./policy.js";
 
 /**
@@ -97,6 +98,36 @@ export interface LoadedConfig {
    * `createSnClient({ env })` so proxy variables from `.env` apply too.
    */
   env: NodeJS.ProcessEnv;
+  /**
+   * Request limits from `SNPF_MAX_INFLIGHT` / `SNPF_RPS` (namespaced like the
+   * credentials), when set. Pass them to `createSnClient` (F-X-1).
+   */
+  limits: RequestLimits;
+}
+
+/** Client request limits (see `SnClientConfig.maxInFlight` / `rps`). */
+export interface RequestLimits {
+  maxInFlight?: number;
+  rps?: number;
+}
+
+/**
+ * Parse a request limit from a flag or an env variable. Blank yields
+ * `undefined`; anything outside the limiter's range is a {@link UsageError}
+ * naming `label` (e.g. `--rps must be a number between 0.5 and 100`).
+ */
+export function parseRequestLimit(
+  name: "maxInFlight" | "rps",
+  value: string | undefined,
+  label: string,
+): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const n = Number(value.trim());
+  const problem = limitProblem(name, n);
+  if (problem) {
+    throw new UsageError(`${label} ${problem} (got "${value.trim()}").`);
+  }
+  return n;
 }
 
 /** Config file names probed, in precedence order. */
@@ -135,6 +166,10 @@ const ENV = {
   proxy: "SNPF_PROXY",
   /** Extra proxy-bypass entries (mirrors the config file's `noProxy`) — SR-5. */
   noProxy: "SNPF_NO_PROXY",
+  /** Client in-flight request cap (F-X-1). */
+  maxInFlight: "SNPF_MAX_INFLIGHT",
+  /** Client requests-per-second limit (F-X-1). */
+  rps: "SNPF_RPS",
 } as const;
 
 /**
@@ -723,5 +758,15 @@ export async function loadConfig(
   const auth = resolveAuthFromEnv(fullEnv, opts.envPrefix);
   const tls = resolveTlsFromEnv(fullEnv, opts.envPrefix);
 
-  return { config, auth, tls, configPath, env: fullEnv };
+  const limits: RequestLimits = {};
+  const maxInFlight = parseRequestLimit(
+    "maxInFlight",
+    env[ENV.maxInFlight],
+    ENV.maxInFlight,
+  );
+  if (maxInFlight !== undefined) limits.maxInFlight = maxInFlight;
+  const rps = parseRequestLimit("rps", env[ENV.rps], ENV.rps);
+  if (rps !== undefined) limits.rps = rps;
+
+  return { config, auth, tls, configPath, env: fullEnv, limits };
 }

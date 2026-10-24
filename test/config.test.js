@@ -1024,3 +1024,65 @@ test("readDotEnv returns the parsed map, or an empty one without a .env", async 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- F-X-1: SNPF_MAX_INFLIGHT / SNPF_RPS -------------------------------------
+
+test("loadConfig reads request limits from SNPF_MAX_INFLIGHT / SNPF_RPS", async () => {
+  const dir = tempDir();
+  try {
+    const none = await loadConfig(dir, { dotenv: false, env: {} });
+    assert.deepEqual(none.limits, {});
+    const loaded = await loadConfig(dir, {
+      dotenv: false,
+      env: { SNPF_MAX_INFLIGHT: " 8 ", SNPF_RPS: "2.5" },
+    });
+    assert.deepEqual(loaded.limits, { maxInFlight: 8, rps: 2.5 });
+    const blank = await loadConfig(dir, {
+      dotenv: false,
+      env: { SNPF_MAX_INFLIGHT: "", SNPF_RPS: "  " },
+    });
+    assert.deepEqual(blank.limits, {});
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("request limits follow the instance env namespace", async () => {
+  const dir = tempDir();
+  try {
+    const loaded = await loadConfig(dir, {
+      dotenv: false,
+      envPrefix: "PROD",
+      env: { SNPF_RPS: "10", SNPF_PROD_RPS: "1", SNPF_MAX_INFLIGHT: "3" },
+    });
+    assert.deepEqual(loaded.limits, { maxInFlight: 3, rps: 1 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const [name, value, pattern] of [
+  [
+    "SNPF_MAX_INFLIGHT",
+    "0",
+    /SNPF_MAX_INFLIGHT must be a whole number between 1 and 64 \(got "0"\)/,
+  ],
+  ["SNPF_MAX_INFLIGHT", "abc", /SNPF_MAX_INFLIGHT must be a whole number/],
+  [
+    "SNPF_RPS",
+    "500",
+    /SNPF_RPS must be a number between 0.5 and 100 \(got "500"\)/,
+  ],
+]) {
+  test(`an invalid ${name}=${value} is a UsageError`, async () => {
+    const dir = tempDir();
+    try {
+      await assert.rejects(
+        loadConfig(dir, { dotenv: false, env: { [name]: value } }),
+        (err) => err instanceof UsageError && pattern.test(err.message),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}

@@ -185,11 +185,19 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--severity <check>=<level>` | `run`: report a check's non-pass result as `fail` or `warn`, or skip it (`off`). Repeatable; wins over the config `severity`. |
 | `--timeout <dur>`            | `run`: fail any check still running after `<dur>` (e.g. `30s`, `500ms`) and move on. Default: none; `SNPF_CHECK_TIMEOUT`.     |
 | `--run-timeout <dur>`        | `run`: stop the run (per instance) after `<dur>`; unfinished checks become `fail` rows.                                       |
+| `--max-inflight <n>`         | Most requests in flight at once, 1–64. Default `4`; `SNPF_MAX_INFLIGHT`.                                                      |
+| `--rps <n>`                  | Requests started per second, 0.5–100. Default: unlimited; `SNPF_RPS`.                                                         |
 
 Durations take a unit: `ms`, `s`, `m`, `h`, `d` or `w`. A timed-out check is
 cancelled — its in-flight requests are aborted — and reported as
 `Check timed out after 30000 ms (--timeout).`; the per-request HTTP timeout
 still applies inside it.
+
+`--max-inflight` and `--rps` keep a run from tripping the instance's inbound
+REST rate limit or starving its other integrations. A `429` answer also holds
+back every queued request for its `Retry-After` window. Both are read from the
+instance's env namespace (`SNPF_<ENV>_RPS`) like the credentials; an
+out-of-range value exits `2`.
 
 `--instance`, `--only` and `--skip` override the matching config-file values. The
 `scope` and `updateSetId` a run targets come from the config file (or the
@@ -636,13 +644,17 @@ console.log(report.ok, report.summary); // e.g. false { pass: 2, warn: 4, fail: 
   (`instanceUrlConfigured`, `connectivityAuth`, …) are exported to compose your
   own list.
 - **`createSnClient(config)`** → `SnClient` (`{ instanceUrl, auth?, tls?,
-timeoutMs?, cicdPollIntervalMs?, cicdMaxPolls?, maxRows?, proxy?, noProxy? }`),
+timeoutMs?, cicdPollIntervalMs?, cicdMaxPolls?, maxRows?, proxy?, noProxy?,
+maxInFlight?, rps? }`),
   backed by Node's global `fetch` (or `node:https` when `tls` is set).
   `table(name).query()` **auto-paginates** unless you pass a `sysparm_limit`, and
   throws `SnTruncationError` past `maxRows` (default 100000) rather than
   truncating. `proxy` outranks the `SNPF_PROXY` and `HTTPS_PROXY` / `https_proxy`
   environment variables (`HTTP_PROXY` is never used); `noProxy` is merged with
   `SNPF_NO_PROXY` and `NO_PROXY` / `no_proxy`.
+  `maxInFlight` (1–64) and `rps` (0.5–100) are unset by default, so a library
+  client is unlimited unless you opt in; out-of-range values throw `SnError`.
+  `loadConfig` returns them from the environment as `limits`.
 - **`formatJUnit`** / **`formatSarif`**, and **`loadConfig`** /
   **`resolveAuthFromEnv`** / **`resolveTlsFromEnv`** (the CLI's own resolution).
   `loadConfig(cwd, { env, dotenv })` resolves from `env` (default

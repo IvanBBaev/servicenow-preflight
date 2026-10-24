@@ -1283,6 +1283,50 @@ for (const [label, args, env] of [
   });
 }
 
+// F-X-1: --max-inflight / --rps / SNPF_MAX_INFLIGHT / SNPF_RPS.
+for (const [label, args, env, pattern] of [
+  ["--rps 0", ["--rps", "0"], {}, /--rps must be a number between 0.5 and 100/],
+  [
+    "--max-inflight=99",
+    ["--max-inflight=99"],
+    {},
+    /--max-inflight must be a whole number between 1 and 64/,
+  ],
+  ["--max-inflight", ["--max-inflight"], {}, /--max-inflight/],
+  ["SNPF_RPS=fast", [], { SNPF_RPS: "fast" }, /SNPF_RPS must be a number/],
+]) {
+  test(`CLI rejects an invalid request limit (${label}) with exit 2`, () => {
+    const res = runCli(
+      [
+        ...args,
+        "--only",
+        "instance-url-configured",
+        "--instance",
+        "https://dev12345.service-now.com",
+      ],
+      { env },
+    );
+    assert.equal(res.status, 2, res.stderr);
+    assert.match(res.stderr, pattern);
+  });
+}
+
+test("CLI accepts valid request limits", () => {
+  const res = runCli(
+    [
+      "--max-inflight",
+      "2",
+      "--rps=5",
+      "--only",
+      "instance-url-configured",
+      "--instance",
+      "https://dev12345.service-now.com",
+    ],
+    { env: { SNPF_MAX_INFLIGHT: "8" } },
+  );
+  assert.equal(res.status, 0, res.stderr);
+});
+
 test("CLI --timeout fails a check whose instance never answers", async () => {
   const instance = await startHangingInstance();
   try {

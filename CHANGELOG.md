@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Request limits** — `--max-inflight <n>` (default `4`, or
+  `SNPF_MAX_INFLIGHT`) caps concurrent requests and `--rps <n>` (or
+  `SNPF_RPS`) caps the request rate; a `429` pauses every queued request for
+  its `Retry-After` window. Library: `SnClientConfig.maxInFlight` / `rps`
+  (unset = unlimited) and `LoadedConfig.limits`.
 - **Timeouts and cancellation** — `--timeout <dur>` (or
   `SNPF_CHECK_TIMEOUT`) fails a check that runs too long and moves on;
   `--run-timeout <dur>` bounds the whole run; durations accept `ms`. Ctrl-C

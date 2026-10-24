@@ -2,7 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runPreflight } from "./index.js";
-import { loadConfig, UsageError } from "./config.js";
+import {
+  loadConfig,
+  parseRequestLimit,
+  UsageError,
+  type RequestLimits,
+} from "./config.js";
 import { createSnClient } from "./http/client.js";
 import { formatJUnit, formatJUnitSuites } from "./report/junit.js";
 import {
@@ -110,6 +115,10 @@ interface ParsedArgs {
   timeoutMs?: number;
   /** Time budget for each instance's whole run (milliseconds). */
   runTimeoutMs?: number;
+  /** Client in-flight request cap; `SNPF_MAX_INFLIGHT` otherwise (default 4). */
+  maxInFlight?: number;
+  /** Client requests-per-second limit; `SNPF_RPS` otherwise (default none). */
+  rps?: number;
   /** `drift`: downgrade a skipped pipeline stage from fail to warn. */
   allowStageSkip: boolean;
   /**
@@ -185,6 +194,25 @@ function parseBudget(value: string, flag: string): number {
     throw new UsageError(`Invalid ${flag} "${value}": it must be above zero.`);
   }
   return ms;
+}
+
+/** Default in-flight cap the CLI applies when neither flag nor env sets one. */
+const DEFAULT_MAX_IN_FLIGHT = 4;
+
+/**
+ * The client's request limits: the flag, then the (namespaced) env, then the
+ * CLI default in-flight cap of {@link DEFAULT_MAX_IN_FLIGHT} (F-X-1).
+ */
+function requestLimits(
+  args: ParsedArgs,
+  fromEnv: RequestLimits,
+): RequestLimits {
+  const rps = args.rps ?? fromEnv.rps;
+  return {
+    maxInFlight:
+      args.maxInFlight ?? fromEnv.maxInFlight ?? DEFAULT_MAX_IN_FLIGHT,
+    ...(rps !== undefined ? { rps } : {}),
+  };
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -325,6 +353,16 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--run-timeout":
         args.runTimeoutMs = parseBudget(takeValue(arg), arg);
         break;
+      case "--max-inflight":
+        args.maxInFlight = parseRequestLimit(
+          "maxInFlight",
+          takeValue(arg),
+          arg,
+        );
+        break;
+      case "--rps":
+        args.rps = parseRequestLimit("rps", takeValue(arg), arg);
+        break;
       default:
         if (arg?.startsWith("--instance=")) {
           args.instanceUrl = arg.slice("--instance=".length);
@@ -351,6 +389,18 @@ function parseArgs(argv: string[]): ParsedArgs {
           args.runTimeoutMs = parseBudget(
             arg.slice("--run-timeout=".length),
             "--run-timeout",
+          );
+        } else if (arg?.startsWith("--max-inflight=")) {
+          args.maxInFlight = parseRequestLimit(
+            "maxInFlight",
+            arg.slice("--max-inflight=".length),
+            "--max-inflight",
+          );
+        } else if (arg?.startsWith("--rps=")) {
+          args.rps = parseRequestLimit(
+            "rps",
+            arg.slice("--rps=".length),
+            "--rps",
           );
         } else if (arg?.startsWith("--severity=")) {
           const [name, level] = parseSeverityFlag(
@@ -442,10 +492,15 @@ Options:
                          warns.
       --timeout <dur>    run: fail a check that runs longer than <dur> and
                          abort its requests (default: none; env
-                         SNPF_CHECK_TIMEOUT). The other checks still run
+                         SNPF_CHECK_TIMEOUT). The other checks still run.
       --run-timeout <dur>
                          run: budget for each instance's whole run; checks
                          not finished in time fail as aborted
+      --max-inflight <n> run/sync: most requests in flight at once, 1-64
+                         (default 4; env SNPF_MAX_INFLIGHT)
+      --rps <n>          run/sync: most requests started per second, 0.5-100
+                         (default unlimited; env SNPF_RPS). A 429 also pauses
+                         the other requests for its Retry-After
       --allow-stage-skip drift: warn instead of fail when <dst> is further down
                          the registry's promotesTo pipeline than the next stage
       --baseline [path]  run: demote findings recorded in a baseline file to
@@ -868,6 +923,7 @@ async function runOneInstance(
     ...(loaded.config.proxy ? { proxy: loaded.config.proxy } : {}),
     ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
     env: loaded.env,
+    ...requestLimits(args, loaded.limits),
   });
 
   const ctx: PreflightContext = {
@@ -1028,6 +1084,7 @@ async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
     ...(loaded.config.proxy ? { proxy: loaded.config.proxy } : {}),
     ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
     env: loaded.env,
+    ...requestLimits(args, loaded.limits),
   });
 
   const existing = await loadManifest(env, cwd);
