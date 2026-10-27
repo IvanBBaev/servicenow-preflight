@@ -1,0 +1,163 @@
+name: servicenow-preflight
+description: >-
+  Run ServiceNow pre-deployment preflight checks, upload SARIF to code
+  scanning and write a step summary.
+author: Ivan Baev
+branding:
+  icon: check-circle
+  color: green
+
+# Credentials are never inputs: pass them through the caller's `env:`
+# (SNPF_USER, SNPF_PASS, SNPF_CLIENT_ID, ...), as README "CI integration"
+# shows. Every input reaches the shell through `env:`, never inline.
+inputs:
+  version:
+    description: >-
+      servicenow-preflight version to run (an npm version or tag, or a local
+      package path). Default: the version of the action's own tag (vX.Y.Z),
+      else `latest`.
+    required: false
+    default: ""
+  args:
+    description: Subcommand and extra flags, split on spaces (e.g. `run --baseline`).
+    required: false
+    default: run
+  instance:
+    description: Registry instance name (`--env`).
+    required: false
+    default: ""
+  config:
+    description: Config file path (`--config`).
+    required: false
+    default: ""
+  only:
+    description: Comma-separated checks to run (`--only`).
+    required: false
+    default: ""
+  skip:
+    description: Comma-separated checks to skip (`--skip`).
+    required: false
+    default: ""
+  fail-on:
+    description: Exit threshold, `fail` or `warn` (`--fail-on`).
+    required: false
+    default: fail
+  sarif:
+    description: Upload the SARIF report to code scanning (needs `security-events write`).
+    required: false
+    default: "true"
+  sarif-category:
+    description: Code scanning category for the SARIF upload.
+    required: false
+    default: servicenow-preflight
+  summary:
+    description: Write the Markdown report to the job's step summary.
+    required: false
+    default: "true"
+  replay:
+    description: Answer every request from this recording directory (`--replay`); no credentials needed.
+    required: false
+    default: ""
+  node-version:
+    description: Node.js version to set up.
+    required: false
+    default: "22"
+  working-directory:
+    description: Directory to run in.
+    required: false
+    default: .
+
+outputs:
+  ok:
+    description: "`true` when the run passed its threshold, else `false`."
+    value: ${{ steps.run.outputs.ok }}
+  pass:
+    description: Number of passing checks.
+    value: ${{ steps.run.outputs.pass }}
+  warn:
+    description: Number of warning checks.
+    value: ${{ steps.run.outputs.warn }}
+  fail:
+    description: Number of failing checks.
+    value: ${{ steps.run.outputs.fail }}
+  sarif-file:
+    description: Path of the SARIF report (empty when `sarif` is false).
+    value: ${{ steps.run.outputs.sarif-file }}
+  report-json:
+    description: Path of the JSON report.
+    value: ${{ steps.run.outputs.report-json }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SNPF_ACTION_VERSION: ${{ inputs.version }}
+        SNPF_ACTION_REF: ${{ github.action_ref }}
+        SNPF_ACTION_ARGS: ${{ inputs.args }}
+        SNPF_ACTION_INSTANCE: ${{ inputs.instance }}
+        SNPF_ACTION_CONFIG: ${{ inputs.config }}
+        SNPF_ACTION_ONLY: ${{ inputs.only }}
+        SNPF_ACTION_SKIP: ${{ inputs.skip }}
+        SNPF_ACTION_FAIL_ON: ${{ inputs.fail-on }}
+        SNPF_ACTION_SARIF: ${{ inputs.sarif }}
+        SNPF_ACTION_SUMMARY: ${{ inputs.summary }}
+        SNPF_ACTION_REPLAY: ${{ inputs.replay }}
+        SNPF_ACTION_TEMP: ${{ runner.temp }}
+      run: |
+        set -uo pipefail
+        version="$SNPF_ACTION_VERSION"
+        if [ -z "$version" ]; then
+          if [[ "$SNPF_ACTION_REF" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+.*)$ ]]; then
+            version="${BASH_REMATCH[1]}"
+          else
+            version=latest
+          fi
+        fi
+        case "$version" in
+          .* | /*) package="$version" ;;
+          *) package="servicenow-preflight@$version" ;;
+        esac
+
+        read -r -a cli <<< "$SNPF_ACTION_ARGS"
+        [ -n "$SNPF_ACTION_INSTANCE" ] && cli+=(--env "$SNPF_ACTION_INSTANCE")
+        [ -n "$SNPF_ACTION_CONFIG" ] && cli+=(--config "$SNPF_ACTION_CONFIG")
+        [ -n "$SNPF_ACTION_ONLY" ] && cli+=(--only "$SNPF_ACTION_ONLY")
+        [ -n "$SNPF_ACTION_SKIP" ] && cli+=(--skip "$SNPF_ACTION_SKIP")
+        [ -n "$SNPF_ACTION_REPLAY" ] && cli+=(--replay "$SNPF_ACTION_REPLAY")
+        cli+=(--fail-on "$SNPF_ACTION_FAIL_ON")
+        [ "$SNPF_ACTION_SUMMARY" = "true" ] || cli+=(--no-summary)
+        json="$SNPF_ACTION_TEMP/snpf.json"
+        cli+=(--output "json=$json")
+        sarif=""
+        if [ "$SNPF_ACTION_SARIF" = "true" ]; then
+          sarif="$SNPF_ACTION_TEMP/snpf.sarif"
+          cli+=(--output "sarif=$sarif")
+        fi
+
+        npx --yes --package "$package" servicenow-preflight "${cli[@]}"
+        code=$?
+        {
+          echo "exit-code=$code"
+          echo "report-json=$( [ -f "$json" ] && echo "$json" )"
+          echo "sarif-file=$( [ -n "$sarif" ] && [ -f "$sarif" ] && echo "$sarif" )"
+        } >> "$GITHUB_OUTPUT"
+        exit 0
+
+    - if: always() && steps.run.outputs.sarif-file != ''
+      uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      with:
+        sarif_file: ${{ steps.run.outputs.sarif-file }}
+        category: ${{ inputs.sarif-category }}
+
+    - if: always()
+      shell: bash
+      env:
+        SNPF_ACTION_EXIT: ${{ steps.run.outputs.exit-code }}
+      run: exit "${SNPF_ACTION_EXIT:-1}"

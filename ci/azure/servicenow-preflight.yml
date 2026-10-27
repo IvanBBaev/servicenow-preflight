@@ -1,0 +1,46 @@
+# servicenow-preflight step template for Azure Pipelines. Reference it from
+# your pipeline (with this repo as a `resources.repositories` entry, or a copy):
+#
+#   steps:
+#     - template: ci/azure/servicenow-preflight.yml@snpf
+#       parameters:
+#         args: run --baseline
+#
+# Define SNPF_INSTANCE, SNPF_USER and SNPF_PASS as (secret) pipeline
+# variables; the step maps them into its environment. Secrets are never
+# template parameters.
+parameters:
+  - name: version
+    type: string
+    default: latest
+  - name: args
+    type: string
+    default: run
+  - name: nodeVersion
+    type: string
+    default: "22"
+
+steps:
+  - task: NodeTool@0
+    inputs:
+      versionSpec: ${{ parameters.nodeVersion }}
+  - script: >-
+      npx --yes servicenow-preflight@${{ parameters.version }} ${{ parameters.args }}
+      --output junit=$(Agent.TempDirectory)/snpf-junit.xml
+      --output json=$(Build.ArtifactStagingDirectory)/snpf.json
+    displayName: servicenow-preflight
+    env:
+      SNPF_INSTANCE: $(SNPF_INSTANCE)
+      SNPF_USER: $(SNPF_USER)
+      SNPF_PASS: $(SNPF_PASS)
+  - task: PublishTestResults@2
+    condition: always()
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: $(Agent.TempDirectory)/snpf-junit.xml
+      testRunTitle: servicenow-preflight
+  - task: PublishPipelineArtifact@1
+    condition: always()
+    inputs:
+      targetPath: $(Build.ArtifactStagingDirectory)/snpf.json
+      artifact: servicenow-preflight

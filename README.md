@@ -732,8 +732,12 @@ with `toEnvelope(runs, { version })` and `formatJson(envelope)`.
 ## CI integration
 
 `servicenow-preflight` exits non-zero on failure, so a single step gates a
-pipeline. This GitHub Actions job runs the checks and uploads the SARIF log to
-code scanning:
+pipeline.
+
+### GitHub Action
+
+The repo is also a composite action. One step installs the CLI, runs the
+checks, uploads SARIF to code scanning and writes the step summary:
 
 ```yaml
 name: ServiceNow preflight
@@ -743,24 +747,75 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       security-events: write # to upload SARIF
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Run preflight
+      - uses: actions/checkout@v5
+      - id: preflight
+        uses: IvanBBaev/servicenow-preflight@vX.Y.Z # pin a release tag or SHA
         env:
           SNPF_INSTANCE: ${{ secrets.SNPF_INSTANCE }}
           SNPF_USER: ${{ secrets.SNPF_USER }}
           SNPF_PASS: ${{ secrets.SNPF_PASS }}
-        run: npx servicenow-preflight --format sarif > preflight.sarif
-      - name: Upload SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: preflight.sarif
+          fail-on: warn
+      - if: always()
+        run: echo "pass=${{ steps.preflight.outputs.pass }} fail=${{ steps.preflight.outputs.fail }}"
 ```
+
+The action needs a release that ships it (the first release after 0.5.0);
+by default it runs the CLI version matching its own `vX.Y.Z` tag, else
+`latest`. Credentials are never inputs — pass them through `env:`.
+
+| Input               | Default                | Meaning                                                 |
+| ------------------- | ---------------------- | ------------------------------------------------------- |
+| `version`           | the action's tag       | npm version / tag, or a local package path              |
+| `args`              | `run`                  | subcommand and extra flags, split on spaces             |
+| `instance`          |                        | registry instance (`--env`)                             |
+| `config`            |                        | config file (`--config`)                                |
+| `only` / `skip`     |                        | comma-separated check names                             |
+| `fail-on`           | `fail`                 | exit threshold: `fail` or `warn`                        |
+| `sarif`             | `true`                 | upload SARIF (needs `security-events: write`)           |
+| `sarif-category`    | `servicenow-preflight` | code scanning category                                  |
+| `summary`           | `true`                 | write the Markdown report to the step summary           |
+| `replay`            |                        | recording directory (`--replay`); no credentials needed |
+| `node-version`      | `22`                   | Node.js to set up                                       |
+| `working-directory` | `.`                    | directory to run in                                     |
+
+Outputs: `ok`, `pass`, `warn`, `fail` (summed over every instance),
+`sarif-file` and `report-json` (paths under `runner.temp`). On pull requests
+from forks set `sarif: false` — the token cannot upload there. The repo's own
+`action-selftest` workflow runs the action against the committed
+`test/fixtures/replay-sample` recording with no secrets.
+
+### GitLab CI and Azure Pipelines
+
+Ready-made templates live in [`ci/`](ci/). GitLab — include the job and set
+the `SNPF_*` variables as masked CI/CD variables:
+
+```yaml
+include:
+  - remote: https://raw.githubusercontent.com/IvanBBaev/servicenow-preflight/vX.Y.Z/ci/gitlab/servicenow-preflight.gitlab-ci.yml
+
+servicenow-preflight:
+  variables:
+    SNPF_ARGS: run --fail-on warn
+```
+
+It publishes a JUnit report plus JSON and Markdown artifacts. Azure Pipelines
+— copy [`ci/azure/servicenow-preflight.yml`](ci/azure/servicenow-preflight.yml)
+into your repo and use it as a step template; it maps the secret variables
+`SNPF_INSTANCE`, `SNPF_USER` and `SNPF_PASS`, publishes JUnit test results and
+a JSON artifact:
+
+```yaml
+steps:
+  - template: ci/azure/servicenow-preflight.yml
+    parameters:
+      args: run --baseline
+```
+
+### Plain `npx`
 
 For annotations without any upload step, use `--format github` instead — each
 failing or warning check shows up on the run summary and the PR's Checks tab:

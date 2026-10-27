@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GitHub Action, GitLab and Azure templates** — the repo is now a composite
+  action (`uses: IvanBBaev/servicenow-preflight@vX.Y.Z`): it runs the CLI
+  matching its tag, uploads SARIF, writes the step summary and exposes
+  `ok`/`pass`/`warn`/`fail`/`sarif-file`/`report-json` outputs; credentials
+  stay in `env:`. `ci/gitlab/` and `ci/azure/` ship ready-made job / step
+  templates with JUnit reporting. An `action-selftest` workflow runs the action
+  against a committed, credential-free replay sample
+  (`npm run record:sample` refreshes it).
 - **Typed check options and `config schema` / `validate` / `migrate`** —
   checks declare their options with a small schema DSL, from which the CLI
   derives a JSON Schema for the config file

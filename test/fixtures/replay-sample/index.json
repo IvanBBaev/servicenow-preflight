@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "tool": {
+    "name": "servicenow-preflight",
+    "version": "0.5.0"
+  },
+  "recordedAt": "2026-10-27T22:49:40.132Z",
+  "instanceHostSha256": "723830cd73ea1916",
+  "raw": false,
+  "checks": ["instance-url-configured", "connectivity-auth", "acl-role-sanity"]
+}

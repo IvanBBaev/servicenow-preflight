@@ -1,0 +1,27 @@
+# servicenow-preflight for GitLab CI. Include it from your .gitlab-ci.yml:
+#
+#   include:
+#     - remote: "https://raw.githubusercontent.com/IvanBBaev/servicenow-preflight/<tag>/ci/gitlab/servicenow-preflight.gitlab-ci.yml"
+#
+# Set SNPF_INSTANCE, SNPF_USER and SNPF_PASS as masked CI/CD variables;
+# override SNPF_VERSION / SNPF_ARGS in your own job or variables block.
+variables:
+  SNPF_VERSION: latest
+  SNPF_ARGS: run
+
+servicenow-preflight:
+  stage: test
+  image: node:22
+  script:
+    - >-
+      npx --yes servicenow-preflight@${SNPF_VERSION} ${SNPF_ARGS}
+      --output junit=snpf-junit.xml
+      --output json=snpf.json
+      --output markdown=snpf.md
+  artifacts:
+    when: always
+    paths:
+      - snpf.json
+      - snpf.md
+    reports:
+      junit: snpf-junit.xml
