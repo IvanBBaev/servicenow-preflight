@@ -374,7 +374,7 @@ export interface SnClientConfig {
 }
 
 /** Minimal response shape the client consumes (a subset of `fetch`'s Response). */
-interface TransportResponse {
+export interface TransportResponse {
   status: number;
   statusText: string;
   /** Response headers with lower-cased keys (both transports normalise to this). */
@@ -383,7 +383,7 @@ interface TransportResponse {
 }
 
 /** Options for a transport call (a subset of `RequestInit`). */
-interface TransportInit {
+export interface TransportInit {
   method: string;
   headers: Record<string, string>;
   body?: string;
@@ -410,10 +410,24 @@ interface RawResult {
  * client cert is configured a `node:https` transport is used instead so the
  * client presents the certificate on the TLS socket.
  */
-type Transport = (
+export type Transport = (
   url: string,
   init: TransportInit,
 ) => Promise<TransportResponse>;
+
+/**
+ * F-X-6: the internal transport seam. A config carrying this key has its
+ * composed transport (proxy routing included) passed through the function, so
+ * record mode can wrap it and replay mode can replace it. The key is a symbol
+ * that `src/index.ts` does not export, so the public {@link SnClientConfig}
+ * shape is unchanged.
+ */
+export const TRANSPORT_WRAP: unique symbol = Symbol("snpf.transportWrap");
+
+/** {@link SnClientConfig} plus the internal transport seam. */
+export type InternalClientConfig = SnClientConfig & {
+  [TRANSPORT_WRAP]?: (inner: Transport) => Transport;
+};
 
 /**
  * Normalise a set of response headers — a `fetch` `Headers`, a Node headers
@@ -1319,7 +1333,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
   // regardless of which direct transport would otherwise serve it; a malformed
   // env-sourced proxy value throws here and surfaces as SnNetworkError (OPP-7)
   // rather than ever silently bypassing the proxy (OPP-4).
-  const transport: Transport = async (url, init) => {
+  const composed: Transport = async (url, init) => {
     const proxy = resolveProxy(url, {
       proxy: cfg.proxy,
       noProxy: cfg.noProxy,
@@ -1328,6 +1342,8 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     if (!proxy) return directTransport(url, init);
     return proxiedNodeRequest(url, init, proxy, cfg.tls);
   };
+  const wrap = (cfg as InternalClientConfig)[TRANSPORT_WRAP];
+  const transport: Transport = wrap ? wrap(composed) : composed;
   const authProvider = buildAuthProvider(
     cfg.auth,
     transport,

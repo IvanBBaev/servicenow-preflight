@@ -45,7 +45,7 @@ export const connectivityAuth: Check = {
   async run(ctx): Promise<CheckResult> {
     // A mutual-TLS client cert can identify the caller on its own, so only warn
     // when neither a header credential nor a client cert is configured.
-    if (!ctx.auth && !ctx.tls) {
+    if (!ctx.auth && !ctx.tls && !ctx.replay) {
       return {
         name: NAME,
         status: "warn",

@@ -4,9 +4,11 @@ import {
   fchmodSync,
   openSync,
   readFileSync,
+  realpathSync,
   writeSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runPreflight } from "./index.js";
 import {
@@ -16,7 +18,19 @@ import {
   UsageError,
   type RequestLimits,
 } from "./config.js";
-import { createSnClient } from "./http/client.js";
+import {
+  createSnClient,
+  TRANSPORT_WRAP,
+  type InternalClientConfig,
+} from "./http/client.js";
+import { createRecorder, type Recorder } from "./fixtures/record.js";
+import {
+  indexPath,
+  readRecording,
+  RecordingError,
+} from "./fixtures/recording.js";
+import { PLACEHOLDER_ORIGIN } from "./fixtures/redact.js";
+import { replayTransport } from "./fixtures/replay.js";
 import { formatJUnit, formatJUnitSuites } from "./report/junit.js";
 import {
   formatGitHubAnnotations,
@@ -24,7 +38,12 @@ import {
 } from "./report/github.js";
 import { formatMarkdown, formatMarkdownAll } from "./report/markdown.js";
 import { formatSarif } from "./report/sarif.js";
-import { formatJson, toEnvelope, type ReportRun } from "./report/json.js";
+import {
+  formatJson,
+  toEnvelope,
+  type ReportEnvelope,
+  type ReportRun,
+} from "./report/json.js";
 import {
   collectTimings,
   createTracer,
@@ -77,6 +96,7 @@ import type {
   CheckStatus,
   PreflightContext,
   PreflightReport,
+  ReplayInfo,
 } from "./types.js";
 
 /** Output format for the report. */
@@ -142,6 +162,12 @@ interface ParsedArgs {
   timings: boolean;
   /** `run`: `--trace <path>` — write an NDJSON trace; `SNPF_TRACE` otherwise. */
   tracePath?: string;
+  /** `run`: `--record <dir>` — write a redacted recording of the run (F-X-6). */
+  recordDir?: string;
+  /** `run`: `--record-raw` — keep names and emails in the recording. */
+  recordRaw: boolean;
+  /** `run`: `--replay <dir>` — answer every request from a recording. */
+  replayDir?: string;
   /** `drift`: downgrade a skipped pipeline stage from fail to warn. */
   allowStageSkip: boolean;
   /**
@@ -250,6 +276,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     allowEmpty: false,
     noCache: false,
     timings: false,
+    recordRaw: false,
     allowStageSkip: false,
     format: "pretty",
     force: false,
@@ -390,6 +417,15 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--trace":
         args.tracePath = tracePathArg(takeValue(arg));
         break;
+      case "--record":
+        args.recordDir = dirArg("--record", takeValue(arg));
+        break;
+      case "--record-raw":
+        args.recordRaw = true;
+        break;
+      case "--replay":
+        args.replayDir = dirArg("--replay", takeValue(arg));
+        break;
       case "--concurrency":
         args.concurrency = parseConcurrency(takeValue(arg), arg);
         break;
@@ -432,6 +468,10 @@ function parseArgs(argv: string[]): ParsedArgs {
           );
         } else if (arg?.startsWith("--trace=")) {
           args.tracePath = tracePathArg(arg.slice("--trace=".length));
+        } else if (arg?.startsWith("--record=")) {
+          args.recordDir = dirArg("--record", arg.slice("--record=".length));
+        } else if (arg?.startsWith("--replay=")) {
+          args.replayDir = dirArg("--replay", arg.slice("--replay=".length));
         } else if (arg?.startsWith("--concurrency=")) {
           args.concurrency = parseConcurrency(
             arg.slice("--concurrency=".length),
@@ -559,6 +599,14 @@ Options:
       --trace <path>     run: write a local NDJSON trace of the run (env
                          SNPF_TRACE); file mode 0600, no query values, row
                          data, headers or credentials
+      --record <dir>     run: also write each response, redacted, to <dir>
+                         (names and emails pseudonymised, secrets and the host
+                         replaced) for a later --replay
+      --record-raw       run: with --record, keep names and emails (secrets
+                         are still redacted)
+      --replay <dir>     run: answer every request from a recording; no
+                         network and no credentials. A request that was not
+                         recorded fails its check
       --allow-stage-skip drift: warn instead of fail when <dst> is further down
                          the registry's promotesTo pipeline than the next stage
       --baseline [path]  run: demote findings recorded in a baseline file to
@@ -906,6 +954,131 @@ interface InstanceRun {
   url?: string;
   /** `--timings` counts for the run. */
   timings?: RunTimings;
+  /** Set when the run was replayed from a recording. */
+  replay?: ReplayInfo;
+}
+
+/** A `--record` / `--replay` value: a non-empty directory. */
+function dirArg(flag: string, value: string): string {
+  if (value.trim() === "") {
+    throw new UsageError(`${flag} needs a directory.`);
+  }
+  return value;
+}
+
+/** Read a `--replay` recording's index; a bad one is a usage error. */
+function openRecording(dir: string, shown: string): ReplayInfo {
+  try {
+    return { dir: shown, recordedAt: readRecording(dir).recordedAt };
+  } catch (err) {
+    if (err instanceof RecordingError) throw new UsageError(err.message);
+    throw err;
+  }
+}
+
+/**
+ * Start a `--record` recorder. On the first recording into a directory inside
+ * a git work tree that git does not ignore, warn and print a `.gitignore`
+ * line: a recording is meant to be reviewed before it is committed.
+ */
+function startRecording(
+  dir: string,
+  instanceUrl: string | undefined,
+  raw: boolean,
+): Recorder {
+  let origin: string;
+  try {
+    origin = new URL(instanceUrl ?? "").origin;
+  } catch {
+    throw new UsageError(
+      "--record needs the instance URL (--instance, SNPF_INSTANCE or instanceUrl in the config file).",
+    );
+  }
+  const fresh = !existsSync(indexPath(dir));
+  let recorder: Recorder;
+  try {
+    recorder = createRecorder({ dir, origin, raw });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new UsageError(`Cannot write the recording ${dir}: ${detail}`);
+  }
+  if (raw) {
+    process.stderr.write(
+      "Warning: --record-raw keeps user and group names and emails in the recording; secrets are still redacted.\n",
+    );
+  }
+  if (fresh) warnIfCommittable(dir);
+  return recorder;
+}
+
+/** The `.gitignore` warning of {@link startRecording}; silent without git. */
+function warnIfCommittable(dir: string): void {
+  const git = (args: string[]): string =>
+    execFileSync("git", args, {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  let top: string;
+  try {
+    top = git(["rev-parse", "--show-toplevel"]);
+  } catch {
+    return;
+  }
+  const rel = relative(realpathSync(top), realpathSync(dir));
+  if (rel === "" || rel.startsWith("..")) return;
+  const line = `/${rel.split("\\").join("/")}/`;
+  try {
+    git(["-C", top, "check-ignore", "-q", `${rel}/`]);
+    return;
+  } catch {
+    // Not ignored: warn below.
+  }
+  process.stderr.write(
+    `Warning: the recording ${dir} is inside a git work tree and not ignored. Review it before committing it, or ignore it with this .gitignore line:\n  ${line}\n`,
+  );
+}
+
+/**
+ * Note a replayed run in the rendered report: a first line in the text
+ * formats, a notice in github, an XML comment in junit, and a `replay` object
+ * on each run in json and sarif.
+ */
+function withReplayNote(
+  out: string,
+  format: OutputFormat,
+  replay: ReplayInfo | undefined,
+): string {
+  if (!replay) return out;
+  const note = `Replayed from ${replay.dir} recorded ${replay.recordedAt}`;
+  switch (format) {
+    case "json": {
+      const envelope = JSON.parse(out) as ReportEnvelope;
+      for (const run of envelope.runs) run.replay = replay;
+      return formatJson(envelope);
+    }
+    case "sarif": {
+      const log = JSON.parse(out) as SarifLog;
+      for (const run of log.runs) {
+        const properties = (run.properties ?? {}) as Record<string, unknown>;
+        run.properties = { ...properties, replay };
+      }
+      return `${JSON.stringify(log, null, 2)}\n`;
+    }
+    case "junit": {
+      const comment = `<!-- ${note.replace(/-{2,}/g, "-")} -->\n`;
+      const declaration = /^<\?xml[^>]*\?>\n/.exec(out);
+      return declaration
+        ? `${declaration[0]}${comment}${out.slice(declaration[0].length)}`
+        : `${comment}${out}`;
+    }
+    case "github":
+      return `::notice::${note.replace(/%/g, "%25").replace(/\r?\n/g, " ")}\n${out}`;
+    case "markdown":
+      return `> ${note}\n\n${out}`;
+    default:
+      return `${note}\n\n${out}`;
+  }
 }
 
 /** A `--trace` value: a non-empty path. */
@@ -969,13 +1142,22 @@ async function runOneInstance(
   cwd: string,
   trace: TraceSink = {},
 ): Promise<InstanceRun> {
+  // F-X-6: a replay needs no credentials, so none are resolved.
+  const replay =
+    args.replayDir !== undefined
+      ? openRecording(resolve(cwd, args.replayDir), args.replayDir)
+      : undefined;
   const loaded = await loadConfig(cwd, {
     configPath: args.configPath,
     envPrefix: target.envPrefix,
+    ...(replay ? { credentials: false } : {}),
   });
 
   const instanceUrl =
-    args.instanceUrl ?? target.instanceUrl ?? loaded.config.instanceUrl;
+    args.instanceUrl ??
+    target.instanceUrl ??
+    loaded.config.instanceUrl ??
+    (replay ? PLACEHOLDER_ORIGIN : undefined);
   const scope = target.scope ?? loaded.config.scope;
   const manifest = target.name
     ? await loadManifest(target.name, cwd)
@@ -1034,7 +1216,16 @@ async function runOneInstance(
     if (file) baseline = readBaseline(file);
   }
 
-  const http = createSnClient({
+  const recorder =
+    args.recordDir !== undefined
+      ? startRecording(
+          resolve(cwd, args.recordDir),
+          instanceUrl,
+          args.recordRaw,
+        )
+      : undefined;
+  const replayDir = args.replayDir;
+  const clientConfig: InternalClientConfig = {
     instanceUrl: instanceUrl ?? "https://invalid.invalid",
     ...(loaded.auth ? { auth: loaded.auth } : {}),
     ...(loaded.tls ? { tls: loaded.tls } : {}),
@@ -1046,7 +1237,14 @@ async function runOneInstance(
     ...requestLimits(args, loaded.limits),
     // F-X-2: share identical reads between the run's checks.
     cache: !args.noCache && loaded.cache !== false,
-  });
+  };
+  if (recorder) {
+    clientConfig[TRANSPORT_WRAP] = (inner) => recorder.wrap(inner);
+  } else if (replayDir !== undefined) {
+    const transport = replayTransport(resolve(cwd, replayDir));
+    clientConfig[TRANSPORT_WRAP] = () => transport;
+  }
+  const http = createSnClient(clientConfig);
 
   const ctx: PreflightContext = {
     instanceUrl,
@@ -1058,6 +1256,7 @@ async function runOneInstance(
     instance: target.name,
     manifest,
     select,
+    ...(replay ? { replay } : {}),
     options: loaded.config.options,
     ...(checkOptions ? { checkOptions } : {}),
   };
@@ -1095,10 +1294,15 @@ async function runOneInstance(
   } finally {
     timings = collector?.stop(defaultChecks.map((c) => c.name));
   }
+  recorder?.finish({
+    version: readVersion(),
+    checks: raw.results.map((r) => r.name),
+  });
   const report = applyPolicy(raw, policy);
   const extra = {
     ...(instanceUrl ? { url: instanceUrl } : {}),
     ...(timings ? { timings } : {}),
+    ...(replay ? { replay } : {}),
   };
 
   if (writePath) {
@@ -1148,6 +1352,17 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
       "--write-baseline <path> cannot be combined with --all; omit the path to write .preflight/baseline.<env>.json per instance.",
     );
   }
+  if (args.recordDir !== undefined && args.replayDir !== undefined) {
+    throw new UsageError("--record and --replay cannot be combined.");
+  }
+  if (args.recordRaw && args.recordDir === undefined) {
+    throw new UsageError("--record-raw needs --record <dir>.");
+  }
+  if (args.all && (args.recordDir ?? args.replayDir) !== undefined) {
+    throw new UsageError(
+      "--record and --replay hold one instance; run them without --all.",
+    );
+  }
   const registry = await loadRegistry(cwd, args.registryPath);
   const targets = resolveRunTargets(args, registry);
 
@@ -1181,20 +1396,24 @@ async function runTargets(
   const [firstTarget] = targets;
   if (!args.all && targets.length === 1 && firstTarget && !firstTarget.name) {
     // Single-instance: preserve the original single-report output exactly.
-    const { report, url, timings } = await runOneInstance(
+    const { report, url, timings, replay } = await runOneInstance(
       firstTarget,
       args,
       cwd,
       trace,
     );
     process.stdout.write(
-      render(
-        report,
+      withReplayNote(
+        render(
+          report,
+          args.format,
+          undefined,
+          ranChecks(defaultChecks, [report]),
+          url,
+          timings,
+        ),
         args.format,
-        undefined,
-        ranChecks(defaultChecks, [report]),
-        url,
-        timings,
+        replay,
       ),
     );
     writeTimings(args.format, [{ ...(timings ? { timings } : {}) }]);
@@ -1203,13 +1422,11 @@ async function runTargets(
   }
 
   const reports: NamedReport[] = [];
+  let replay: ReplayInfo | undefined;
   for (const target of targets) {
-    const { report, url, timings } = await runOneInstance(
-      target,
-      args,
-      cwd,
-      trace,
-    );
+    const run = await runOneInstance(target, args, cwd, trace);
+    const { report, url, timings } = run;
+    replay ??= run.replay;
     reports.push({
       name: target.name ?? "instance",
       report,
@@ -1225,13 +1442,17 @@ async function runTargets(
   const [firstReport] = reports;
   if (reports.length === 1 && firstReport) {
     process.stdout.write(
-      render(
-        firstReport.report,
+      withReplayNote(
+        render(
+          firstReport.report,
+          args.format,
+          firstReport.name,
+          ran,
+          firstReport.url,
+          firstReport.timings,
+        ),
         args.format,
-        firstReport.name,
-        ran,
-        firstReport.url,
-        firstReport.timings,
+        replay,
       ),
     );
   } else {

@@ -8,6 +8,7 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
   rmSync,
   existsSync,
   statSync,
@@ -1663,5 +1664,85 @@ test("CLI --timings prints a stderr table after a pretty report", async () => {
   } finally {
     instance.stop();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI --record then --replay runs credential-free and notes the replay", async () => {
+  const instance = await startEmptyInstance();
+  const dir = projectDir("snpf-record-");
+  let recorded;
+  try {
+    recorded = await runCliAsync(
+      ["run", "--instance", instance.url, "--json", "--record", "rec"],
+      { cwd: dir, env: CREDS },
+    );
+  } finally {
+    instance.stop();
+  }
+  assert.ok(recorded.status === 0 || recorded.status === 1, recorded.stderr);
+  const recordedRun = JSON.parse(recorded.stdout).runs[0];
+  assert.equal(recordedRun.replay, undefined);
+  const stored = readdirSync(join(dir, "rec"))
+    .map((name) => readFileSync(join(dir, "rec", name), "utf8"))
+    .join("\n");
+  assert.ok(!stored.includes(CREDS.SNPF_PASS));
+  assert.ok(!stored.includes(CREDS.SNPF_USER));
+  assert.ok(!stored.includes("127.0.0.1"));
+
+  // No SNPF_* credentials and no instance: everything comes from rec/.
+  const replayed = await runCliAsync(["run", "--json", "--replay", "rec"], {
+    cwd: dir,
+  });
+  assert.equal(replayed.status, recorded.status, replayed.stderr);
+  const run = JSON.parse(replayed.stdout).runs[0];
+  assert.equal(run.replay.dir, "rec");
+  assert.match(run.replay.recordedAt, /^\d{4}-\d{2}-\d{2}T/);
+  // The URL check differs by design: the recording hit plain-http loopback,
+  // the replay sees the https placeholder origin.
+  const statuses = (report) =>
+    report.results
+      .filter((r) => r.name !== "instance-url-configured")
+      .map((r) => [r.name, r.status]);
+  assert.deepEqual(statuses(run.report), statuses(recordedRun.report));
+  assert.doesNotMatch(replayed.stdout, /No credentials|SNPF_USER/);
+
+  const pretty = await runCliAsync(["run", "--replay=rec"], { cwd: dir });
+  assert.match(pretty.stdout, /^Replayed from rec recorded \d{4}-/);
+  const github = await runCliAsync(
+    ["run", "--replay", "rec", "--format", "github"],
+    { cwd: dir },
+  );
+  assert.match(github.stdout, /^::notice::Replayed from rec/);
+  const junit = await runCliAsync(
+    ["run", "--replay", "rec", "--format", "junit"],
+    { cwd: dir },
+  );
+  assert.match(junit.stdout, /^<\?xml[^>]*\?>\n<!-- Replayed from rec /);
+  const sarif = await runCliAsync(
+    ["run", "--replay", "rec", "--format", "sarif"],
+    { cwd: dir },
+  );
+  assert.equal(JSON.parse(sarif.stdout).runs[0].properties.replay.dir, "rec");
+  const markdown = await runCliAsync(
+    ["run", "--replay", "rec", "--format", "markdown"],
+    { cwd: dir },
+  );
+  assert.match(markdown.stdout, /^> Replayed from rec/);
+});
+
+test("CLI rejects bad --record / --replay combinations with exit 2", () => {
+  const dir = projectDir("snpf-record-usage-");
+  const cases = [
+    [["run", "--record", "a", "--replay", "b"], /cannot be combined/],
+    [["run", "--record-raw"], /--record-raw needs --record/],
+    [["run", "--all", "--replay", "b"], /without --all/],
+    [["run", "--record="], /--record needs a directory/],
+    [["run", "--replay", "missing"], /is not a recording/],
+    [["run", "--record", "rec"], /--record needs the instance URL/],
+  ];
+  for (const [args, message] of cases) {
+    const res = runCli(args, { cwd: dir });
+    assert.equal(res.status, 2, `${args.join(" ")}: ${res.stderr}`);
+    assert.match(res.stderr, message);
   }
 });

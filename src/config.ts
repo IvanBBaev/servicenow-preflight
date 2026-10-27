@@ -751,6 +751,12 @@ export interface LoadConfigOptions {
    * {@link namespacedEnv}). Absent → the flat single-instance behaviour.
    */
   envPrefix?: string;
+  /**
+   * Resolve credentials and the client certificate (default `true`). `false`
+   * leaves `auth` and `tls` unset without reading any credential variable —
+   * replay mode (F-X-6) needs none.
+   */
+  credentials?: boolean;
 }
 
 /**
@@ -814,8 +820,13 @@ export async function loadConfig(
   // query (SR-1), after env fallbacks so env-supplied values are covered too.
   assertSafeQueryInputs(config);
 
-  const auth = resolveAuthFromEnv(fullEnv, opts.envPrefix);
-  const tls = resolveTlsFromEnv(fullEnv, opts.envPrefix);
+  const withCredentials = opts.credentials ?? true;
+  const auth = withCredentials
+    ? resolveAuthFromEnv(fullEnv, opts.envPrefix)
+    : undefined;
+  const tls = withCredentials
+    ? resolveTlsFromEnv(fullEnv, opts.envPrefix)
+    : undefined;
 
   const limits: RequestLimits = {};
   const maxInFlight = parseRequestLimit(

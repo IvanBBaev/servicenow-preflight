@@ -278,7 +278,7 @@ export const remoteSetPreview: Check = {
     // transport layer — a configuration gap, not an instance problem. Warn and
     // skip (mirroring connectivity-auth, which names the fix) so an
     // unconfigured default run is not turned into a hard fail.
-    if (!ctx.auth && !ctx.tls) {
+    if (!ctx.auth && !ctx.tls && !ctx.replay) {
       return result(
         "warn",
         "No credentials configured; cannot verify retrieved update set previews (set SNPF_USER/SNPF_PASS, SNPF_TOKEN, SNPF_API_KEY, an OAuth grant, or SNPF_MTLS_CERT/KEY).",

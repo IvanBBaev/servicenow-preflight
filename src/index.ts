@@ -40,6 +40,7 @@ export type {
   PreflightAuth,
   PreflightContext,
   PreflightReport,
+  ReplayInfo,
 } from "./types.js";
 export type {
   SnClient,
@@ -157,6 +158,15 @@ export {
   type NamedReport,
 } from "./report/junit.js";
 export { formatSarif } from "./report/sarif.js";
+export {
+  createReplayClient,
+  type ReplayClientOptions,
+} from "./fixtures/replay.js";
+export {
+  readRecording,
+  RecordingError,
+  type RecordingIndex,
+} from "./fixtures/recording.js";
 export {
   collectTimings,
   createTracer,

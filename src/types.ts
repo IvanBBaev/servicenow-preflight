@@ -22,6 +22,14 @@ export interface CheckSelection {
   skip?: string[];
 }
 
+/** Where a replayed run's responses came from (see `PreflightContext.replay`). */
+export interface ReplayInfo {
+  /** The recording directory, as given. */
+  dir: string;
+  /** ISO 8601 timestamp of when the recording was made. */
+  recordedAt: string;
+}
+
 /** Context handed to every check when a preflight run executes. */
 export interface PreflightContext {
   /**
@@ -37,6 +45,13 @@ export interface PreflightContext {
    * its own when no header credential is set.
    */
   tls?: SnTls;
+  /**
+   * Set when `http` answers from a recording (`--replay`, F-X-6) instead of a
+   * live instance. Checks that skip themselves when no credentials are
+   * configured treat a replay as authenticated, since the recording was made
+   * with credentials.
+   */
+  replay?: ReplayInfo;
   /**
    * The injected ServiceNow REST client. Checks call `ctx.http` — they must
    * NEVER use `fetch` directly. Always present at run time (the CLI and

@@ -191,6 +191,9 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--no-cache`                 | `run`: fetch every read, instead of sharing identical reads between checks. Also `SNPF_CACHE=0`.                              |
 | `--timings`                  | `run`: print per-check time, requests, retries and cache hits to stderr; with `--format json`, a `timings` object per run.    |
 | `--trace <path>`             | `run`: write a local NDJSON trace of the run (mode `0600`). Also `SNPF_TRACE`. See [Diagnostics](#diagnostics).               |
+| `--record <dir>`             | `run`: also save every response, redacted, to `<dir>` for a later `--replay`. See [Record and replay](#record-and-replay).    |
+| `--record-raw`               | `run`: with `--record`, keep user and group names and emails (secrets are still redacted).                                    |
+| `--replay <dir>`             | `run`: answer every request from a recording — no network, no credentials.                                                    |
 
 Durations take a unit: `ms`, `s`, `m`, `h`, `d` or `w`. A timed-out check is
 cancelled — its in-flight requests are aborted — and reported as
@@ -247,6 +250,53 @@ never leaves the machine. With several instances, one file holds every run.
 Library callers get the same events from `node:diagnostics_channel`
 (`TRACE_CHANNELS`), or use `createTracer(write)` and `collectTimings()`
 around `runPreflight`. With no subscriber, nothing is built.
+
+### Record and replay
+
+`--record <dir>` runs against the instance as usual and also writes each
+REST response into `<dir>` (one JSON file per distinct request, plus an
+`index.json`). `--replay <dir>` later runs the same checks against that
+directory alone: no network, no `SNPF_*` credentials and no instance URL.
+Use it to reproduce a finding offline, to share a failing run in an issue,
+or to run the checks in CI without instance access (see
+[Credential-free CI](#credential-free-ci)).
+
+```sh
+npx servicenow-preflight run --instance https://dev1.service-now.com --record fixtures/dev
+npx servicenow-preflight run --replay fixtures/dev --format json
+```
+
+A recording is redacted as it is written:
+
+- a Table API row keeps only the fields the request asked for;
+- values under secret-looking names (`password`, `token`, `secret`,
+  `api_key`, …), and a `value` next to such a `name`, become `<redacted>`;
+- tokens anywhere in text (JWTs, `Bearer`/`Basic` credentials, PEM private
+  keys, cloud and GitHub keys) are cut out;
+- the instance host becomes `instance.invalid`; `index.json` keeps only a
+  hash of it;
+- `sys_user` / `sys_user_group` names, user names and emails become stable
+  pseudonyms (`user-0001`, `user-0001@example.invalid`) — `--record-raw`
+  keeps them;
+- only `content-type`, `x-total-count`, `link` and `retry-after` headers are
+  kept; credentials and OAuth token traffic are never recorded.
+
+Redaction is best effort: review a recording before you commit it. On the
+first recording into a git work tree, the CLI warns when the directory is not
+ignored and prints a `.gitignore` line for it.
+
+Replay matches requests exactly (method, path, query and body). A request
+the recording does not hold fails its check with
+`No recorded response for GET /api/now/table/…; re-record with --record`,
+so a check that changed what it reads fails closed rather than passing. The
+report notes where it came from — a first line in `pretty` and `markdown`, a
+`::notice::` in `github`, an XML comment in `junit` and a `replay` object
+(`dir`, `recordedAt`) on each run in `json` and `sarif`. `--record` and
+`--replay` take one instance, so they cannot be combined with each other or
+with `--all`.
+
+Library callers use `createReplayClient(dir)` as `ctx.http`, with
+`ctx.replay` from `readRecording(dir)` so the credential-gated checks run.
 
 ## Credentials & auth
 
@@ -643,6 +693,19 @@ jobs:
 
 Store credentials as CI secrets — the tool only ever reads them from the
 environment.
+
+### Credential-free CI
+
+A reviewed recording committed to the repo lets pull-request CI run every
+check with no instance secrets at all — useful for forks and for testing your
+own policy, baseline and report wiring:
+
+```yaml
+- run: npx servicenow-preflight run --replay fixtures/dev --format github
+```
+
+Refresh the recording (`--record`) from a job or machine that does have
+credentials when the instance or the checks change.
 
 ## Library API
 

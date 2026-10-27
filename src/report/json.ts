@@ -5,7 +5,7 @@
  * `scripts/gen-schema.mjs`.
  */
 import type { RunTimings } from "../trace.js";
-import type { PreflightReport } from "../types.js";
+import type { PreflightReport, ReplayInfo } from "../types.js";
 
 /** The envelope's format version; bumped only on a breaking shape change. */
 export const REPORT_SCHEMA_VERSION = 1;
@@ -19,6 +19,8 @@ export interface ReportRun {
   report: PreflightReport;
   /** Per-check request and timing counts; present only under `--timings`. */
   timings?: RunTimings;
+  /** Where the run's responses came from; present only under `--replay`. */
+  replay?: ReplayInfo;
 }
 
 /** The top-level JSON report document. */
@@ -74,6 +76,7 @@ export function toEnvelope(
         ...(url !== undefined ? { url } : {}),
         report: r.report,
         ...(r.timings !== undefined ? { timings: r.timings } : {}),
+        ...(r.replay !== undefined ? { replay: r.replay } : {}),
       };
     }),
   };

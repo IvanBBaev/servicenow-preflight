@@ -229,6 +229,24 @@
         "summary"
       ]
     },
+    "ReplayInfo": {
+      "description": "Where a replayed run's responses came from (see `PreflightContext.replay`).",
+      "type": "object",
+      "properties": {
+        "dir": {
+          "description": "The recording directory, as given.",
+          "type": "string"
+        },
+        "recordedAt": {
+          "description": "ISO 8601 timestamp of when the recording was made.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dir",
+        "recordedAt"
+      ]
+    },
     "ReportRun": {
       "description": "One instance's run inside the envelope.",
       "type": "object",
@@ -247,6 +265,10 @@
         "timings": {
           "description": "Per-check request and timing counts; present only under `--timings`.",
           "$ref": "#/$defs/RunTimings"
+        },
+        "replay": {
+          "description": "Where the run's responses came from; present only under `--replay`.",
+          "$ref": "#/$defs/ReplayInfo"
         }
       },
       "required": [

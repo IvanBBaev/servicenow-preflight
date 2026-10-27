@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Record and replay** — `run --record <dir>` also saves every REST
+  response, redacted (fields filtered to the request, secrets and tokens
+  removed, host replaced, user and group names pseudonymised unless
+  `--record-raw`), and `run --replay <dir>` runs the checks from that
+  directory with no network or credentials. A request missing from the
+  recording fails its check; the report notes the replay (`replay` on each
+  run in `report.v1.json`). Library: `createReplayClient`, `readRecording`,
+  `RecordingError` and `PreflightContext.replay`.
 - **Diagnostics** — `run --timings` prints per-check time, requests, `429`
   retries and read-cache hits to stderr (`--format json`: an optional
   `timings` object per run, in `report.v1.json`). `run --trace <path>` (or
