@@ -1141,3 +1141,40 @@ test("loadConfig reads SNPF_CONCURRENCY in the instance namespace", async () => 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("loadConfig rejects a failOn config value other than fail or warn (F-X-17)", async () => {
+  for (const value of ['"pass"', "true", '["warn"]']) {
+    const dir = tempDir();
+    writeFileSync(join(dir, "preflight.config.json"), `{ "failOn": ${value} }`);
+    try {
+      await assert.rejects(loadConfig(dir, { skipDotEnv: true }), (err) => {
+        assert.ok(err instanceof UsageError);
+        assert.match(err.message, /Config failOn must be "fail" or "warn"/);
+        return true;
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("loadConfig reads failOn from the config file and SNPF_FAIL_ON (F-X-17)", async () => {
+  const dir = tempDir();
+  writeFileSync(join(dir, "preflight.config.json"), '{ "failOn": "warn" }');
+  try {
+    const fromFile = await loadConfig(dir, { skipDotEnv: true, env: {} });
+    assert.equal(fromFile.config.failOn, "warn");
+    assert.equal(fromFile.failOn, undefined);
+    const fromEnv = await loadConfig(dir, {
+      skipDotEnv: true,
+      env: { SNPF_FAIL_ON: " fail " },
+    });
+    assert.equal(fromEnv.failOn, "fail");
+    await assert.rejects(
+      loadConfig(dir, { skipDotEnv: true, env: { SNPF_FAIL_ON: "warning" } }),
+      /SNPF_FAIL_ON must be "fail" or "warn" \(got "warning"\)/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

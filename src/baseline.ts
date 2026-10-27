@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { UsageError } from "./config.js";
+import { UsageError, type FailOn } from "./config.js";
 import { PREFLIGHT_DIR } from "./registry.js";
 import type { CheckResult, CheckStatus, PreflightReport } from "./types.js";
 
@@ -197,6 +197,9 @@ export function summarize(results: CheckResult[]): PreflightReport {
   return { ok: summary.fail === 0, results, summary };
 }
 
+/** The message prefix {@link applyBaseline} gives a row a baseline accepted. */
+const BASELINED = "Baselined";
+
 /**
  * Apply a baseline to a report (pure). A result matched by an unexpired entry
  * (same check, same status) becomes `warn` with a `Baselined (…)` prefix, or a
@@ -217,10 +220,10 @@ export function applyBaseline(
     if (!entry) return r;
     const prefix =
       entry.message === r.message
-        ? `Baselined (${entry.reason || "accepted"} until ${
+        ? `${BASELINED} (${entry.reason || "accepted"} until ${
             entry.expires ?? "revoked"
           })`
-        : `Baselined but CHANGED since ${b.generatedAt}`;
+        : `${BASELINED} but CHANGED since ${b.generatedAt}`;
     return { ...r, status: "warn", message: `${prefix}: ${r.message}` };
   });
   for (const e of b.entries) {
@@ -235,4 +238,28 @@ export function applyBaseline(
     });
   }
   return summarize(results);
+}
+
+/** Whether a row came from {@link applyBaseline}: an accepted finding or an expiry note. */
+function isBaselined(r: CheckResult): boolean {
+  return (
+    r.kind === "baseline" ||
+    (r.status === "warn" && r.message.startsWith(`${BASELINED} `))
+  );
+}
+
+/**
+ * Apply the run-level `--fail-on` threshold (F-X-17, pure). With `"warn"`, a
+ * `warn` row that no baseline accepted makes the report not ok; rows and the
+ * summary are unchanged, so the report stays truthful. `"fail"` is a no-op.
+ */
+export function applyFailOn(
+  report: PreflightReport,
+  failOn: FailOn,
+): PreflightReport {
+  if (failOn !== "warn" || !report.ok) return report;
+  const warned = report.results.some(
+    (r) => r.status === "warn" && !isBaselined(r),
+  );
+  return warned ? { ...report, ok: false } : report;
 }

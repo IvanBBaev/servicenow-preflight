@@ -34,6 +34,11 @@ export interface ReportEnvelope {
   generatedAt: string;
   /** `true` when every run's report is ok. */
   ok: boolean;
+  /**
+   * Present when the run used `--fail-on warn`: `ok` then also counts warn
+   * rows that no baseline accepted. Absent means the default, `fail`.
+   */
+  failOn?: "warn";
   runs: ReportRun[];
 }
 

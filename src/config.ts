@@ -78,6 +78,12 @@ export interface PreflightConfig {
    * usage error.
    */
   severity?: SeverityPolicy;
+  /**
+   * Run-level exit threshold (F-X-17): `"fail"` (the default) fails the run
+   * on a `fail` row only; `"warn"` also on a `warn` row that no baseline
+   * accepted. Rows keep their statuses. `--fail-on` and `SNPF_FAIL_ON` win.
+   */
+  failOn?: FailOn;
 }
 
 /** What {@link loadConfig} resolves: the file config plus resolved auth. */
@@ -111,6 +117,26 @@ export interface LoadedConfig {
   cache?: boolean;
   /** `SNPF_CONCURRENCY` (checks run at once, 1-32), when set (F-X-3). */
   concurrency?: number;
+  /** `SNPF_FAIL_ON` (`fail` or `warn`), when set (F-X-17). */
+  failOn?: FailOn;
+}
+
+/** The statuses a run can be told to fail on (`--fail-on`, F-X-17). */
+export type FailOn = "fail" | "warn";
+
+/**
+ * Parse a `--fail-on` threshold from a flag or an env variable. Blank yields
+ * `undefined`; anything but `fail` or `warn` is a {@link UsageError} naming
+ * `label`.
+ */
+export function parseFailOn(
+  value: string | undefined,
+  label: string,
+): FailOn | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const v = value.trim();
+  if (v === "fail" || v === "warn") return v;
+  throw new UsageError(`${label} must be "fail" or "warn" (got "${v}").`);
 }
 
 /**
@@ -229,6 +255,8 @@ const ENV = {
   cache: "SNPF_CACHE",
   /** Checks run at once (F-X-3). */
   concurrency: "SNPF_CONCURRENCY",
+  /** Run-level exit threshold (F-X-17). */
+  failOn: "SNPF_FAIL_ON",
 } as const;
 
 /**
@@ -732,6 +760,15 @@ function assertSeverityConfigType(config: PreflightConfig): void {
   }
 }
 
+/** Fail closed on a `failOn` value other than `"fail"` or `"warn"`. */
+function assertFailOnConfigType(config: PreflightConfig): void {
+  const value: unknown = config.failOn;
+  if (value === undefined || value === "fail" || value === "warn") return;
+  throw new UsageError(
+    `Config failOn must be "fail" or "warn", got ${describeJson(value)}.`,
+  );
+}
+
 /** Options for {@link loadConfig}. */
 export interface LoadConfigOptions {
   /** Explicit config file path (overrides auto-discovery). */
@@ -814,6 +851,7 @@ export async function loadConfig(
   assertProxyConfigTypes(config);
   assertBaselineConfigType(config);
   assertSeverityConfigType(config);
+  assertFailOnConfigType(config);
   assertCheckOptionsConfigType(config);
 
   // Fail closed at load time on config values that would inject into an encoded
@@ -840,6 +878,7 @@ export async function loadConfig(
 
   const cache = parseSwitch(env[ENV.cache], ENV.cache);
   const concurrency = parseConcurrency(env[ENV.concurrency], ENV.concurrency);
+  const failOn = parseFailOn(env[ENV.failOn], ENV.failOn);
 
   return {
     config,
@@ -850,5 +889,6 @@ export async function loadConfig(
     limits,
     ...(cache !== undefined ? { cache } : {}),
     ...(concurrency !== undefined ? { concurrency } : {}),
+    ...(failOn !== undefined ? { failOn } : {}),
   };
 }

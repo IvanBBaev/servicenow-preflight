@@ -31,6 +31,10 @@
       "description": "`true` when every run's report is ok.",
       "type": "boolean"
     },
+    "failOn": {
+      "description": "Present when the run used `--fail-on warn`: `ok` then also counts warn rows that no baseline accepted. Absent means the default, `fail`.",
+      "const": "warn"
+    },
     "runs": {
       "type": "array",
       "items": {

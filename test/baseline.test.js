@@ -22,6 +22,7 @@ import {
   BASELINE_ROW,
 } from "../build/index.js";
 import { UsageError } from "../build/config.js";
+import { applyFailOn } from "../build/baseline.js";
 import { reportOf } from "./helpers/json-report.js";
 
 const BIN = fileURLToPath(
@@ -436,4 +437,46 @@ test("CLI: baseline flags are refused outside run and with --all + a path", () =
   const empty = runCli(["run", "--baseline="]);
   assert.equal(empty.status, 2);
   assert.match(empty.stderr, /needs a path/);
+});
+
+test("applyFailOn warn: an unaccepted warn row makes the report not ok", () => {
+  const r = report([
+    { name: "a", status: "pass", message: "ok" },
+    { name: "b", status: "warn", message: "advisory" },
+  ]);
+  const out = applyFailOn(r, "warn");
+  assert.equal(out.ok, false);
+  assert.deepEqual(out.results, r.results);
+  assert.deepEqual(out.summary, r.summary);
+  assert.equal(applyFailOn(r, "fail"), r);
+});
+
+test("applyFailOn warn: baselined rows and expiry notes do not count", () => {
+  const r = applyBaseline(
+    report([{ name: "table-crud-acl", status: "fail", message: ACL_MSG }]),
+    baseline([
+      {
+        check: "table-crud-acl",
+        status: "fail",
+        message: ACL_MSG,
+        reason: "legacy",
+        expires: "2027-01-01",
+      },
+      {
+        check: "gone",
+        status: "warn",
+        message: "old",
+        reason: "x",
+        expires: "2026-01-01",
+      },
+    ]),
+    NOW,
+  );
+  assert.equal(r.summary.warn, 2);
+  assert.equal(applyFailOn(r, "warn").ok, true);
+});
+
+test("applyFailOn warn leaves a failing report as it is", () => {
+  const r = report([{ name: "a", status: "fail", message: "bad" }]);
+  assert.equal(applyFailOn(r, "warn"), r);
 });

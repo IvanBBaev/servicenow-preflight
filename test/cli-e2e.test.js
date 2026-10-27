@@ -1563,6 +1563,90 @@ function projectDir(prefix) {
 
 const CREDS = { SNPF_USER: "tracer-user", SNPF_PASS: "s3cret-pass" };
 
+// F-X-17: against an http loopback instance, instance-url-configured warns
+// and is the only row, so the run has one warn and zero fails.
+const ONE_WARN = ["--only", "instance-url-configured"];
+
+test("CLI --fail-on: a lone warn exits 0 by default and 1 with warn", async () => {
+  const instance = await startEmptyInstance();
+  const dir = projectDir("snpf-failon-");
+  try {
+    const base = ["run", "--instance", instance.url, ...ONE_WARN, "--json"];
+    const plain = await runCliAsync(base, { cwd: dir, env: CREDS });
+    assert.equal(plain.status, 0, plain.stderr);
+    const plainOut = JSON.parse(plain.stdout);
+    assert.equal(plainOut.failOn, undefined);
+    assert.deepEqual(plainOut.runs[0].report.summary, {
+      pass: 0,
+      warn: 1,
+      fail: 0,
+    });
+
+    const strict = await runCliAsync([...base, "--fail-on", "warn"], {
+      cwd: dir,
+      env: CREDS,
+    });
+    assert.equal(strict.status, 1, strict.stderr);
+    const out = JSON.parse(strict.stdout);
+    assert.equal(out.failOn, "warn");
+    assert.equal(out.ok, false);
+    assert.equal(out.runs[0].report.ok, false);
+    // Rows stay truthful: the same statuses and summary as the default run.
+    assert.deepEqual(
+      out.runs[0].report.results,
+      plainOut.runs[0].report.results,
+    );
+    assert.match(strict.stderr, /1 warning\(s\) with --fail-on warn/);
+
+    const viaEnv = await runCliAsync(base, {
+      cwd: dir,
+      env: { ...CREDS, SNPF_FAIL_ON: "warn" },
+    });
+    assert.equal(viaEnv.status, 1, viaEnv.stderr);
+    const flagWins = await runCliAsync([...base, "--fail-on=fail"], {
+      cwd: dir,
+      env: { ...CREDS, SNPF_FAIL_ON: "warn" },
+    });
+    assert.equal(flagWins.status, 0, flagWins.stderr);
+  } finally {
+    instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI --fail-on warn: a baselined warn does not fail the run", async () => {
+  const instance = await startEmptyInstance();
+  const dir = projectDir("snpf-failon-bl-");
+  try {
+    const base = ["run", "--instance", instance.url, ...ONE_WARN];
+    const written = await runCliAsync([...base, "--write-baseline"], {
+      cwd: dir,
+      env: CREDS,
+    });
+    assert.match(written.stderr, /Wrote baseline with 1 entry/);
+    const res = await runCliAsync(
+      [...base, "--baseline", "--fail-on", "warn"],
+      { cwd: dir, env: CREDS },
+    );
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /Baselined/);
+  } finally {
+    instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI --fail-on rejects a value other than fail or warn with exit 2", () => {
+  for (const args of [
+    ["run", "--fail-on", "pass"],
+    ["run", "--fail-on="],
+  ]) {
+    const res = runCli(args);
+    assert.equal(res.status, 2, args.join(" "));
+    assert.match(res.stderr, /--fail-on/);
+  }
+});
+
 test("CLI --trace writes a 0600 NDJSON trace from run.start to run.end", async () => {
   const instance = await startEmptyInstance();
   const dir = projectDir("snpf-trace-");

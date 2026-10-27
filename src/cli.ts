@@ -14,6 +14,8 @@ import { runPreflight } from "./index.js";
 import {
   loadConfig,
   parseConcurrency,
+  parseFailOn,
+  type FailOn,
   parseRequestLimit,
   UsageError,
   type RequestLimits,
@@ -84,6 +86,7 @@ import {
 } from "./policy.js";
 import {
   applyBaseline,
+  applyFailOn,
   baselineFromReport,
   baselinePath,
   readBaseline,
@@ -168,6 +171,8 @@ interface ParsedArgs {
   recordRaw: boolean;
   /** `run`: `--replay <dir>` — answer every request from a recording. */
   replayDir?: string;
+  /** `run`: `--fail-on fail|warn`; `SNPF_FAIL_ON` / config `failOn` otherwise. */
+  failOn?: FailOn;
   /** `drift`: downgrade a skipped pipeline stage from fail to warn. */
   allowStageSkip: boolean;
   /**
@@ -429,6 +434,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--concurrency":
         args.concurrency = parseConcurrency(takeValue(arg), arg);
         break;
+      case "--fail-on":
+        args.failOn = parseFailOn(takeValue(arg), arg) ?? failOnMissing();
+        break;
       case "--max-inflight":
         args.maxInFlight = parseRequestLimit(
           "maxInFlight",
@@ -472,6 +480,10 @@ function parseArgs(argv: string[]): ParsedArgs {
           args.recordDir = dirArg("--record", arg.slice("--record=".length));
         } else if (arg?.startsWith("--replay=")) {
           args.replayDir = dirArg("--replay", arg.slice("--replay=".length));
+        } else if (arg?.startsWith("--fail-on=")) {
+          args.failOn =
+            parseFailOn(arg.slice("--fail-on=".length), "--fail-on") ??
+            failOnMissing();
         } else if (arg?.startsWith("--concurrency=")) {
           args.concurrency = parseConcurrency(
             arg.slice("--concurrency=".length),
@@ -583,6 +595,9 @@ Options:
       --run-timeout <dur>
                          run: budget for each instance's whole run; checks
                          not finished in time fail as aborted
+      --fail-on <level>  run: exit 1 on fail rows only (fail, the default) or
+                         also on warn rows no baseline accepted (warn); env
+                         SNPF_FAIL_ON, config failOn. Rows are unchanged
       --concurrency <n>  run: most checks running at once, 1-32 (default 4;
                          env SNPF_CONCURRENCY). ATF checks always run alone,
                          after the others; the report keeps registry order
@@ -956,6 +971,13 @@ interface InstanceRun {
   timings?: RunTimings;
   /** Set when the run was replayed from a recording. */
   replay?: ReplayInfo;
+  /** The `--fail-on` threshold the run's `ok` was decided with. */
+  failOn: FailOn;
+}
+
+/** `--fail-on` given a blank value. */
+function failOnMissing(): never {
+  throw new UsageError('--fail-on needs "fail" or "warn".');
 }
 
 /** A `--record` / `--replay` value: a non-empty directory. */
@@ -1299,10 +1321,13 @@ async function runOneInstance(
     checks: raw.results.map((r) => r.name),
   });
   const report = applyPolicy(raw, policy);
+  const failOn: FailOn =
+    args.failOn ?? loaded.failOn ?? loaded.config.failOn ?? "fail";
   const extra = {
     ...(instanceUrl ? { url: instanceUrl } : {}),
     ...(timings ? { timings } : {}),
     ...(replay ? { replay } : {}),
+    failOn,
   };
 
   if (writePath) {
@@ -1315,10 +1340,11 @@ async function runOneInstance(
     );
     return { report, ...extra };
   }
-  return {
-    report: baseline ? applyBaseline(report, baseline, new Date()) : report,
-    ...extra,
-  };
+  // F-X-17: the threshold comes last, so baselined rows no longer count.
+  const accepted = baseline
+    ? applyBaseline(report, baseline, new Date())
+    : report;
+  return { report: applyFailOn(accepted, failOn), ...extra };
 }
 
 /**
@@ -1374,6 +1400,29 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
   }
 }
 
+/** Record a `--fail-on warn` threshold in the json envelope (F-X-17). */
+function withFailOn(out: string, format: OutputFormat, failOn: FailOn): string {
+  if (format !== "json" || failOn !== "warn") return out;
+  const { runs, ...head } = JSON.parse(out) as ReportEnvelope;
+  return formatJson({ ...head, failOn, runs });
+}
+
+/**
+ * Say on stderr why a run with no `fail` row still exits 1: `--fail-on warn`
+ * counted its warnings (F-X-17).
+ */
+function writeFailOnNote(
+  runs: readonly { name?: string; report: PreflightReport }[],
+): void {
+  for (const { name, report } of runs) {
+    if (report.ok || report.summary.fail > 0) continue;
+    const where = name ? ` on ${name}` : "";
+    process.stderr.write(
+      `Failing${where}: ${report.summary.warn} warning(s) with --fail-on warn.\n`,
+    );
+  }
+}
+
 /** `--timings` outside json: one stderr table per instance, after the report. */
 function writeTimings(
   format: OutputFormat,
@@ -1396,37 +1445,44 @@ async function runTargets(
   const [firstTarget] = targets;
   if (!args.all && targets.length === 1 && firstTarget && !firstTarget.name) {
     // Single-instance: preserve the original single-report output exactly.
-    const { report, url, timings, replay } = await runOneInstance(
+    const { report, url, timings, replay, failOn } = await runOneInstance(
       firstTarget,
       args,
       cwd,
       trace,
     );
     process.stdout.write(
-      withReplayNote(
-        render(
-          report,
+      withFailOn(
+        withReplayNote(
+          render(
+            report,
+            args.format,
+            undefined,
+            ranChecks(defaultChecks, [report]),
+            url,
+            timings,
+          ),
           args.format,
-          undefined,
-          ranChecks(defaultChecks, [report]),
-          url,
-          timings,
+          replay,
         ),
         args.format,
-        replay,
+        failOn,
       ),
     );
     writeTimings(args.format, [{ ...(timings ? { timings } : {}) }]);
+    writeFailOnNote([{ report }]);
     process.exitCode = report.ok ? 0 : 1;
     return;
   }
 
   const reports: NamedReport[] = [];
   let replay: ReplayInfo | undefined;
+  let failOn: FailOn = "fail";
   for (const target of targets) {
     const run = await runOneInstance(target, args, cwd, trace);
     const { report, url, timings } = run;
     replay ??= run.replay;
+    if (run.failOn === "warn") failOn = "warn";
     reports.push({
       name: target.name ?? "instance",
       report,
@@ -1442,23 +1498,30 @@ async function runTargets(
   const [firstReport] = reports;
   if (reports.length === 1 && firstReport) {
     process.stdout.write(
-      withReplayNote(
-        render(
-          firstReport.report,
+      withFailOn(
+        withReplayNote(
+          render(
+            firstReport.report,
+            args.format,
+            firstReport.name,
+            ran,
+            firstReport.url,
+            firstReport.timings,
+          ),
           args.format,
-          firstReport.name,
-          ran,
-          firstReport.url,
-          firstReport.timings,
+          replay,
         ),
         args.format,
-        replay,
+        failOn,
       ),
     );
   } else {
-    process.stdout.write(renderAll(reports, args.format, ran));
+    process.stdout.write(
+      withFailOn(renderAll(reports, args.format, ran), args.format, failOn),
+    );
   }
   writeTimings(args.format, reports);
+  writeFailOnNote(reports);
   process.exitCode = reports.every((r) => r.report.ok) ? 0 : 1;
 }
 

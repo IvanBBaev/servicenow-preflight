@@ -133,11 +133,12 @@ Checks whose only need is credentials always run once credentials are present;
 the rest `warn` (and explain what's missing) until you supply their inputs —
 they never silently pass. Each check returns one status —
 `pass` (`✓`, holds), `warn` (`!`, advisory), or `fail` (`✗`, blocks). **Only a
-`fail` fails the run**; warnings never do. Checks never throw (transport/auth/API
+`fail` fails the run**; warnings do not, unless you pass `--fail-on warn`. Checks never throw (transport/auth/API
 errors map to a result), and are read-mostly (the sole write is running the ATF
 suites you configure).
 
-**Exit codes:** `0` when no check `fail`ed; `1` when a check `fail`ed, when a
+**Exit codes:** `0` when no check `fail`ed; `1` when a check `fail`ed (or, under
+`--fail-on warn`, when a row `warn`ed that no baseline accepted), when a
 selection matched zero checks (nothing verified — treated as a failure, never a
 vacuous pass), or when the CLI hit an unexpected runtime error; `2` for a usage
 error — a bad invocation or config caught before any check runs (unknown option,
@@ -185,6 +186,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--severity <check>=<level>` | `run`: report a check's non-pass result as `fail` or `warn`, or skip it (`off`). Repeatable; wins over the config `severity`. |
 | `--timeout <dur>`            | `run`: fail any check still running after `<dur>` (e.g. `30s`, `500ms`) and move on. Default: none; `SNPF_CHECK_TIMEOUT`.     |
 | `--run-timeout <dur>`        | `run`: stop the run (per instance) after `<dur>`; unfinished checks become `fail` rows.                                       |
+| `--fail-on <level>`          | `run`: `fail` (default) exits `1` on a `fail` row only; `warn` also on a `warn` row no baseline accepted. `SNPF_FAIL_ON`.     |
 | `--concurrency <n>`          | `run`: most checks running at once, 1–32. Default `4`; `SNPF_CONCURRENCY`.                                                    |
 | `--max-inflight <n>`         | Most requests in flight at once, 1–64. Default `4`; `SNPF_MAX_INFLIGHT`.                                                      |
 | `--rps <n>`                  | Requests started per second, 0.5–100. Default: unlimited; `SNPF_RPS`.                                                         |
@@ -402,6 +404,7 @@ checks to run, and per-check options — but **never credentials**.
 | `checks`      | `{ [check]: object }`                    | Options for one check only, shallow-merged over `options` for that check (e.g. `{ "i18n-completeness": { "languages": ["fr"] } }`); an unknown check name is a usage error (exit 2).                                                                                                                                                                                                                                                                                                                                                  |
 | `baseline`    | `string \| boolean`                      | Apply a baseline file: `true` = the default path, a string = that file (CLI `--baseline` overrides).                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `severity`    | `{ [check]: "fail" \| "warn" \| "off" }` | Severity policy (see [below](#severity-policy)); CLI `--severity` overrides per check.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `failOn`      | `"fail" \| "warn"`                       | Run-level exit threshold (see [below](#strict-runs---fail-on-warn)); `--fail-on` and `SNPF_FAIL_ON` override it.                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `proxy`       | `string`                                 | Forward proxy URL; outranks `SNPF_PROXY` and `HTTPS_PROXY` (see [HTTP(S) proxy](#https-proxy)). Keep credentials in `SNPF_PROXY`, not in this file.                                                                                                                                                                                                                                                                                                                                                                                   |
 | `noProxy`     | `string`                                 | Extra proxy-bypass entries, merged with `SNPF_NO_PROXY` and `NO_PROXY`/`no_proxy`.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
@@ -434,6 +437,21 @@ reported, without skipping the check:
   `snpf run --severity table-namespace=fail`.
 - The policy is applied before the [baseline](#baseline-accepted-findings):
   the policy states intent, the baseline accepts the resulting state.
+
+### Strict runs (`--fail-on warn`)
+
+A release branch may want advisory findings to block too, without rewriting
+the severity of every check. `--fail-on warn` (or `SNPF_FAIL_ON=warn`, or
+`"failOn": "warn"` in the config file) makes the run exit `1` when any row is
+`warn` or `fail`:
+
+- The rows keep their statuses; only the report's `ok` and the exit code
+  change. A stderr line says why a run without a `fail` row failed, and the
+  JSON envelope carries `"failOn": "warn"`.
+- Rows a [baseline](#baseline-accepted-findings) accepted (`Baselined …`) and
+  expired-entry notices do not count.
+- Unlike `severity`, which rewrites individual rows, this is one run-level
+  gate. The flag wins over the env variable, which wins over the config key.
 
 ### Baseline (accepted findings)
 
