@@ -1930,3 +1930,58 @@ test("CLI rejects bad --output values with exit 2", () => {
     assert.match(res.stderr, message);
   }
 });
+
+// F-X-10: the instance's real answer to bad basic credentials (PDI, 2026-10-28).
+async function startRefusingInstance() {
+  const server = createHttpServer((req, res) => {
+    res.writeHead(401, {
+      "content-type": "application/json",
+      "www-authenticate": 'Basic realm="Service-now"',
+    });
+    res.end(
+      JSON.stringify({
+        error: {
+          message: "User is not authenticated",
+          detail: "Required to provide Auth information",
+        },
+        status: "failure",
+      }),
+    );
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    stop() {
+      server.closeAllConnections();
+      server.close();
+    },
+  };
+}
+
+test("CLI explains a basic-auth 401 in the row and on a sync error", async () => {
+  const instance = await startRefusingInstance();
+  const dir = projectWithRegistry({ dev: { url: instance.url } });
+  try {
+    const run = await runCliAsync(
+      ["run", "dev", "--only", "connectivity-auth", "--json"],
+      { cwd: dir, env: CREDS },
+    );
+    assert.equal(run.status, 1, run.stderr);
+    const [row] = reportOf(run.stdout).results;
+    assert.equal(row.status, "fail");
+    assert.match(row.message, /Possible causes: Wrong user name or password/);
+    assert.ok(!row.message.includes(CREDS.SNPF_PASS));
+
+    const sync = await runCliAsync(["sync", "dev"], { cwd: dir, env: CREDS });
+    assert.equal(sync.status, 1);
+    assert.match(
+      sync.stderr,
+      /authentication failed \(401\): User is not authenticated\.\n {2}Possible causes:\n {2}- Wrong user name or password/,
+    );
+    assert.ok(!sync.stderr.includes(CREDS.SNPF_PASS));
+  } finally {
+    instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

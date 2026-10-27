@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Explained 401/403 failures** — a refused request now lists its likely
+  causes for the auth method in use (wrong or locked basic credentials, a
+  basic-auth restriction, MFA, an expired static bearer, an OAuth registry or
+  grant problem, a missing ACL/role on the named table). The hints appear in
+  the `connectivity-auth` row message and under a `sync`/`drift` error, and
+  are built without any credential. Library: `SnAuthError.diagnosis`. See
+  README "Troubleshooting 401 / 403".
 - **`--output` files and the GitHub step summary** — `run --output
 <format>=<path>` (repeatable) also writes the report in another format to a
   file, atomically. Inside GitHub Actions a run appends the markdown report

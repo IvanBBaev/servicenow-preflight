@@ -28,6 +28,7 @@ import {
 } from "./config.js";
 import {
   createSnClient,
+  SnAuthError,
   TRANSPORT_WRAP,
   type InternalClientConfig,
 } from "./http/client.js";
@@ -1887,6 +1888,14 @@ void main().catch((err: unknown) => {
   // echo internal paths. A typed SnError's message is already user-facing and
   // secret-free (credentials never appear in it).
   console.error(err instanceof Error ? err.message : String(err));
+  // F-X-10: a refused request carries its likely causes; print them as hints.
+  if (err instanceof SnAuthError && err.diagnosis.length > 0) {
+    console.error(
+      ["  Possible causes:", ...err.diagnosis.map((d) => `  - ${d}`)].join(
+        "\n",
+      ),
+    );
+  }
   // Split exit codes (CC-41): a usage/config error (wrong invocation, invalid
   // config or registry) is a distinct failure mode from a check that ran and
   // failed. Exit 2 for the former, 1 for a check failure or a runtime error.

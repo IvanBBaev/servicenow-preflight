@@ -277,6 +277,24 @@ test("a 401 raises SnAuthError carrying the status", async () => {
     (err) => {
       assert.ok(err instanceof SnAuthError);
       assert.equal(err.status, 401);
+      // F-X-10: a basic-auth 401 names the likely causes.
+      assert.match(err.diagnosis[0], /Wrong user name or password/);
+      assert.ok(err.diagnosis.some((d) => /restrict basic auth/.test(d)));
+      return true;
+    },
+  );
+});
+
+test("a 403 names the table the account cannot read", async () => {
+  handler = () =>
+    fakeResponse({ status: 403, body: { error: { message: "denied" } } });
+  await assert.rejects(
+    () => client().request("GET", "/api/now/table/incident"),
+    (err) => {
+      assert.ok(err instanceof SnAuthError);
+      assert.deepEqual(err.diagnosis, [
+        "The account authenticates but lacks read access to incident (ACL or role).",
+      ]);
       return true;
     },
   );
@@ -652,6 +670,8 @@ test("a grant flow surfaces a token-endpoint 401 as SnAuthError", async () => {
     (err) => {
       assert.ok(err instanceof SnAuthError);
       assert.equal(err.status, 401);
+      assert.match(err.diagnosis[0], /OAuth application registry/);
+      assert.ok(!err.diagnosis.join(" ").includes("bad"));
       return true;
     },
   );

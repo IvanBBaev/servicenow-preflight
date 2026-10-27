@@ -69,8 +69,7 @@ export const connectivityAuth: Check = {
           return {
             name: NAME,
             status: "warn",
-            message:
-              "Reachable, but the account has insufficient rights (HTTP 403).",
+            message: `Reachable, but the account has insufficient rights (HTTP 403).${causes(err)}`,
           };
         }
         // 401 or missing credentials: authentication failed.
@@ -79,7 +78,7 @@ export const connectivityAuth: Check = {
           status: "fail",
           message: `Authentication failed${
             err.status ? ` (HTTP ${err.status})` : ""
-          }: check the configured credentials.`,
+          }: check the configured credentials.${causes(err)}`,
         };
       }
 
@@ -120,3 +119,10 @@ export const connectivityAuth: Check = {
     }
   },
 };
+
+/** F-X-10: the client's likely causes, appended to the row message. */
+function causes(err: SnAuthError): string {
+  return err.diagnosis.length > 0
+    ? ` Possible causes: ${err.diagnosis.join(" ")}`
+    : "";
+}

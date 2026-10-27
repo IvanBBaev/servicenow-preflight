@@ -344,6 +344,32 @@ assertion variable accepts an **`@path` value** (read from that file, e.g.
 `SNPF_MTLS_KEY=@./certs/client.key`); a missing `@`-file is a hard error reported
 with the path only, never contents.
 
+### Troubleshooting 401 / 403
+
+A refused request is explained, not just reported. The `connectivity-auth` row
+and a `sync`/`drift` error both list the likely causes for the auth method in
+use, most likely first — built only from the status, the method's kind, the
+instance's own error text and the request path, never from a credential:
+
+```text
+ServiceNow authentication failed (401): User is not authenticated.
+  Possible causes:
+  - Wrong user name or password, or the account is locked or inactive.
+  - The instance may restrict basic auth for API calls: …
+  - Prefer OAuth (SNPF_AUTH=oauth-client and SNPF_OAUTH_CLIENT_ID/SECRET) or mutual TLS for CI accounts.
+```
+
+| Symptom                       | Usual cause                                                                                  |
+| ----------------------------- | -------------------------------------------------------------------------------------------- |
+| `401` with basic auth         | wrong password, locked/inactive user, MFA on the account, or a basic-auth restriction policy |
+| `401` with `SNPF_TOKEN`       | the static bearer expired (see the token-lifetime note above) — use a grant flow             |
+| `401` from `/oauth_token.do`  | OAuth application registry entry: client id/secret, allowed grant type, JWT verifier         |
+| `403` on `/api/now/table/<t>` | the account authenticates but lacks read access to `<t>` (ACL or role)                       |
+
+For the instance-side settings (OAuth application registry, inbound REST
+authentication policies, ACLs), see the ServiceNow product documentation for
+your release.
+
 ### HTTP(S) proxy
 
 Outbound requests can be routed through a forward proxy via standard `CONNECT`

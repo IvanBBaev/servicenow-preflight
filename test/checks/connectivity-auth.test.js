@@ -201,3 +201,27 @@ test("connectivity-auth fails closed on an unexpected non-Sn throw (catch-all)",
   assert.match(nonErrorResult.message, /failed unexpectedly/i);
   assert.match(nonErrorResult.message, /boom/);
 });
+
+test("connectivity-auth appends the client's likely causes to a 401", async () => {
+  const err = new SnAuthError("ServiceNow authentication failed (401).", 401, [
+    "Wrong user name or password.",
+    "Basic auth may be restricted.",
+  ]);
+  const http = {
+    ...createFakeSnClient({}),
+    table: () => ({
+      get: () => Promise.reject(err),
+      query: () => Promise.reject(err),
+    }),
+  };
+  const result = await connectivityAuth.run({
+    instanceUrl: INSTANCE,
+    auth: AUTH,
+    http,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(
+    result.message,
+    /check the configured credentials\. Possible causes: Wrong user name or password\. Basic auth may be restricted\.$/,
+  );
+});

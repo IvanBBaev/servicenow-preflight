@@ -22,6 +22,7 @@ import { createSign } from "node:crypto";
 import { abortReason, anySignal, raceAbort, sleep } from "./abort.js";
 import { createLimiter, limitProblem, type Limiter } from "./limiter.js";
 import { createReadCache, deepFreeze, readKey } from "./cache.js";
+import { diagnoseAuthFailure } from "./diagnose.js";
 import { openProxyTunnel, parseProxyUrl, resolveProxy } from "./proxy.js";
 import {
   cacheScope,
@@ -243,9 +244,19 @@ export class SnError extends Error {
 /** Authentication failed (HTTP 401/403, or missing credentials). */
 export class SnAuthError extends SnError {
   readonly status?: number;
-  constructor(message: string, status?: number) {
+  /**
+   * Likely causes, most likely first (F-X-10). Set on every 401/403 the
+   * client raises; empty for a configuration error raised before any request.
+   */
+  readonly diagnosis: readonly string[];
+  constructor(
+    message: string,
+    status?: number,
+    diagnosis: readonly string[] = [],
+  ) {
     super(message);
     this.status = status;
+    this.diagnosis = diagnosis;
   }
 }
 
@@ -896,6 +907,12 @@ async function acquireToken(
     throw new SnAuthError(
       `OAuth token request failed (${status})${detail ? `: ${detail}` : ""}.`,
       status,
+      diagnoseAuthFailure({
+        status,
+        authKind: auth.kind,
+        tokenEndpoint: true,
+        ...(detail ? { detail } : {}),
+      }),
     );
   }
 
@@ -1506,6 +1523,12 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         throw new SnAuthError(
           `ServiceNow authentication failed (${status})${detail ? `: ${detail}` : ""}.`,
           status,
+          diagnoseAuthFailure({
+            status,
+            authKind: cfg.auth?.kind ?? (cfg.tls ? "mtls" : "none"),
+            path,
+            ...(detail ? { detail } : {}),
+          }),
         );
       }
 
