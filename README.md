@@ -90,6 +90,27 @@ ids, required apps) via a [config file](#configuration-file). The CLI **exits
 non-zero on any `fail`**, so it drops straight into a pipeline before a
 promote/deploy step.
 
+### Scaffold a project: `init`
+
+```bash
+npx servicenow-preflight init --instance https://dev12345.service-now.com \
+  --scope x_acme_app --ci github
+```
+
+`init` writes `preflight.config.json` (with a `$schema` reference), the CI
+pipeline for `--ci github|gitlab|azure` (`none` by default; GitHub uses the
+[action](#github-action)), and appends `.env`, `.preflight/fixtures/` and
+`.preflight/trace*.ndjson` to `.gitignore` (lines already there are kept).
+`--multi` writes `.preflight/instances.json` with one `dev` instance instead
+of putting the URL in the config. `--auth basic|oauth-client|bearer|mtls`
+picks which credential variables it lists and maps in CI.
+
+It **never writes credentials or `.env`**: it prints the variable names to
+set, with placeholders. On a terminal it asks each question (flags are the
+defaults); with `--yes` or without a TTY it uses the flags only and never
+waits for input. An existing file is never overwritten without `--force` —
+`init` exits `2` and names the files, and writes nothing.
+
 ## What it checks
 
 `runPreflight(ctx, checks?)` runs each check against the target instance and

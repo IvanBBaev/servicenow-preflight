@@ -12,6 +12,18 @@ import { relative, resolve } from "node:path";
 import { appendOutputs, appendSummary } from "./ci/github-env.js";
 import { writeAtomic } from "./atomic-write.js";
 import { commandConfig } from "./config-command.js";
+import {
+  applyInit,
+  envHints,
+  normaliseAnswers,
+  parseInitAuth,
+  parseInitCi,
+  planInit,
+  type InitAnswers,
+  type InitAuth,
+  type InitCi,
+} from "./init.js";
+import { promptInit } from "./init-prompt.js";
 import { describeIssue, validateConfig } from "./options/config-schema.js";
 import { fileURLToPath } from "node:url";
 import { runPreflight } from "./index.js";
@@ -124,9 +136,10 @@ const FORMATS: readonly OutputFormat[] = [
 /**
  * Subcommand: run checks, sync a manifest, compare two instances, or browse
  * the check catalogue (`list` / `explain`), or work on the config file
- * (`config schema | validate | migrate`).
+ * (`config schema | validate | migrate`), or scaffold a project (`init`).
  */
-type Subcommand = "run" | "sync" | "drift" | "list" | "explain" | "config";
+type Subcommand =
+  "run" | "sync" | "drift" | "list" | "explain" | "config" | "init";
 
 const SUBCOMMANDS: readonly Subcommand[] = [
   "run",
@@ -135,6 +148,7 @@ const SUBCOMMANDS: readonly Subcommand[] = [
   "list",
   "explain",
   "config",
+  "init",
 ];
 
 interface ParsedArgs {
@@ -196,12 +210,22 @@ interface ParsedArgs {
   writeBaseline?: string | true;
   /** `run`: `--severity <check>=<level>` overrides (repeatable). */
   severity?: SeverityPolicy;
-  /** Allow `--write-baseline` to overwrite an existing file. */
+  /** Allow `--write-baseline` (or `init`) to overwrite an existing file. */
   force: boolean;
   /** `config schema`: write the schema to this file. */
   out?: string;
   /** `config migrate`: rewrite the config file in place. */
   write: boolean;
+  /** `init`: application scope for the config / registry. */
+  scope?: string;
+  /** `init`: CI pipeline to scaffold. */
+  ci?: InitCi;
+  /** `init`: auth kind (decides only the env names printed). */
+  auth?: InitAuth;
+  /** `init`: write a registry instead of a single-instance config. */
+  multi: boolean;
+  /** `init`: never prompt, flags only. */
+  yes: boolean;
   help: boolean;
   /** Print the package version and exit. */
   version: boolean;
@@ -333,6 +357,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     format: "pretty",
     force: false,
     write: false,
+    multi: false,
+    yes: false,
     help: false,
     version: false,
   };
@@ -423,6 +449,22 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--write":
         args.write = true;
+        break;
+      case "--scope":
+        args.scope = takeValue(arg);
+        break;
+      case "--ci":
+        args.ci = parseInitCi(takeValue(arg));
+        break;
+      case "--auth":
+        args.auth = parseInitAuth(takeValue(arg));
+        break;
+      case "--multi":
+        args.multi = true;
+        break;
+      case "-y":
+      case "--yes":
+        args.yes = true;
         break;
       case "--baseline":
         args.baseline = takeOptionalValue();
@@ -570,6 +612,12 @@ function parseArgs(argv: string[]): ParsedArgs {
             arg.slice("--severity=".length),
           );
           args.severity = { ...args.severity, [name]: level };
+        } else if (arg?.startsWith("--scope=")) {
+          args.scope = arg.slice("--scope=".length);
+        } else if (arg?.startsWith("--ci=")) {
+          args.ci = parseInitCi(arg.slice("--ci=".length));
+        } else if (arg?.startsWith("--auth=")) {
+          args.auth = parseInitAuth(arg.slice("--auth=".length));
         } else if (arg?.startsWith("--baseline=")) {
           args.baseline = pathValue(
             "--baseline",
@@ -596,6 +644,53 @@ function parseArgs(argv: string[]): ParsedArgs {
     );
   }
   return args;
+}
+
+/**
+ * `init` (F-X-13): scaffold the config, an optional registry, a CI pipeline
+ * and `.gitignore` entries. Prompts only on a TTY without `--yes`; never
+ * writes credentials, only prints the env names to set.
+ */
+async function commandInit(args: ParsedArgs, cwd: string): Promise<void> {
+  if (args.positionals.length > 0) {
+    throw new UsageError(
+      `init takes no positional arguments, got: ${args.positionals.join(", ")}.`,
+    );
+  }
+  const defaults: InitAnswers = {
+    ...(args.instanceUrl !== undefined
+      ? { instanceUrl: args.instanceUrl }
+      : {}),
+    ...(args.scope !== undefined ? { scope: args.scope } : {}),
+    auth: args.auth ?? "basic",
+    multi: args.multi,
+    ci: args.ci ?? "none",
+  };
+  const interactive = process.stdin.isTTY === true && !args.yes;
+  const answers = normaliseAnswers(
+    interactive
+      ? await promptInit(defaults, {
+          input: process.stdin,
+          output: process.stderr,
+        })
+      : defaults,
+  );
+  const result = applyInit(cwd, planInit(answers, readVersion()), {
+    force: args.force,
+  });
+  const lines = [
+    ...result.created.map((path) => `Created ${path}`),
+    ...result.overwritten.map((path) => `Overwrote ${path}`),
+    ...result.appended.map((path) => `Updated ${path}`),
+    "",
+    "Set these in your shell, .env (git-ignored) or CI secrets:",
+    ...envHints(answers).map((hint) => `  ${hint}`),
+    "",
+    "Next:",
+    "  servicenow-preflight config validate",
+    `  servicenow-preflight run${answers.multi ? " dev" : ""}`,
+  ];
+  process.stdout.write(`${lines.join("\n")}\n`);
 }
 
 /**
@@ -636,7 +731,14 @@ Usage:
                                                Move shared options into
                                                per-check entries (diff, or
                                                rewrite with --write)
-  (list, explain and config need no credentials or network.)
+  servicenow-preflight init [--instance <url>] [--scope <s>] [--multi]
+                    [--ci github|gitlab|azure|none]
+                    [--auth basic|oauth-client|bearer|mtls] [--force] [--yes]
+                                               Scaffold the config, registry,
+                                               CI pipeline and .gitignore
+                                               (prompts on a TTY unless --yes;
+                                               never writes credentials)
+  (list, explain, config and init need no credentials or network.)
 
 Multi-instance (registry at .preflight/instances.json):
   <env>                  A registry instance name (dev | staging | test | prod)
@@ -711,7 +813,7 @@ Options:
                          (default .preflight/baseline.json, or
                          baseline.<env>.json per registry instance); exits
                          with the run's normal code
-      --force            --write-baseline: overwrite an existing file
+      --force            --write-baseline / init: overwrite existing files
       --severity <check>=<fail|warn|off>
                          run: report that check's non-pass result as fail or
                          warn, or skip it (off). Repeatable; wins over the
@@ -1888,7 +1990,22 @@ async function main(): Promise<void> {
       `--out / --write apply to config only, not ${args.command}.`,
     );
   }
+  if (
+    args.command !== "init" &&
+    (args.scope !== undefined ||
+      args.ci !== undefined ||
+      args.auth !== undefined ||
+      args.multi ||
+      args.yes)
+  ) {
+    throw new UsageError(
+      `--scope / --ci / --auth / --multi / --yes apply to init only, not ${args.command}.`,
+    );
+  }
   switch (args.command) {
+    case "init":
+      await commandInit(args, cwd);
+      return;
     case "config":
       await commandConfig(args, cwd, [...defaultChecks, testDrift]);
       return;

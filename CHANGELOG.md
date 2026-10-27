@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`init`** — `servicenow-preflight init` scaffolds `preflight.config.json`
+  (with `$schema`), an optional one-instance registry (`--multi`), a GitHub /
+  GitLab / Azure pipeline (`--ci`) and `.gitignore` entries, and prints the
+  credential variable names to set (`--auth`). It prompts on a terminal unless
+  `--yes`, never writes `.env`, and refuses to overwrite a file without
+  `--force` (exit `2`).
 - **GitHub Action, GitLab and Azure templates** — the repo is now a composite
   action (`uses: IvanBBaev/servicenow-preflight@vX.Y.Z`): it runs the CLI
   matching its tag, uploads SARIF, writes the step summary and exposes
