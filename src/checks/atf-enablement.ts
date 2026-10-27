@@ -1,7 +1,8 @@
 import type { Check, CheckResult, CheckStatus } from "../types.js";
 import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { and, eq } from "../http/query.js";
-import { resolveSuiteIds } from "./atf-run.js";
+import { ATF_SUITE_OPTIONS, resolveSuiteIds } from "./atf-run.js";
+import { o } from "../options/dsl.js";
 
 const NAME = "atf-enablement";
 
@@ -122,6 +123,19 @@ const MALFORMED_NOTE =
 export const atfEnablement: Check = {
   name: NAME,
   description: "ATF test execution is enabled on the target instance.",
+  optionsSchema: o.object({
+    atfEnablement: o.optional(
+      o.object({
+        requireClientTestRunner: o.optional(
+          o.bool({
+            default: false,
+            description: "Also require an online scheduled client test runner.",
+          }),
+        ),
+      }),
+    ),
+    ...ATF_SUITE_OPTIONS,
+  }),
   meta: {
     requires: "ALWAYS",
     // Runs alone, next to atf-run, so ATF state is read with nothing else in flight.

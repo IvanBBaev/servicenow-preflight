@@ -558,7 +558,7 @@ export function resolveTlsFromEnv(
 }
 
 /** Locate the config file to load: an explicit path, or the first probed name. */
-function findConfigFile(
+export function findConfigFile(
   cwd: string,
   explicitPath?: string,
 ): string | undefined {
@@ -586,7 +586,7 @@ function describeJson(value: unknown): string {
 }
 
 /** Read and parse a config file (JSON, or a JS/MJS module's default export). */
-async function readConfigFile(path: string): Promise<PreflightConfig> {
+export async function readConfigFile(path: string): Promise<PreflightConfig> {
   let value: unknown;
   if (path.endsWith(".json")) {
     const text = await readFile(path, "utf8");

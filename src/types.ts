@@ -1,5 +1,6 @@
 import type { SnAuth, SnClient, SnTls } from "./http/client.js";
 import type { StateManifest } from "./state/manifest.js";
+import type { ObjectSchema } from "./options/dsl.js";
 
 /** Outcome of a single preflight check. */
 export type CheckStatus = "pass" | "warn" | "fail";
@@ -210,6 +211,12 @@ export interface Check {
   description: string;
   /** Optional static metadata (rule id, severity, tables, remediation, verdict wording). */
   meta?: CheckMeta;
+  /**
+   * The options this check reads (F-X-7), declared with the `o.*` DSL. It
+   * feeds `snpf config schema` / `config validate` and the run-time
+   * unknown-key warnings; the check still parses its own options at run time.
+   */
+  optionsSchema?: ObjectSchema;
   run(ctx: PreflightContext): CheckResult | Promise<CheckResult>;
 }
 

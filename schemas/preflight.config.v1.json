@@ -1,0 +1,658 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ivanbbaev.github.io/servicenow-preflight/schemas/preflight.config.v1.json",
+  "title": "servicenow-preflight config",
+  "description": "servicenow-preflight config file.",
+  "type": "object",
+  "properties": {
+    "instanceUrl": {
+      "description": "Base URL of the target instance.",
+      "type": "string"
+    },
+    "scope": {
+      "description": "Target scope name or scoped-app sys_id.",
+      "type": "string"
+    },
+    "updateSetId": {
+      "description": "Target update set sys_id.",
+      "type": "string"
+    },
+    "select": {
+      "description": "Run only these checks, or all except these.",
+      "type": "object",
+      "properties": {
+        "only": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skip": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "checks": {
+      "description": "Per-check options, shallow-merged over `options` for that check only.",
+      "type": "object",
+      "properties": {
+        "instance-url-configured": {
+          "description": "A ServiceNow instance URL is configured and well-formed.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "connectivity-auth": {
+          "description": "The target instance is reachable and the credentials authenticate.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "update-set-state": {
+          "description": "The target update set is in a deployable state.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "default-set-leakage": {
+          "description": "No work in the target scope is stranded in a Default update set.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "remote-set-preview": {
+          "description": "Retrieved update sets on the target instance have a clean preview.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "atf-enablement": {
+          "description": "ATF test execution is enabled on the target instance.",
+          "type": "object",
+          "properties": {
+            "atfEnablement": {
+              "type": "object",
+              "properties": {
+                "requireClientTestRunner": {
+                  "description": "Also require an online scheduled client test runner.",
+                  "type": "boolean",
+                  "default": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "atfSuites": {
+              "description": "ATF suite sys_ids to run.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "atfSuiteId": {
+              "description": "A single ATF suite sys_id to run.",
+              "type": "string"
+            },
+            "atfSuiteNames": {
+              "description": "Narrow a state manifest's suites to these logical ids or names.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "atf-run": {
+          "description": "The configured ATF test suite passes.",
+          "type": "object",
+          "properties": {
+            "atfSuites": {
+              "description": "ATF suite sys_ids to run.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "atfSuiteId": {
+              "description": "A single ATF suite sys_id to run.",
+              "type": "string"
+            },
+            "atfSuiteNames": {
+              "description": "Narrow a state manifest's suites to these logical ids or names.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "scoped-app-deps": {
+          "description": "The scoped application's dependencies are present on the target instance.",
+          "type": "object",
+          "properties": {
+            "requiredApps": {
+              "description": "Apps and plugins that must be installed and active.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "description": "Scope, plugin id, name or sys_id of the app or plugin.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minVersion": {
+                    "description": "Lowest acceptable version.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "i18n-completeness": {
+          "description": "Translations are complete for the required languages.",
+          "type": "object",
+          "properties": {
+            "languages": {
+              "description": "Target language codes: an array or a comma-separated string.",
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "baseLanguage": {
+              "description": "The source language that defines full coverage.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "acl-role-sanity": {
+          "description": "Shipped ACLs and roles pass basic security sanity checks.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "client-callable-acl": {
+          "description": "Every client-callable Script Include is gated by an active execute ACL.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "rest-endpoint-security": {
+          "description": "Scripted REST resources require authentication and ACL authorization.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "script-field-exposure": {
+          "description": "Every script-typed column ships with an active field write ACL.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "scheduled-job-run-as": {
+          "description": "Scheduled Jobs leave 'Run as' empty (run as system).",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "mobile-menu-hygiene": {
+          "description": "No mobile Application Menus/Modules ship in a non-mobile app.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "table-crud-acl": {
+          "description": "Every custom table has active table-level create, read, write and delete ACLs.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "ui-page-acl": {
+          "description": "Every custom UI Page is protected by an active read ACL.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "ui-action-gating": {
+          "description": "Every active UI Action is gated by a condition or a Requires-role entry.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "table-namespace": {
+          "description": "Every custom table is prefixed with the app's scope namespace.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "portal-roles": {
+          "description": "Service Portal widgets and pages carry roles unless deliberately public. Advisory.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "acl-out-of-scope": {
+          "description": "The app ships no ACLs onto tables outside its own scope.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "module-roles": {
+          "description": "Navigator modules are gated by their own or their menu's roles. Advisory.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "script-hygiene": {
+          "description": "No comment-only Fix Scripts and no duplicate-named Script Includes. Advisory.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "hardcoded-identifiers": {
+          "description": "No hard-coded sys_ids or non-instance URLs in in-scope scripts. Advisory.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "client-script-safety": {
+          "description": "No eval, Function constructor or client GlideRecord in client scripts, and no GlideScopedEvaluator.evaluateScript on the server.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "property-privacy": {
+          "description": "Password-typed system properties are private; secret-like names use a password type.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "inactive-artifacts": {
+          "description": "No inactive Business Rules, Client Scripts, Script Includes, UI Actions, UI Policies, Scheduled Jobs or Notifications ship with the app.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "notification-conditions": {
+          "description": "No active Notification fires on every update of its table (no event, no condition).",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "log-leftovers": {
+          "description": "No console.log/debug/dir or debug alert() in client scripts and no gs.print/gs.log on the server. Advisory.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "deprecated-apis": {
+          "description": "No Packages.* Java calls in server scripts, and no synchronous getXMLWait, callback-less g_form.getReference or gs.hasRole in client scripts.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "test-drift": {
+          "description": "Every test on the current instance also exists on the promote target.",
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "additionalProperties": false
+    },
+    "options": {
+      "description": "Options forwarded to every check.",
+      "type": "object",
+      "properties": {
+        "atfEnablement": {
+          "type": "object",
+          "properties": {
+            "requireClientTestRunner": {
+              "description": "Also require an online scheduled client test runner.",
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "atfSuites": {
+          "description": "ATF suite sys_ids to run.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "atfSuiteId": {
+          "description": "A single ATF suite sys_id to run.",
+          "type": "string"
+        },
+        "atfSuiteNames": {
+          "description": "Narrow a state manifest's suites to these logical ids or names.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requiredApps": {
+          "description": "Apps and plugins that must be installed and active.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "Scope, plugin id, name or sys_id of the app or plugin.",
+                "type": "string",
+                "minLength": 1
+              },
+              "minVersion": {
+                "description": "Lowest acceptable version.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "languages": {
+          "description": "Target language codes: an array or a comma-separated string.",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "baseLanguage": {
+          "description": "The source language that defines full coverage.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "proxy": {
+      "description": "Outbound HTTP(S) proxy URL.",
+      "type": "string"
+    },
+    "noProxy": {
+      "description": "Comma-separated NO_PROXY-style bypass entries.",
+      "type": "string"
+    },
+    "baseline": {
+      "description": "Accepted-findings file: true for the default path, or a path.",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string",
+          "minLength": 1
+        }
+      ]
+    },
+    "severity": {
+      "description": "Per-check fail / warn / off overrides.",
+      "type": "object",
+      "properties": {
+        "instance-url-configured": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "connectivity-auth": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "update-set-state": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "default-set-leakage": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "remote-set-preview": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "atf-enablement": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "atf-run": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "scoped-app-deps": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "i18n-completeness": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "acl-role-sanity": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "client-callable-acl": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "rest-endpoint-security": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "script-field-exposure": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "scheduled-job-run-as": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "mobile-menu-hygiene": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "table-crud-acl": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "ui-page-acl": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "ui-action-gating": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "table-namespace": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "portal-roles": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "acl-out-of-scope": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "module-roles": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "script-hygiene": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "hardcoded-identifiers": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "client-script-safety": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "property-privacy": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "inactive-artifacts": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "notification-conditions": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "log-leftovers": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "deprecated-apis": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "test-drift": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "failOn": {
+      "description": "Fail the run on fail rows only, or on warn rows too.",
+      "type": "string",
+      "enum": [
+        "fail",
+        "warn"
+      ]
+    },
+    "$schema": {}
+  },
+  "additionalProperties": false
+}

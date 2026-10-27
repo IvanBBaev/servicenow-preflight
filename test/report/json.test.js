@@ -21,7 +21,12 @@ import {
 } from "../../build/index.js";
 import { reportUrl } from "../../build/report/json.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
-import { SCHEMAS, renderSchema } from "../../scripts/gen-schema.mjs";
+import {
+  CONFIG_SCHEMA_FILE,
+  SCHEMAS,
+  renderConfigSchemaText,
+  renderSchema,
+} from "../../scripts/gen-schema.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const SCRIPT = join(ROOT, "scripts", "gen-schema.mjs");
@@ -258,12 +263,15 @@ test("CLI run <env> --format json records the instance name", () => {
   }
 });
 
-test("the committed schemas match the generator (no drift)", () => {
-  for (const spec of SCHEMAS) {
-    const fresh = renderSchema(spec);
+test("the committed schemas match the generator (no drift)", async () => {
+  const files = [
+    ...SCHEMAS.map((spec) => [spec.file, renderSchema(spec)]),
+    [CONFIG_SCHEMA_FILE, await renderConfigSchemaText()],
+  ];
+  for (const [file, fresh] of files) {
     for (const dir of ["schemas", join("site", "schemas")]) {
-      const committed = readFileSync(join(ROOT, dir, spec.file), "utf8");
-      assert.equal(committed, fresh, `${dir}/${spec.file} is stale`);
+      const committed = readFileSync(join(ROOT, dir, file), "utf8");
+      assert.equal(committed, fresh, `${dir}/${file} is stale`);
     }
   }
 });
@@ -290,11 +298,8 @@ test("gen-schema --check detects a missing or stale schema", () => {
 
 test("package.json exports and ships the schemas", () => {
   const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  for (const spec of SCHEMAS) {
-    assert.equal(
-      pkg.exports[`./schemas/${spec.file}`],
-      `./schemas/${spec.file}`,
-    );
+  for (const file of [...SCHEMAS.map((s) => s.file), CONFIG_SCHEMA_FILE]) {
+    assert.equal(pkg.exports[`./schemas/${file}`], `./schemas/${file}`);
   }
   assert.ok(pkg.files.includes("schemas"));
 });

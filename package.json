@@ -23,6 +23,7 @@
     },
     "./schemas/report.v1.json": "./schemas/report.v1.json",
     "./schemas/finding.v1.json": "./schemas/finding.v1.json",
+    "./schemas/preflight.config.v1.json": "./schemas/preflight.config.v1.json",
     "./package.json": "./package.json"
   },
   "bin": {

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Typed check options and `config schema` / `validate` / `migrate`** —
+  checks declare their options with a small schema DSL, from which the CLI
+  derives a JSON Schema for the config file
+  (`schemas/preflight.config.v1.json`, exported and on the docs site).
+  `config validate` lists every problem with a dotted path and a did-you-mean
+  hint (exit `2`); `config migrate` moves shared `options` into per-check
+  `checks` blocks (diff by default, `--write` to apply, JSON only). A `run`
+  only warns about config problems on stderr. Library: `Check.optionsSchema`.
+  See README "Validating the config".
 - **Explained 401/403 failures** — a refused request now lists its likely
   causes for the auth method in use (wrong or locked basic credentials, a
   basic-auth restriction, MFA, an expired static bearer, an OAuth registry or

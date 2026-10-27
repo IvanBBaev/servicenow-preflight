@@ -7,7 +7,9 @@
 //   --out <dir>                             write into <dir> only (tests)
 //
 // Reads src/types.ts, src/report/json.ts and src/trace.ts with the TypeScript compiler API
-// (a devDependency); supports exactly the type shapes those files use.
+// (a devDependency); supports exactly the type shapes those files use. The
+// config-file schema (preflight.config.v1.json) comes from the check registry's
+// option schemas instead, so it needs `npm run build` first.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +37,20 @@ export const SCHEMAS = [
     title: "servicenow-preflight finding (v1)",
   },
 ];
+
+/** The config-file schema, built from the compiled check registry (F-X-7). */
+export const CONFIG_SCHEMA_FILE = "preflight.config.v1.json";
+
+/** Render the config-file schema's text from `build/`. */
+export async function renderConfigSchemaText() {
+  const [{ renderConfigSchema }, { defaultChecks, testDrift }] =
+    await Promise.all([
+      import("../build/options/config-schema.js"),
+      import("../build/checks/index.js"),
+    ]);
+  const schema = renderConfigSchema([...defaultChecks, testDrift]);
+  return `${JSON.stringify(schema, null, 2)}\n`;
+}
 
 /** Collect the interface and type-alias declarations of the source files. */
 export function collectDeclarations(files = SOURCES) {
@@ -205,7 +221,7 @@ export function renderSchema(spec, decls) {
   return `${JSON.stringify(buildSchema(spec, decls), null, 2)}\n`;
 }
 
-function main(argv) {
+async function main(argv) {
   const check = argv.includes("--check");
   const outIdx = argv.indexOf("--out");
   const dirs =
@@ -213,11 +229,17 @@ function main(argv) {
       ? [argv[outIdx + 1]]
       : [join(ROOT, "schemas"), join(ROOT, "site", "schemas")];
   const decls = collectDeclarations();
+  const files = [
+    ...SCHEMAS.map((spec) => ({
+      file: spec.file,
+      text: renderSchema(spec, decls),
+    })),
+    { file: CONFIG_SCHEMA_FILE, text: await renderConfigSchemaText() },
+  ];
   let stale = 0;
   for (const dir of dirs) {
-    for (const spec of SCHEMAS) {
-      const path = join(dir, spec.file);
-      const text = renderSchema(spec, decls);
+    for (const { file, text } of files) {
+      const path = join(dir, file);
       const shown = relative(ROOT, path) || path;
       if (check) {
         if (!existsSync(path) || readFileSync(path, "utf8") !== text) {
@@ -237,5 +259,5 @@ function main(argv) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  main(process.argv.slice(2));
+  await main(process.argv.slice(2));
 }

@@ -2,6 +2,8 @@ import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { eq } from "../http/query.js";
 import type { CheckResult, PreflightContext } from "../types.js";
 import type { Check } from "../types.js";
+import { o } from "../options/dsl.js";
+import type { Shape } from "../options/dsl.js";
 
 const NAME = "atf-run";
 
@@ -90,6 +92,25 @@ function makeResult(
  * (logical `id`s or names). This is what lets the same logical suite run against
  * dev / staging / test / prod with each instance's own ids.
  */
+/**
+ * The suite-selection options {@link resolveSuiteIds} reads (F-X-7); shared
+ * with `atf-enablement`, which reads the same keys.
+ */
+export const ATF_SUITE_OPTIONS: Shape = {
+  atfSuites: o.optional(
+    o.array(o.string(), { description: "ATF suite sys_ids to run." }),
+  ),
+  atfSuiteId: o.optional(
+    o.string({ description: "A single ATF suite sys_id to run." }),
+  ),
+  atfSuiteNames: o.optional(
+    o.array(o.string(), {
+      description:
+        "Narrow a state manifest's suites to these logical ids or names.",
+    }),
+  ),
+};
+
 export function resolveSuiteIds(ctx: PreflightContext): string[] {
   const opts = ctx.options ?? {};
   const ids: string[] = [];
@@ -271,6 +292,7 @@ function describeRedTests(red: RedTest[]): string {
 export const atfRun: Check = {
   name: NAME,
   description: "The configured ATF test suite passes.",
+  optionsSchema: o.object(ATF_SUITE_OPTIONS),
   meta: {
     requires: "atfSuites",
     // Runs alone: ATF executions contend with every other read on the instance.

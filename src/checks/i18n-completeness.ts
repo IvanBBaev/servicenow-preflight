@@ -1,6 +1,7 @@
 import type { Check, CheckResult, PreflightContext } from "../types.js";
 import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { and, eq, resolveScope } from "../http/query.js";
+import { o } from "../options/dsl.js";
 
 const NAME = "i18n-completeness";
 
@@ -162,6 +163,19 @@ async function collectKeys(
 export const i18nCompleteness: Check = {
   name: NAME,
   description: "Translations are complete for the required languages.",
+  optionsSchema: o.object({
+    languages: o.optional(
+      o.union([o.array(o.string()), o.string()], {
+        description:
+          "Target language codes: an array or a comma-separated string.",
+      }),
+    ),
+    baseLanguage: o.optional(
+      o.string({
+        description: "The source language that defines full coverage.",
+      }),
+    ),
+  }),
   meta: {
     requires: "scope · languages",
     summary:

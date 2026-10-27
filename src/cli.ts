@@ -2,18 +2,17 @@ import {
   closeSync,
   existsSync,
   fchmodSync,
-  mkdirSync,
   openSync,
   readFileSync,
   realpathSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
   writeSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { dirname, relative, resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { appendOutputs, appendSummary } from "./ci/github-env.js";
+import { writeAtomic } from "./atomic-write.js";
+import { commandConfig } from "./config-command.js";
+import { describeIssue, validateConfig } from "./options/config-schema.js";
 import { fileURLToPath } from "node:url";
 import { runPreflight } from "./index.js";
 import {
@@ -124,9 +123,10 @@ const FORMATS: readonly OutputFormat[] = [
 
 /**
  * Subcommand: run checks, sync a manifest, compare two instances, or browse
- * the check catalogue (`list` / `explain`).
+ * the check catalogue (`list` / `explain`), or work on the config file
+ * (`config schema | validate | migrate`).
  */
-type Subcommand = "run" | "sync" | "drift" | "list" | "explain";
+type Subcommand = "run" | "sync" | "drift" | "list" | "explain" | "config";
 
 const SUBCOMMANDS: readonly Subcommand[] = [
   "run",
@@ -134,6 +134,7 @@ const SUBCOMMANDS: readonly Subcommand[] = [
   "drift",
   "list",
   "explain",
+  "config",
 ];
 
 interface ParsedArgs {
@@ -197,6 +198,10 @@ interface ParsedArgs {
   severity?: SeverityPolicy;
   /** Allow `--write-baseline` to overwrite an existing file. */
   force: boolean;
+  /** `config schema`: write the schema to this file. */
+  out?: string;
+  /** `config migrate`: rewrite the config file in place. */
+  write: boolean;
   help: boolean;
   /** Print the package version and exit. */
   version: boolean;
@@ -327,6 +332,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     allowStageSkip: false,
     format: "pretty",
     force: false,
+    write: false,
     help: false,
     version: false,
   };
@@ -411,6 +417,12 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--force":
         args.force = true;
+        break;
+      case "--out":
+        args.out = takeValue(arg);
+        break;
+      case "--write":
+        args.write = true;
         break;
       case "--baseline":
         args.baseline = takeOptionalValue();
@@ -615,7 +627,16 @@ Usage:
   servicenow-preflight explain <check> [--format pretty|json]
                                                Show one check's rule, tables,
                                                verdicts and remediation
-  (list and explain need no config, credentials or network.)
+  servicenow-preflight config schema [--out <file>]
+                                               Print the config JSON Schema
+  servicenow-preflight config validate [--config <path>]
+                                               Report every config problem
+                                               (exit 2 when any)
+  servicenow-preflight config migrate [--write]
+                                               Move shared options into
+                                               per-check entries (diff, or
+                                               rewrite with --write)
+  (list, explain and config need no credentials or network.)
 
 Multi-instance (registry at .preflight/instances.json):
   <env>                  A registry instance name (dev | staging | test | prod)
@@ -1214,6 +1235,23 @@ function instanceHost(url: string | undefined): string | undefined {
 }
 
 /** Run the check suite against one resolved instance. */
+/** Config warnings already printed (an `--all` run loads the file per instance). */
+const warnedConfigIssues = new Set<string>();
+
+/**
+ * Print config-schema problems (unknown option keys, wrong types) as warnings.
+ * In 1.x they never fail the run: checks keep their own warn rows for bad
+ * values. `config validate` reports the same problems as an error.
+ */
+function warnConfigIssues(config: unknown): void {
+  for (const issue of validateConfig(config, [...defaultChecks, testDrift])) {
+    const line = describeIssue(issue);
+    if (warnedConfigIssues.has(line)) continue;
+    warnedConfigIssues.add(line);
+    process.stderr.write(`servicenow-preflight: config warning: ${line}\n`);
+  }
+}
+
 async function runOneInstance(
   target: RunTarget,
   args: ParsedArgs,
@@ -1262,6 +1300,7 @@ async function runOneInstance(
       );
     }
   }
+  warnConfigIssues(loaded.config);
   const offByPolicy = policySkips(policy);
   const baseSkip = args.skip ?? loaded.config.select?.skip;
   const select = {
@@ -1579,21 +1618,6 @@ async function runTargets(
 }
 
 /**
- * Write `content` to `path` atomically: into a temp file beside it, then a
- * rename, so a reader never sees half a report. Parent directories are created.
- */
-function writeAtomic(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temp = `${path}.${process.pid}.tmp`;
-  try {
-    writeFileSync(temp, content, "utf8");
-    renameSync(temp, path);
-  } finally {
-    rmSync(temp, { force: true });
-  }
-}
-
-/**
  * Inside GitHub Actions (F-X-16): append the markdown report to the step
  * summary unless `--no-summary` / `SNPF_SUMMARY=0`, and the verdict to the
  * step outputs.
@@ -1859,7 +1883,15 @@ async function main(): Promise<void> {
       `--baseline / --write-baseline / --severity apply to run only, not ${args.command}.`,
     );
   }
+  if (args.command !== "config" && (args.out !== undefined || args.write)) {
+    throw new UsageError(
+      `--out / --write apply to config only, not ${args.command}.`,
+    );
+  }
   switch (args.command) {
+    case "config":
+      await commandConfig(args, cwd, [...defaultChecks, testDrift]);
+      return;
     case "list":
       commandList(args);
       return;

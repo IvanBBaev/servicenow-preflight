@@ -154,6 +154,9 @@ snpf sync <env> [options]      # pull ATF metadata → state manifest
 snpf drift <src> <dst>         # compare two instances (promote gate)
 snpf list [--format json]      # the check catalogue: name, severity, rule, description
 snpf explain <check>           # one check: rule, tables, verdicts, remediation
+snpf config schema [--out <file>]  # the config file's JSON Schema
+snpf config validate           # check the config file against it
+snpf config migrate [--write]  # move shared options into per-check blocks
 ```
 
 `list` and `explain` read only the built-in catalogue — no config, credentials or
@@ -162,7 +165,9 @@ network. `list` prints one line per check (`test-drift` is marked `(drift only)`
 certification rule and its title, the tables it reads, the wording of each
 verdict and what to change on the instance to make it pass. An unknown name is
 exit `2` with up to three close matches (`Did you mean: table-crud-acl?`). Both
-accept only `--format pretty` or `json`.
+accept only `--format pretty` or `json`. The `config` actions are described in
+[Validating the config](#validating-the-config); they need no credentials or
+network either.
 
 Both `--flag value` and `--flag=value` forms are accepted.
 
@@ -435,6 +440,44 @@ checks to run, and per-check options — but **never credentials**.
 | `failOn`      | `"fail" \| "warn"`                       | Run-level exit threshold (see [below](#strict-runs---fail-on-warn)); `--fail-on` and `SNPF_FAIL_ON` override it.                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `proxy`       | `string`                                 | Forward proxy URL; outranks `SNPF_PROXY` and `HTTPS_PROXY` (see [HTTP(S) proxy](#https-proxy)). Keep credentials in `SNPF_PROXY`, not in this file.                                                                                                                                                                                                                                                                                                                                                                                   |
 | `noProxy`     | `string`                                 | Extra proxy-bypass entries, merged with `SNPF_NO_PROXY` and `NO_PROXY`/`no_proxy`.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+
+### Validating the config
+
+Every check that reads options declares their shape, and the CLI derives a
+JSON Schema (draft 2020-12) for the whole config file from them. Point
+`$schema` at it for editor completion and inline errors:
+
+```json
+{
+  "$schema": "./node_modules/servicenow-preflight/schemas/preflight.config.v1.json",
+  "instanceUrl": "https://dev12345.service-now.com",
+  "checks": {
+    "scoped-app-deps": {
+      "requiredApps": [{ "id": "x_acme_lib", "minVersion": "2.1.0" }]
+    },
+    "i18n-completeness": { "languages": ["de", "fr"] }
+  }
+}
+```
+
+The schema is shipped in the package (`servicenow-preflight/schemas/preflight.config.v1.json`)
+and published on the docs site under its `$id`. A check's block under `checks`
+accepts only the options that check declares; checks that take no options
+accept any keys.
+
+- `snpf config schema` prints the schema (`--out <file>` writes it instead).
+- `snpf config validate` checks the discovered (or `--config`) file and lists
+  every problem with its path and a did-you-mean hint, for example
+  `options.langauges: unknown key (did you mean languages?)`. Exit `0` when
+  valid, `2` otherwise. It also applies the load-time guards (such as safe
+  `scope` names) without reading the environment or `.env`.
+- `snpf config migrate` shows, as a unified diff, the config with each shared
+  `options` key moved into the `checks` block of every check that declares it
+  (an existing per-check value wins). `--write` rewrites the file atomically.
+  JSON configs only.
+
+A normal `run` does not fail on these problems in 1.x: it prints each one to
+stderr once as `servicenow-preflight: config warning: …` and carries on.
 
 ### Severity policy
 

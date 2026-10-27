@@ -1,6 +1,7 @@
 import type { Check, CheckResult, CheckStatus } from "../types.js";
 import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { compareVersions } from "../versions.js";
+import { o } from "../options/dsl.js";
 
 const NAME = "scoped-app-deps";
 
@@ -219,6 +220,23 @@ export const scopedAppDeps: Check = {
   name: NAME,
   description:
     "The scoped application's dependencies are present on the target instance.",
+  optionsSchema: o.object({
+    requiredApps: o.optional(
+      o.array(
+        o.object({
+          id: o.string({
+            nonEmpty: true,
+            description:
+              "Scope, plugin id, name or sys_id of the app or plugin.",
+          }),
+          minVersion: o.optional(
+            o.string({ description: "Lowest acceptable version." }),
+          ),
+        }),
+        { description: "Apps and plugins that must be installed and active." },
+      ),
+    ),
+  }),
   meta: {
     requires: "requiredApps",
     summary:
