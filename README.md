@@ -187,6 +187,8 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--timeout <dur>`            | `run`: fail any check still running after `<dur>` (e.g. `30s`, `500ms`) and move on. Default: none; `SNPF_CHECK_TIMEOUT`.     |
 | `--run-timeout <dur>`        | `run`: stop the run (per instance) after `<dur>`; unfinished checks become `fail` rows.                                       |
 | `--fail-on <level>`          | `run`: `fail` (default) exits `1` on a `fail` row only; `warn` also on a `warn` row no baseline accepted. `SNPF_FAIL_ON`.     |
+| `--output <format>=<path>`   | `run`: also write the report as `<format>` to `<path>` (atomic; folders created). Repeatable.                                 |
+| `--no-summary`               | `run`: inside GitHub Actions, skip the step summary. `SNPF_SUMMARY=0`.                                                        |
 | `--concurrency <n>`          | `run`: most checks running at once, 1–32. Default `4`; `SNPF_CONCURRENCY`.                                                    |
 | `--max-inflight <n>`         | Most requests in flight at once, 1–64. Default `4`; `SNPF_MAX_INFLIGHT`.                                                      |
 | `--rps <n>`                  | Requests started per second, 0.5–100. Default: unlimited; `SNPF_RPS`.                                                         |
@@ -711,6 +713,27 @@ jobs:
 
 Store credentials as CI secrets — the tool only ever reads them from the
 environment.
+
+### Several formats in one run, step summary and outputs
+
+`--output <format>=<path>` writes an extra copy of the report (repeatable), so
+one run can print annotations and still leave SARIF and JUnit files for upload
+steps. Each file is written atomically and its folders are created.
+
+Inside GitHub Actions the run also appends the markdown report to the job's
+step summary (`GITHUB_STEP_SUMMARY`; turn it off with `--no-summary` or
+`SNPF_SUMMARY=0`) and writes `ok`, `pass`, `warn` and `fail` to the step
+outputs (`GITHUB_OUTPUT`), summed over every instance:
+
+```yaml
+- id: preflight
+  run: >
+    npx servicenow-preflight --format github
+    --output sarif=reports/preflight.sarif
+    --output junit=reports/junit.xml
+- if: always() && steps.preflight.outputs.warn != '0'
+  run: echo "Preflight warned ${{ steps.preflight.outputs.warn }} time(s)"
+```
 
 ### Credential-free CI
 

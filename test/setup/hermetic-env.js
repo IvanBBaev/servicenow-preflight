@@ -15,6 +15,10 @@ for (const name of [
   "http_proxy",
   "NO_PROXY",
   "no_proxy",
+  // F-X-16: a run inside GitHub Actions would append to the job's real step
+  // summary and outputs.
+  "GITHUB_STEP_SUMMARY",
+  "GITHUB_OUTPUT",
 ]) {
   delete process.env[name];
 }

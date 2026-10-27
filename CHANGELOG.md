@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--output` files and the GitHub step summary** — `run --output
+<format>=<path>` (repeatable) also writes the report in another format to a
+  file, atomically. Inside GitHub Actions a run appends the markdown report
+  to the step summary (off with `--no-summary` / `SNPF_SUMMARY=0`) and
+  `ok`/`pass`/`warn`/`fail` to the step outputs.
 - **`--fail-on warn`** — `run --fail-on warn` (or `SNPF_FAIL_ON`, or the
   `failOn` config key) also exits `1` on a `warn` row that no baseline
   accepted. Rows keep their statuses; only `ok` and the exit code change, and

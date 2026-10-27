@@ -1830,3 +1830,103 @@ test("CLI rejects bad --record / --replay combinations with exit 2", () => {
     assert.match(res.stderr, message);
   }
 });
+
+test("CLI --output writes extra report files beside stdout", async () => {
+  const instance = await startEmptyInstance();
+  const dir = projectDir("snpf-output-");
+  try {
+    const res = await runCliAsync(
+      [
+        "run",
+        "--instance",
+        instance.url,
+        ...ONE_WARN,
+        "--json",
+        "--output",
+        "sarif=reports/preflight.sarif",
+        "--output=junit=reports/nested/junit.xml",
+      ],
+      { cwd: dir, env: CREDS },
+    );
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(JSON.parse(res.stdout).runs[0].report.summary.warn, 1);
+    const sarif = JSON.parse(
+      readFileSync(join(dir, "reports", "preflight.sarif"), "utf8"),
+    );
+    assert.equal(sarif.version, "2.1.0");
+    const junit = readFileSync(
+      join(dir, "reports", "nested", "junit.xml"),
+      "utf8",
+    );
+    assert.match(junit, /^<\?xml/);
+    assert.match(junit, /<\/testsuites>\s*$/);
+    // Atomic writes leave no temp file behind.
+    assert.deepEqual(readdirSync(join(dir, "reports")).sort(), [
+      "nested",
+      "preflight.sarif",
+    ]);
+  } finally {
+    instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI appends a step summary and outputs inside GitHub Actions", async () => {
+  const instance = await startEmptyInstance();
+  const dir = projectDir("snpf-gha-");
+  try {
+    const summary = join(dir, "summary.md");
+    const output = join(dir, "output.txt");
+    writeFileSync(summary, "# Earlier step\n");
+    const env = {
+      ...CREDS,
+      GITHUB_STEP_SUMMARY: summary,
+      GITHUB_OUTPUT: output,
+    };
+    const base = ["run", "--instance", instance.url, ...ONE_WARN];
+    const res = await runCliAsync(base, { cwd: dir, env });
+    assert.equal(res.status, 0, res.stderr);
+    const md = readFileSync(summary, "utf8");
+    assert.ok(md.startsWith("# Earlier step\n"), md);
+    assert.match(md, /instance-url-configured/);
+    assert.equal(
+      readFileSync(output, "utf8"),
+      "ok=true\npass=0\nwarn=1\nfail=0\n",
+    );
+
+    for (const [args, extra] of [
+      [[...base, "--no-summary"], {}],
+      [base, { SNPF_SUMMARY: "0" }],
+    ]) {
+      const quiet = await runCliAsync(args, {
+        cwd: dir,
+        env: { ...env, ...extra },
+      });
+      assert.equal(quiet.status, 0, quiet.stderr);
+      assert.equal(readFileSync(summary, "utf8"), md);
+    }
+    // Outputs are still appended when the summary is off.
+    assert.equal(readFileSync(output, "utf8").split("\n").length - 1, 12);
+  } finally {
+    instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI rejects bad --output values with exit 2", () => {
+  const dir = projectDir("snpf-output-usage-");
+  const cases = [
+    [["run", "--output", "html=a.html"], /Unknown --output format "html"/],
+    [["run", "--output", "sarif"], /--output sarif= needs a file path/],
+    [["run", "--output=json="], /--output json= needs a file path/],
+    [
+      ["run", "--output", "json=a.json", "--output", "sarif=./a.json"],
+      /names \.\/a\.json more than once/,
+    ],
+  ];
+  for (const [args, message] of cases) {
+    const res = runCli(args, { cwd: dir });
+    assert.equal(res.status, 2, `${args.join(" ")}: ${res.stderr}`);
+    assert.match(res.stderr, message);
+  }
+});

@@ -2,19 +2,25 @@ import {
   closeSync,
   existsSync,
   fchmodSync,
+  mkdirSync,
   openSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { relative, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
+import { appendOutputs, appendSummary } from "./ci/github-env.js";
 import { fileURLToPath } from "node:url";
 import { runPreflight } from "./index.js";
 import {
   loadConfig,
   parseConcurrency,
   parseFailOn,
+  parseSwitch,
   type FailOn,
   parseRequestLimit,
   UsageError,
@@ -173,6 +179,10 @@ interface ParsedArgs {
   replayDir?: string;
   /** `run`: `--fail-on fail|warn`; `SNPF_FAIL_ON` / config `failOn` otherwise. */
   failOn?: FailOn;
+  /** `run`: `--output <format>=<path>` files, written besides stdout (F-X-16). */
+  outputs: OutputFile[];
+  /** `run`: `--no-summary` — skip the GitHub step summary (`SNPF_SUMMARY=0`). */
+  noSummary: boolean;
   /** `drift`: downgrade a skipped pipeline stage from fail to warn. */
   allowStageSkip: boolean;
   /**
@@ -198,6 +208,35 @@ function splitCsv(value: string | undefined): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+}
+
+/** One `--output <format>=<path>` file. */
+interface OutputFile {
+  format: OutputFormat;
+  /** The path as given; resolved against the working directory on write. */
+  path: string;
+}
+
+/**
+ * Parse an `--output <format>=<path>` value. An unknown format, a missing
+ * path or a path an earlier `--output` already names is a usage error.
+ */
+function outputArg(value: string, earlier: readonly OutputFile[]): OutputFile {
+  const eq = value.indexOf("=");
+  const name = eq < 0 ? value : value.slice(0, eq);
+  const path = eq < 0 ? "" : value.slice(eq + 1);
+  if (!(FORMATS as readonly string[]).includes(name)) {
+    throw new UsageError(
+      `Unknown --output format "${name}". Use --output <format>=<path>; valid formats: ${FORMATS.join(", ")}.`,
+    );
+  }
+  if (path.trim() === "") {
+    throw new UsageError(`--output ${name}= needs a file path.`);
+  }
+  if (earlier.some((o) => resolve(o.path) === resolve(path))) {
+    throw new UsageError(`--output names ${path} more than once.`);
+  }
+  return { format: name as OutputFormat, path };
 }
 
 function parseFormat(value: string | undefined): OutputFormat {
@@ -282,6 +321,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     noCache: false,
     timings: false,
     recordRaw: false,
+    outputs: [],
+    noSummary: false,
     allowStageSkip: false,
     format: "pretty",
     force: false,
@@ -416,6 +457,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--no-cache":
         args.noCache = true;
         break;
+      case "--no-summary":
+        args.noSummary = true;
+        break;
+      case "--output":
+        args.outputs.push(outputArg(takeValue(arg), args.outputs));
+        break;
       case "--timings":
         args.timings = true;
         break;
@@ -480,6 +527,10 @@ function parseArgs(argv: string[]): ParsedArgs {
           args.recordDir = dirArg("--record", arg.slice("--record=".length));
         } else if (arg?.startsWith("--replay=")) {
           args.replayDir = dirArg("--replay", arg.slice("--replay=".length));
+        } else if (arg?.startsWith("--output=")) {
+          args.outputs.push(
+            outputArg(arg.slice("--output=".length), args.outputs),
+          );
         } else if (arg?.startsWith("--fail-on=")) {
           args.failOn =
             parseFailOn(arg.slice("--fail-on=".length), "--fail-on") ??
@@ -598,6 +649,10 @@ Options:
       --fail-on <level>  run: exit 1 on fail rows only (fail, the default) or
                          also on warn rows no baseline accepted (warn); env
                          SNPF_FAIL_ON, config failOn. Rows are unchanged
+      --output <format>=<path>
+                         run: also write the report as <format> to <path>
+                         (repeatable; written atomically, folders created)
+      --no-summary       run: skip the GitHub step summary (env SNPF_SUMMARY=0)
       --concurrency <n>  run: most checks running at once, 1-32 (default 4;
                          env SNPF_CONCURRENCY). ATF checks always run alone,
                          after the others; the report keeps registry order
@@ -1443,6 +1498,8 @@ async function runTargets(
   trace: TraceSink,
 ): Promise<void> {
   const [firstTarget] = targets;
+  let runs: { name?: string; report: PreflightReport; timings?: RunTimings }[];
+  let renderAs: (format: OutputFormat) => string;
   if (!args.all && targets.length === 1 && firstTarget && !firstTarget.name) {
     // Single-instance: preserve the original single-report output exactly.
     const { report, url, timings, replay, failOn } = await runOneInstance(
@@ -1451,78 +1508,104 @@ async function runTargets(
       cwd,
       trace,
     );
-    process.stdout.write(
+    const ran = ranChecks(defaultChecks, [report]);
+    runs = [{ report, ...(timings ? { timings } : {}) }];
+    renderAs = (format) =>
       withFailOn(
         withReplayNote(
-          render(
-            report,
-            args.format,
-            undefined,
-            ranChecks(defaultChecks, [report]),
-            url,
-            timings,
-          ),
-          args.format,
+          render(report, format, undefined, ran, url, timings),
+          format,
           replay,
         ),
-        args.format,
+        format,
         failOn,
-      ),
-    );
-    writeTimings(args.format, [{ ...(timings ? { timings } : {}) }]);
-    writeFailOnNote([{ report }]);
-    process.exitCode = report.ok ? 0 : 1;
-    return;
-  }
-
-  const reports: NamedReport[] = [];
-  let replay: ReplayInfo | undefined;
-  let failOn: FailOn = "fail";
-  for (const target of targets) {
-    const run = await runOneInstance(target, args, cwd, trace);
-    const { report, url, timings } = run;
-    replay ??= run.replay;
-    if (run.failOn === "warn") failOn = "warn";
-    reports.push({
-      name: target.name ?? "instance",
-      report,
-      ...(url !== undefined ? { url } : {}),
-      ...(timings !== undefined ? { timings } : {}),
-    });
-  }
-
-  const ran = ranChecks(
-    defaultChecks,
-    reports.map((r) => r.report),
-  );
-  const [firstReport] = reports;
-  if (reports.length === 1 && firstReport) {
-    process.stdout.write(
-      withFailOn(
-        withReplayNote(
-          render(
-            firstReport.report,
-            args.format,
-            firstReport.name,
-            ran,
-            firstReport.url,
-            firstReport.timings,
-          ),
-          args.format,
-          replay,
-        ),
-        args.format,
-        failOn,
-      ),
-    );
+      );
   } else {
-    process.stdout.write(
-      withFailOn(renderAll(reports, args.format, ran), args.format, failOn),
+    const reports: NamedReport[] = [];
+    let replay: ReplayInfo | undefined;
+    let failOn: FailOn = "fail";
+    for (const target of targets) {
+      const run = await runOneInstance(target, args, cwd, trace);
+      const { report, url, timings } = run;
+      replay ??= run.replay;
+      if (run.failOn === "warn") failOn = "warn";
+      reports.push({
+        name: target.name ?? "instance",
+        report,
+        ...(url !== undefined ? { url } : {}),
+        ...(timings !== undefined ? { timings } : {}),
+      });
+    }
+    const ran = ranChecks(
+      defaultChecks,
+      reports.map((r) => r.report),
     );
+    const [firstReport] = reports;
+    runs = reports;
+    renderAs = (format) =>
+      withFailOn(
+        reports.length === 1 && firstReport
+          ? withReplayNote(
+              render(
+                firstReport.report,
+                format,
+                firstReport.name,
+                ran,
+                firstReport.url,
+                firstReport.timings,
+              ),
+              format,
+              replay,
+            )
+          : renderAll(reports, format, ran),
+        format,
+        failOn,
+      );
   }
-  writeTimings(args.format, reports);
-  writeFailOnNote(reports);
-  process.exitCode = reports.every((r) => r.report.ok) ? 0 : 1;
+
+  process.stdout.write(renderAs(args.format));
+  for (const output of args.outputs) {
+    writeAtomic(resolve(cwd, output.path), renderAs(output.format));
+  }
+  publishToGitHub(
+    args,
+    runs.map((r) => r.report),
+    () => renderAs("markdown"),
+  );
+  writeTimings(args.format, runs);
+  writeFailOnNote(runs);
+  process.exitCode = runs.every((r) => r.report.ok) ? 0 : 1;
+}
+
+/**
+ * Write `content` to `path` atomically: into a temp file beside it, then a
+ * rename, so a reader never sees half a report. Parent directories are created.
+ */
+function writeAtomic(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const temp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temp, content, "utf8");
+    renameSync(temp, path);
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
+/**
+ * Inside GitHub Actions (F-X-16): append the markdown report to the step
+ * summary unless `--no-summary` / `SNPF_SUMMARY=0`, and the verdict to the
+ * step outputs.
+ */
+function publishToGitHub(
+  args: ParsedArgs,
+  reports: readonly PreflightReport[],
+  markdown: () => string,
+): void {
+  const env = process.env;
+  const summary = parseSwitch(env.SNPF_SUMMARY, "SNPF_SUMMARY") ?? true;
+  if (!args.noSummary && summary) appendSummary(env, markdown());
+  appendOutputs(env, reports);
 }
 
 /** `sync <env>` — pull ATF metadata and write the instance's manifest. */
