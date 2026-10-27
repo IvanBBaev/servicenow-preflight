@@ -189,6 +189,8 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--max-inflight <n>`         | Most requests in flight at once, 1–64. Default `4`; `SNPF_MAX_INFLIGHT`.                                                      |
 | `--rps <n>`                  | Requests started per second, 0.5–100. Default: unlimited; `SNPF_RPS`.                                                         |
 | `--no-cache`                 | `run`: fetch every read, instead of sharing identical reads between checks. Also `SNPF_CACHE=0`.                              |
+| `--timings`                  | `run`: print per-check time, requests, retries and cache hits to stderr; with `--format json`, a `timings` object per run.    |
+| `--trace <path>`             | `run`: write a local NDJSON trace of the run (mode `0600`). Also `SNPF_TRACE`. See [Diagnostics](#diagnostics).               |
 
 Durations take a unit: `ms`, `s`, `m`, `h`, `d` or `w`. A timed-out check is
 cancelled — its in-flight requests are aborted — and reported as
@@ -217,6 +219,34 @@ or without it. `--no-cache` (or `SNPF_CACHE=0`) turns it off.
 `--instance`, `--only` and `--skip` override the matching config-file values. The
 `scope` and `updateSetId` a run targets come from the config file (or the
 programmatic context), **not** from CLI flags.
+
+### Diagnostics
+
+`--timings` answers "which check is slow, and why": after the report it
+prints one table per instance to stderr — wall-clock milliseconds, HTTP
+requests sent, `429` retries and read-cache hits per check, plus a total row.
+With `--format json` the same numbers go into each run's `timings` object
+instead, and stderr stays quiet.
+
+`--trace <path>` (or `SNPF_TRACE`) writes one JSON event per line:
+
+| Event         | Fields                                                                                                                       |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `run.start`   | `ts`, `version`, `instanceHost`, `checks`, `concurrency`                                                                     |
+| `check.start` | `ts`, `check`                                                                                                                |
+| `http`        | `ts`, `check`, `method`, `table` or `path`, `status`, `ms`, `attempt`, `retryAfterMs`, `cache` (`hit`/`miss`/`off`), `error` |
+| `check.end`   | `ts`, `check`, `status`, `ms`                                                                                                |
+| `run.end`     | `ts`, `ms`, `summary`                                                                                                        |
+
+The trace is allowlisted field by field: it never holds query values, row
+data, headers, credentials or user names. A non-table path keeps its fixed
+segments only — a sys_id becomes `:id`, anything else variable `:value`. The
+file is created with mode `0600` (an existing file is narrowed to it) and
+never leaves the machine. With several instances, one file holds every run.
+
+Library callers get the same events from `node:diagnostics_channel`
+(`TRACE_CHANNELS`), or use `createTracer(write)` and `collectTimings()`
+around `runPreflight`. With no subscriber, nothing is built.
 
 ## Credentials & auth
 
@@ -547,7 +577,8 @@ gh pr comment "$PR_NUMBER" --body-file preflight.md
 `ok` is `true` only when every run is ok. Each run's `report` is the full
 `PreflightReport` (`ok`, `results[]` with any `findings`, `summary`). `instance`
 is the registry name and is left out for an ad-hoc `--instance` run; `url` is
-the instance origin only, so credentials and paths never appear. `drift`
+the instance origin only, so credentials and paths never appear. `--timings`
+adds a `timings` object to each run. `drift`
 prints the same envelope with one run. `schemaVersion` changes only on a
 breaking shape change.
 

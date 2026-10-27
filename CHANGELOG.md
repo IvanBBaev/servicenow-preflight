@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Diagnostics** — `run --timings` prints per-check time, requests, `429`
+  retries and read-cache hits to stderr (`--format json`: an optional
+  `timings` object per run, in `report.v1.json`). `run --trace <path>` (or
+  `SNPF_TRACE`) writes a local, allowlisted NDJSON trace (`run`, `check` and
+  `http` events; mode `0600`; no query values, rows, headers or credentials).
+  Library: `createTracer`, `collectTimings`, `formatTimings` and the
+  `node:diagnostics_channel` names in `TRACE_CHANNELS`.
 - **Concurrent checks** — a run executes up to `--concurrency <n>` checks at
   once (default `4`, or `SNPF_CONCURRENCY`, 1–32); `atf-enablement` and
   `atf-run` are marked `meta.serial` and run alone after the others. The

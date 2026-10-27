@@ -6,7 +6,7 @@
 //   node scripts/gen-schema.mjs --check     exit 1 if a committed schema is stale
 //   --out <dir>                             write into <dir> only (tests)
 //
-// Reads src/types.ts and src/report/json.ts with the TypeScript compiler API
+// Reads src/types.ts, src/report/json.ts and src/trace.ts with the TypeScript compiler API
 // (a devDependency); supports exactly the type shapes those files use.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -18,6 +18,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCES = [
   join(ROOT, "src", "types.ts"),
   join(ROOT, "src", "report", "json.ts"),
+  join(ROOT, "src", "trace.ts"),
 ];
 const BASE_URL = "https://ivanbbaev.github.io/servicenow-preflight/schemas/";
 

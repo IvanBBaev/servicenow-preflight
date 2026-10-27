@@ -1,4 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fchmodSync,
+  openSync,
+  readFileSync,
+  writeSync,
+} from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runPreflight } from "./index.js";
@@ -18,6 +25,13 @@ import {
 import { formatMarkdown, formatMarkdownAll } from "./report/markdown.js";
 import { formatSarif } from "./report/sarif.js";
 import { formatJson, toEnvelope, type ReportRun } from "./report/json.js";
+import {
+  collectTimings,
+  createTracer,
+  formatTimings,
+  type RunTimings,
+  type Tracer,
+} from "./trace.js";
 import {
   loadRegistry,
   resolveInstance,
@@ -124,6 +138,10 @@ interface ParsedArgs {
   concurrency?: number;
   /** `run`: `--no-cache` — fetch every read, even a repeated one (F-X-2). */
   noCache: boolean;
+  /** `run`: `--timings` — per-check request and timing counts (F-X-5). */
+  timings: boolean;
+  /** `run`: `--trace <path>` — write an NDJSON trace; `SNPF_TRACE` otherwise. */
+  tracePath?: string;
   /** `drift`: downgrade a skipped pipeline stage from fail to warn. */
   allowStageSkip: boolean;
   /**
@@ -231,6 +249,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     withLastRun: false,
     allowEmpty: false,
     noCache: false,
+    timings: false,
     allowStageSkip: false,
     format: "pretty",
     force: false,
@@ -365,6 +384,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--no-cache":
         args.noCache = true;
         break;
+      case "--timings":
+        args.timings = true;
+        break;
+      case "--trace":
+        args.tracePath = tracePathArg(takeValue(arg));
+        break;
       case "--concurrency":
         args.concurrency = parseConcurrency(takeValue(arg), arg);
         break;
@@ -405,6 +430,8 @@ function parseArgs(argv: string[]): ParsedArgs {
             arg.slice("--run-timeout=".length),
             "--run-timeout",
           );
+        } else if (arg?.startsWith("--trace=")) {
+          args.tracePath = tracePathArg(arg.slice("--trace=".length));
         } else if (arg?.startsWith("--concurrency=")) {
           args.concurrency = parseConcurrency(
             arg.slice("--concurrency=".length),
@@ -526,6 +553,12 @@ Options:
                          the other requests for its Retry-After
       --no-cache         run: fetch every read instead of sharing identical
                          reads between checks (env SNPF_CACHE=0)
+      --timings          run: after the report, print per-check time, requests,
+                         retries and cache hits to stderr (json: a "timings"
+                         object per run instead)
+      --trace <path>     run: write a local NDJSON trace of the run (env
+                         SNPF_TRACE); file mode 0600, no query values, row
+                         data, headers or credentials
       --allow-stage-skip drift: warn instead of fail when <dst> is further down
                          the registry's promotesTo pipeline than the next stage
       --baseline [path]  run: demote findings recorded in a baseline file to
@@ -614,6 +647,7 @@ function render(
   instance?: string,
   checks?: readonly Check[],
   url?: string,
+  timings?: RunTimings,
 ): string {
   switch (format) {
     case "markdown":
@@ -626,6 +660,7 @@ function render(
           ...(instance !== undefined ? { instance } : {}),
           ...(url !== undefined ? { url } : {}),
           report,
+          ...(timings !== undefined ? { timings } : {}),
         },
       ]);
     case "junit":
@@ -650,6 +685,8 @@ interface NamedReport {
   report: PreflightReport;
   /** The instance URL the run targeted, when one was resolved. */
   url?: string;
+  /** `--timings` counts for this instance's run. */
+  timings?: RunTimings;
 }
 
 /** Append extra results to a report, recomputing its summary and `ok`. */
@@ -713,6 +750,7 @@ function renderAll(
         instance: r.name,
         ...(r.url !== undefined ? { url: r.url } : {}),
         report: r.report,
+        ...(r.timings !== undefined ? { timings: r.timings } : {}),
       })),
     );
   }
@@ -866,6 +904,62 @@ function resolveRunTargets(
 interface InstanceRun {
   report: PreflightReport;
   url?: string;
+  /** `--timings` counts for the run. */
+  timings?: RunTimings;
+}
+
+/** A `--trace` value: a non-empty path. */
+function tracePathArg(value: string): string {
+  if (value.trim() === "") {
+    throw new UsageError("--trace needs a file path.");
+  }
+  return value;
+}
+
+/** The `--trace` file a `run` writes to, shared by every instance it runs. */
+interface TraceSink {
+  path?: string;
+  fd?: number;
+  tracer?: Tracer;
+}
+
+/**
+ * Open the trace file once: created (or truncated) with mode 0600, and
+ * re-chmodded in case it already existed with a wider mode.
+ */
+function openTrace(sink: TraceSink, path: string): Tracer {
+  if (sink.tracer) return sink.tracer;
+  let fd: number;
+  try {
+    fd = openSync(path, "w", 0o600);
+    fchmodSync(fd, 0o600);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new UsageError(`Cannot write the trace file ${path}: ${detail}`);
+  }
+  sink.path = path;
+  sink.fd = fd;
+  sink.tracer = createTracer((line) => {
+    writeSync(fd, line);
+  });
+  return sink.tracer;
+}
+
+function closeTrace(sink: TraceSink): void {
+  sink.tracer?.close();
+  if (sink.fd !== undefined) closeSync(sink.fd);
+  sink.tracer = undefined;
+  sink.fd = undefined;
+}
+
+/** The host name of an instance URL, for the trace (no scheme or path). */
+function instanceHost(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).hostname || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Run the check suite against one resolved instance. */
@@ -873,6 +967,7 @@ async function runOneInstance(
   target: RunTarget,
   args: ParsedArgs,
   cwd: string,
+  trace: TraceSink = {},
 ): Promise<InstanceRun> {
   const loaded = await loadConfig(cwd, {
     configPath: args.configPath,
@@ -975,8 +1070,20 @@ async function runOneInstance(
     (envTimeout !== undefined && envTimeout.trim() !== ""
       ? parseBudget(envTimeout, "SNPF_CHECK_TIMEOUT")
       : undefined);
-  const report = applyPolicy(
-    await runPreflight(ctx, defaultChecks, {
+  // F-X-5: the trace file is opened once per command, on the first instance.
+  const envTrace = loaded.env.SNPF_TRACE?.trim();
+  const tracePath = args.tracePath ?? (envTrace ? envTrace : undefined);
+  if (tracePath !== undefined) {
+    openTrace(trace, resolve(cwd, tracePath)).setRun({
+      version: readVersion(),
+      instanceHost: instanceHost(instanceUrl),
+    });
+  }
+  const collector = args.timings ? collectTimings() : undefined;
+  let timings: RunTimings | undefined;
+  let raw: PreflightReport;
+  try {
+    raw = await runPreflight(ctx, defaultChecks, {
       signal: interrupt.signal,
       concurrency:
         args.concurrency ?? loaded.concurrency ?? DEFAULT_CONCURRENCY,
@@ -984,9 +1091,15 @@ async function runOneInstance(
       ...(args.runTimeoutMs !== undefined
         ? { runTimeoutMs: args.runTimeoutMs }
         : {}),
-    }),
-    policy,
-  );
+    });
+  } finally {
+    timings = collector?.stop(defaultChecks.map((c) => c.name));
+  }
+  const report = applyPolicy(raw, policy);
+  const extra = {
+    ...(instanceUrl ? { url: instanceUrl } : {}),
+    ...(timings ? { timings } : {}),
+  };
 
   if (writePath) {
     const b = baselineFromReport(report, target.name, new Date());
@@ -996,11 +1109,11 @@ async function runOneInstance(
         b.entries.length === 1 ? "y" : "ies"
       } → ${writePath}\n`,
     );
-    return { report, ...(instanceUrl ? { url: instanceUrl } : {}) };
+    return { report, ...extra };
   }
   return {
     report: baseline ? applyBaseline(report, baseline, new Date()) : report,
-    ...(instanceUrl ? { url: instanceUrl } : {}),
+    ...extra,
   };
 }
 
@@ -1038,10 +1151,42 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
   const registry = await loadRegistry(cwd, args.registryPath);
   const targets = resolveRunTargets(args, registry);
 
+  const trace: TraceSink = {};
+  try {
+    await runTargets(targets, args, cwd, trace);
+  } finally {
+    closeTrace(trace);
+  }
+}
+
+/** `--timings` outside json: one stderr table per instance, after the report. */
+function writeTimings(
+  format: OutputFormat,
+  runs: readonly { name?: string; timings?: RunTimings }[],
+): void {
+  if (format === "json") return;
+  for (const run of runs) {
+    if (run.timings) {
+      process.stderr.write(formatTimings(run.timings, run.name));
+    }
+  }
+}
+
+async function runTargets(
+  targets: RunTarget[],
+  args: ParsedArgs,
+  cwd: string,
+  trace: TraceSink,
+): Promise<void> {
   const [firstTarget] = targets;
   if (!args.all && targets.length === 1 && firstTarget && !firstTarget.name) {
     // Single-instance: preserve the original single-report output exactly.
-    const { report, url } = await runOneInstance(firstTarget, args, cwd);
+    const { report, url, timings } = await runOneInstance(
+      firstTarget,
+      args,
+      cwd,
+      trace,
+    );
     process.stdout.write(
       render(
         report,
@@ -1049,19 +1194,27 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
         undefined,
         ranChecks(defaultChecks, [report]),
         url,
+        timings,
       ),
     );
+    writeTimings(args.format, [{ ...(timings ? { timings } : {}) }]);
     process.exitCode = report.ok ? 0 : 1;
     return;
   }
 
   const reports: NamedReport[] = [];
   for (const target of targets) {
-    const { report, url } = await runOneInstance(target, args, cwd);
+    const { report, url, timings } = await runOneInstance(
+      target,
+      args,
+      cwd,
+      trace,
+    );
     reports.push({
       name: target.name ?? "instance",
       report,
       ...(url !== undefined ? { url } : {}),
+      ...(timings !== undefined ? { timings } : {}),
     });
   }
 
@@ -1078,11 +1231,13 @@ async function commandRun(args: ParsedArgs, cwd: string): Promise<void> {
         firstReport.name,
         ran,
         firstReport.url,
+        firstReport.timings,
       ),
     );
   } else {
     process.stdout.write(renderAll(reports, args.format, ran));
   }
+  writeTimings(args.format, reports);
   process.exitCode = reports.every((r) => r.report.ok) ? 0 : 1;
 }
 

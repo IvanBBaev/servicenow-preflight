@@ -23,6 +23,12 @@ import { abortReason, anySignal, raceAbort, sleep } from "./abort.js";
 import { createLimiter, limitProblem, type Limiter } from "./limiter.js";
 import { createReadCache, deepFreeze, readKey } from "./cache.js";
 import { openProxyTunnel, parseProxyUrl, resolveProxy } from "./proxy.js";
+import {
+  cacheScope,
+  httpTraced,
+  publishCacheHit,
+  publishHttp,
+} from "../trace.js";
 
 /**
  * How the client authenticates to the instance.
@@ -1381,6 +1387,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         }
       }
       init.signal = anySignal([AbortSignal.timeout(timeoutMs), caller]);
+      const startedAt = performance.now();
       try {
         // Race the signal too, so a transport that ignores it cannot hang us.
         const res = await raceAbort(transport(url, init), init.signal);
@@ -1396,10 +1403,17 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           limiter?.pause(retryAfterMs(resHeaders["retry-after"]));
         }
       } catch (cause) {
-        if (caller?.aborted) throw abortedError(caller);
         const err = cause instanceof Error ? cause : new Error(String(cause));
         const timedOut =
           err.name === "TimeoutError" || err.name === "AbortError";
+        publishHttp({
+          method,
+          path,
+          ms: performance.now() - startedAt,
+          attempt: rateLimitAttempts + 1,
+          error: caller?.aborted ? "aborted" : timedOut ? "timeout" : "network",
+        });
+        if (caller?.aborted) throw abortedError(caller);
         // The URL includes the instance origin only (no query/secret leakage).
         throw new SnNetworkError(
           timedOut
@@ -1408,6 +1422,18 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         );
       } finally {
         release?.();
+      }
+      if (httpTraced()) {
+        publishHttp({
+          method,
+          path,
+          status,
+          ms: performance.now() - startedAt,
+          attempt: rateLimitAttempts + 1,
+          ...(status === 429
+            ? { retryAfterMs: retryAfterMs(resHeaders["retry-after"]) }
+            : {}),
+        });
       }
 
       // SN-6: honour Retry-After on a 429, up to a bounded number of attempts.
@@ -1664,17 +1690,24 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       ): Promise<TableQueryResult> {
         if (!cache) return runQuery(params, signal);
         let shared: TableQueryResult;
+        let loaded = false;
         try {
           shared = await cache.get(
             readKey(name, params),
-            async (loadSignal) =>
-              deepFreeze(await runQuery(params, loadSignal)),
+            (loadSignal) => {
+              loaded = true;
+              // F-X-5: requests made to fill the cache are traced as `miss`.
+              return cacheScope.run("miss", async () =>
+                deepFreeze(await runQuery(params, loadSignal)),
+              );
+            },
             signal,
           );
         } catch (err) {
           if (signal?.aborted) throw abortedError(signal);
           throw err;
         }
+        if (!loaded) publishCacheHit("GET", base);
         return { ...shared, rows: [...shared.rows] };
       }
 

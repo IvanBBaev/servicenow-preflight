@@ -97,6 +97,38 @@
         "fail"
       ]
     },
+    "CheckTiming": {
+      "description": "One check's share of a run (F-X-5 `--timings`).",
+      "type": "object",
+      "properties": {
+        "check": {
+          "type": "string"
+        },
+        "ms": {
+          "description": "Wall-clock milliseconds from the check's start to its verdict.",
+          "type": "number"
+        },
+        "requests": {
+          "description": "HTTP requests sent (cache hits excluded, retries included).",
+          "type": "number"
+        },
+        "retries": {
+          "description": "Requests that were a `429` retry.",
+          "type": "number"
+        },
+        "cacheHits": {
+          "description": "Reads answered by the run's read cache.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "check",
+        "ms",
+        "requests",
+        "retries",
+        "cacheHits"
+      ]
+    },
     "Finding": {
       "description": "One record-level finding behind a check's verdict.",
       "type": "object",
@@ -211,10 +243,47 @@
         },
         "report": {
           "$ref": "#/$defs/PreflightReport"
+        },
+        "timings": {
+          "description": "Per-check request and timing counts; present only under `--timings`.",
+          "$ref": "#/$defs/RunTimings"
         }
       },
       "required": [
         "report"
+      ]
+    },
+    "RunTimings": {
+      "description": "Per-check and whole-run timings for one instance.",
+      "type": "object",
+      "properties": {
+        "ms": {
+          "description": "Wall-clock milliseconds for the whole run.",
+          "type": "number"
+        },
+        "requests": {
+          "type": "number"
+        },
+        "retries": {
+          "type": "number"
+        },
+        "cacheHits": {
+          "type": "number"
+        },
+        "checks": {
+          "description": "One entry per check that started, in registry order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckTiming"
+          }
+        }
+      },
+      "required": [
+        "ms",
+        "requests",
+        "retries",
+        "cacheHits",
+        "checks"
       ]
     }
   }

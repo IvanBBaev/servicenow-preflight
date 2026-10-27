@@ -17,6 +17,7 @@ import { anySignal } from "./http/abort.js";
 import { withSignal } from "./http/client.js";
 import { linkRunContext } from "./http/query.js";
 import { concurrencyProblem, runPool } from "./runner/pool.js";
+import { checkScope, publishCheck, publishRun } from "./trace.js";
 import type {
   Check,
   CheckResult,
@@ -156,6 +157,17 @@ export {
   type NamedReport,
 } from "./report/junit.js";
 export { formatSarif } from "./report/sarif.js";
+export {
+  collectTimings,
+  createTracer,
+  formatTimings,
+  TRACE_CHANNELS,
+  type CheckTiming,
+  type RunTimings,
+  type TimingsCollector,
+  type Tracer,
+  type TraceRunFields,
+} from "./trace.js";
 export {
   REPORT_SCHEMA_VERSION,
   toEnvelope,
@@ -414,7 +426,11 @@ async function runCheck(
   });
   const work = (async (): Promise<CheckResult> => {
     try {
-      return coerceResult(check, await check.run(checkCtx));
+      // F-X-5: the check's requests are traced under its name.
+      return coerceResult(
+        check,
+        await checkScope.run(check.name, () => check.run(checkCtx)),
+      );
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       return {
@@ -424,8 +440,17 @@ async function runCheck(
       };
     }
   })();
+  const startedAt = performance.now();
+  publishCheck({ phase: "start", check: check.name });
   try {
-    return await Promise.race([work, cut]);
+    const result = await Promise.race([work, cut]);
+    publishCheck({
+      phase: "end",
+      check: check.name,
+      status: result.status,
+      ms: performance.now() - startedAt,
+    });
+    return result;
   } finally {
     clearTimeout(timer);
     // A check that finished on its own keeps its signal un-aborted: aborting it
@@ -565,6 +590,8 @@ export async function runPreflight(
   selected.forEach((check, index) =>
     (check.meta?.serial === true ? serial : parallel).push(index),
   );
+  const runStartedAt = performance.now();
+  publishRun({ phase: "start", checks: selected.length, concurrency });
   try {
     await runPool(parallel, concurrency, async (index) => {
       results[index] = await runOne(selected[index] as Check);
@@ -596,6 +623,11 @@ export async function runPreflight(
     };
   });
 
+  publishRun({
+    phase: "end",
+    ms: performance.now() - runStartedAt,
+    summary: { ...summary },
+  });
   return { ok: summary.fail === 0, results: normalized, summary };
 }
 

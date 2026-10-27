@@ -4,6 +4,7 @@
  * (`schemas/report.v1.json`) is generated from these declarations by
  * `scripts/gen-schema.mjs`.
  */
+import type { RunTimings } from "../trace.js";
 import type { PreflightReport } from "../types.js";
 
 /** The envelope's format version; bumped only on a breaking shape change. */
@@ -16,6 +17,8 @@ export interface ReportRun {
   /** The instance origin (`https://host`), without credentials or a path. */
   url?: string;
   report: PreflightReport;
+  /** Per-check request and timing counts; present only under `--timings`. */
+  timings?: RunTimings;
 }
 
 /** The top-level JSON report document. */
@@ -70,6 +73,7 @@ export function toEnvelope(
         ...(r.instance !== undefined ? { instance: r.instance } : {}),
         ...(url !== undefined ? { url } : {}),
         report: r.report,
+        ...(r.timings !== undefined ? { timings: r.timings } : {}),
       };
     }),
   };

@@ -10,6 +10,7 @@ import {
   readFileSync,
   rmSync,
   existsSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1529,6 +1530,138 @@ test("CLI reports are identical at --concurrency 1 and 4 in every format", async
   } finally {
     server.closeAllConnections();
     server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// F-X-5: --timings / --trace / SNPF_TRACE.
+async function startEmptyInstance() {
+  const server = createHttpServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ result: [] }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    stop() {
+      server.closeAllConnections();
+      server.close();
+    },
+  };
+}
+
+function projectDir(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(
+    join(dir, "preflight.config.json"),
+    JSON.stringify({ scope: "x_acme_app" }),
+  );
+  return dir;
+}
+
+const CREDS = { SNPF_USER: "tracer-user", SNPF_PASS: "s3cret-pass" };
+
+test("CLI --trace writes a 0600 NDJSON trace from run.start to run.end", async () => {
+  const instance = await startEmptyInstance();
+  const dir = projectDir("snpf-trace-");
+  try {
+    const res = await runCliAsync(
+      ["run", "--instance", instance.url, "--json", "--trace", "trace.ndjson"],
+      { cwd: dir, env: CREDS },
+    );
+    assert.ok(res.status === 0 || res.status === 1, res.stderr);
+    const file = join(dir, "trace.ndjson");
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    const text = readFileSync(file, "utf8");
+    const events = text
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(events[0].type, "run.start");
+    assert.equal(events[0].instanceHost, "127.0.0.1");
+    assert.equal(events.at(-1).type, "run.end");
+    assert.ok(events.some((e) => e.type === "http" && e.status === 200));
+    assert.ok(events.some((e) => e.type === "check.end"));
+    assert.doesNotMatch(text, /tracer-user|s3cret-pass|x_acme_app|sysparm/);
+    // The report itself is unchanged by tracing: no timings without --timings.
+    assert.equal(JSON.parse(res.stdout).runs[0].timings, undefined);
+  } finally {
+    instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI reads SNPF_TRACE and narrows an existing trace file to 0600", async () => {
+  const instance = await startEmptyInstance();
+  const dir = projectDir("snpf-trace-env-");
+  const file = join(dir, "env.ndjson");
+  writeFileSync(file, "old\n", { mode: 0o644 });
+  try {
+    await runCliAsync(["run", "--instance", instance.url, "--json"], {
+      cwd: dir,
+      env: { ...CREDS, SNPF_TRACE: "env.ndjson" },
+    });
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    const first = readFileSync(file, "utf8").split("\n", 1)[0];
+    assert.equal(JSON.parse(first).type, "run.start");
+  } finally {
+    instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI rejects an empty --trace path with exit 2", () => {
+  const res = runCli(["run", "--trace="]);
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /--trace needs a file path/);
+});
+
+test("CLI --timings adds a timings object per run to the JSON", async () => {
+  const instance = await startEmptyInstance();
+  const dir = projectDir("snpf-timings-json-");
+  try {
+    const res = await runCliAsync(
+      ["run", "--instance", instance.url, "--json", "--timings"],
+      { cwd: dir, env: CREDS },
+    );
+    const run = JSON.parse(res.stdout).runs[0];
+    const names = run.report.results.map((r) => r.name);
+    assert.ok(run.timings.requests > 0);
+    assert.ok(run.timings.ms >= 0);
+    // Every check that ran is listed, in report (registry) order.
+    assert.deepEqual(
+      run.timings.checks.map((c) => c.check),
+      names.filter((n) => run.timings.checks.some((c) => c.check === n)),
+    );
+    assert.equal(
+      run.timings.checks.reduce((sum, c) => sum + c.requests, 0),
+      run.timings.requests,
+    );
+    assert.doesNotMatch(res.stderr, /Timings/);
+  } finally {
+    instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI --timings prints a stderr table after a pretty report", async () => {
+  const instance = await startEmptyInstance();
+  const dir = projectDir("snpf-timings-pretty-");
+  try {
+    const res = await runCliAsync(
+      ["run", "--instance", instance.url, "--timings"],
+      { cwd: dir, env: CREDS },
+    );
+    assert.match(res.stdout, /passed, \d+ warnings, \d+ failed/);
+    assert.match(
+      res.stderr,
+      /^Timings:\ncheck +ms +requests +retries +cache hits\n/m,
+    );
+    assert.match(res.stderr, /^total +\d+ +\d+ +\d+ +\d+$/m);
+    assert.doesNotMatch(res.stdout, /Timings/);
+  } finally {
+    instance.stop();
     rmSync(dir, { recursive: true, force: true });
   }
 });
