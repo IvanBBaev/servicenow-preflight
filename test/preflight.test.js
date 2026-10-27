@@ -597,3 +597,159 @@ test("the scope lookup is shared across checks, but redone after a cancelled che
   assert.equal(second.results[1].status, "pass");
   assert.equal(reads, 2);
 });
+
+// F-X-3: bounded concurrent check execution.
+
+/** A check that takes `ms`, tracking how many checks are running at once. */
+function timedCheck(id, ms, track, extra = {}) {
+  return {
+    name: id,
+    description: id,
+    ...extra,
+    run: async () => {
+      track.active += 1;
+      track.peak = Math.max(track.peak, track.active);
+      track.started.push(id);
+      await new Promise((r) => setTimeout(r, ms));
+      track.active -= 1;
+      return { name: id, status: "pass", message: "ok" };
+    },
+  };
+}
+
+const newTrack = () => ({ active: 0, peak: 0, started: [] });
+
+test("concurrency caps the checks running at once and keeps registry order", async () => {
+  const track = newTrack();
+  // Uneven durations, so checks settle out of order.
+  const checks = [40, 5, 30, 10, 25, 5, 15, 20].map((ms, i) =>
+    timedCheck(`c${i}`, ms, track),
+  );
+  const report = await runPreflight(ctx(), checks, { concurrency: 3 });
+  assert.equal(track.peak, 3);
+  assert.deepEqual(
+    report.results.map((r) => r.name),
+    checks.map((c) => c.name),
+  );
+  assert.equal(report.summary.pass, 8);
+});
+
+test("concurrency 1 (the library default) runs one check at a time", async () => {
+  for (const opts of [{}, { concurrency: 1 }]) {
+    const track = newTrack();
+    const checks = [10, 5, 10].map((ms, i) => timedCheck(`c${i}`, ms, track));
+    await runPreflight(ctx(), checks, opts);
+    assert.equal(track.peak, 1);
+    assert.deepEqual(track.started, ["c0", "c1", "c2"]);
+  }
+});
+
+test("serial checks run alone after the parallel ones, in registry order", async () => {
+  const track = newTrack();
+  const peaks = {};
+  const serial = (id) => {
+    const inner = timedCheck(id, 5, track, { meta: { serial: true } });
+    return {
+      ...inner,
+      run: async () => {
+        peaks[id] = track.active;
+        return inner.run();
+      },
+    };
+  };
+  const checks = [
+    serial("s1"),
+    timedCheck("p1", 20, track),
+    serial("s2"),
+    timedCheck("p2", 10, track),
+    timedCheck("p3", 15, track),
+  ];
+  const report = await runPreflight(ctx(), checks, { concurrency: 4 });
+  assert.deepEqual(track.started.slice(3), ["s1", "s2"]);
+  assert.deepEqual(
+    new Set(track.started.slice(0, 3)),
+    new Set(["p1", "p2", "p3"]),
+  );
+  // Nothing else was running when each serial check started.
+  assert.deepEqual(peaks, { s1: 0, s2: 0 });
+  assert.deepEqual(
+    report.results.map((r) => r.name),
+    ["s1", "p1", "s2", "p2", "p3"],
+  );
+});
+
+test("a throwing check fails at its own index under concurrency", async () => {
+  const track = newTrack();
+  const report = await runPreflight(
+    ctx(),
+    [
+      timedCheck("a", 10, track),
+      {
+        name: "boom",
+        description: "boom",
+        run: async () => {
+          throw new Error("kaput");
+        },
+      },
+      timedCheck("b", 5, track),
+    ],
+    { concurrency: 3 },
+  );
+  assert.deepEqual(
+    report.results.map((r) => [r.name, r.status]),
+    [
+      ["a", "pass"],
+      ["boom", "fail"],
+      ["b", "pass"],
+    ],
+  );
+  assert.match(report.results[1].message, /Check threw an error: kaput/);
+});
+
+test("an abort under concurrency fails every running and every pending check", async () => {
+  const controller = new AbortController();
+  const checks = [
+    hangingCheck("h1"),
+    hangingCheck("h2"),
+    hangingCheck("h3"),
+    { ...passing("serial"), meta: { serial: true } },
+  ];
+  setTimeout(() => controller.abort(), 10);
+  const report = await runPreflight(ctx(), checks, {
+    concurrency: 2,
+    signal: controller.signal,
+  });
+  const messages = report.results.map((r) => r.message);
+  assert.match(messages[0], /while this check was running/);
+  assert.match(messages[1], /while this check was running/);
+  assert.match(messages[2], /before this check started/);
+  assert.match(messages[3], /before this check started/);
+  assert.equal(report.summary.fail, 4);
+});
+
+test("concurrency speeds a run up without changing the report", async () => {
+  const make = () => {
+    const track = newTrack();
+    return Array.from({ length: 8 }, (_, i) => timedCheck(`c${i}`, 50, track));
+  };
+  let at = performance.now();
+  const serialReport = await runPreflight(ctx(), make(), { concurrency: 1 });
+  const serialMs = performance.now() - at;
+  at = performance.now();
+  const pooledReport = await runPreflight(ctx(), make(), { concurrency: 4 });
+  const pooledMs = performance.now() - at;
+  assert.ok(
+    pooledMs <= serialMs * 0.4,
+    `pooled ${pooledMs.toFixed(0)} ms vs serial ${serialMs.toFixed(0)} ms`,
+  );
+  assert.deepEqual(pooledReport, serialReport);
+});
+
+test("runPreflight rejects a concurrency outside 1-32", async () => {
+  for (const bad of [0, 33, 1.5, -1, Number.NaN]) {
+    await assert.rejects(
+      runPreflight(ctx(), [passing("x")], { concurrency: bad }),
+      RangeError,
+    );
+  }
+});

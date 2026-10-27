@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Concurrent checks** — a run executes up to `--concurrency <n>` checks at
+  once (default `4`, or `SNPF_CONCURRENCY`, 1–32); `atf-enablement` and
+  `atf-run` are marked `meta.serial` and run alone after the others. The
+  report keeps registry order and is identical at any concurrency. Library:
+  `runPreflight(ctx, checks, { concurrency })` (default `1`) and
+  `LoadedConfig.concurrency`.
 - **Read cache** — a run fetches each identical Table API read once and
   shares it between checks, which cuts the full registry's GETs by about 40%
   with an unchanged report. Failed reads are not cached; one check's timeout

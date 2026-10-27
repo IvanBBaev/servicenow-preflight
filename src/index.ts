@@ -16,6 +16,7 @@ import { sanitizeFindings } from "./findings.js";
 import { anySignal } from "./http/abort.js";
 import { withSignal } from "./http/client.js";
 import { linkRunContext } from "./http/query.js";
+import { concurrencyProblem, runPool } from "./runner/pool.js";
 import type {
   Check,
   CheckResult,
@@ -334,6 +335,12 @@ export interface RunPreflightOptions {
   timeoutMs?: number;
   /** Budget for the whole run in milliseconds; behaves like `signal` aborting. */
   runTimeoutMs?: number;
+  /**
+   * Most checks running at once (1–32, default 1). Checks with `meta.serial`
+   * always run one at a time, after the others, in registry order. The report
+   * keeps registry order either way.
+   */
+  concurrency?: number;
 }
 
 /** Reject a budget that is not a positive, finite number of milliseconds. */
@@ -439,7 +446,8 @@ async function runCheck(
  * Each check gets `ctx.signal` and a `ctx.http` bound to it; a check over
  * `timeoutMs` fails with "Check timed out after … ms", and an aborted or
  * timed-out run fails the checks it did not finish. The report is always
- * produced. Invalid budgets throw a `RangeError`.
+ * produced. `opts.concurrency` runs up to that many checks at once; the report
+ * keeps registry order. Invalid budgets or concurrency throw a `RangeError`.
  */
 export async function runPreflight(
   ctx: PreflightContext,
@@ -448,6 +456,13 @@ export async function runPreflight(
 ): Promise<PreflightReport> {
   assertBudget("timeoutMs", opts.timeoutMs);
   assertBudget("runTimeoutMs", opts.runTimeoutMs);
+  const concurrency = opts.concurrency ?? 1;
+  const badConcurrency = concurrencyProblem(concurrency);
+  if (badConcurrency !== undefined) {
+    throw new RangeError(
+      `runPreflight: concurrency ${badConcurrency} (got ${String(opts.concurrency)}).`,
+    );
+  }
 
   // Reject an ambiguous check set: two checks sharing a `name` make selection
   // (only/skip), result mapping, and reporting ambiguous. Fail closed rather
@@ -510,7 +525,7 @@ export async function runPreflight(
   // the whole run. Convert the throw into a `fail` result and keep going so the
   // report still renders and every other check still reports.
   //
-  // A run budget or a caller abort stops the run fail-closed: the running check
+  // A run budget or a caller abort stops the run fail-closed: every running check
   // is cut short and every check that has not started yet becomes a `fail` row,
   // so the report still lists the whole selection.
   let runTimedOut = false;
@@ -533,20 +548,29 @@ export async function runPreflight(
       ? `Run timed out after ${String(opts.runTimeoutMs)} ms (--run-timeout)`
       : "Run aborted";
 
-  const results: CheckResult[] = [];
-  try {
-    for (const check of selected) {
-      if (runSignal?.aborted) {
-        results.push({
+  const runOne = (check: Check): Promise<CheckResult> =>
+    runSignal?.aborted
+      ? Promise.resolve({
           name: check.name,
           status: "fail",
           message: `${stopReason()} before this check started.`,
-        });
-        continue;
-      }
-      results.push(
-        await runCheck(ctx, check, runSignal, opts.timeoutMs, stopReason),
-      );
+        })
+      : runCheck(ctx, check, runSignal, opts.timeoutMs, stopReason);
+
+  // Parallel checks go through the bounded pool first; `serial` checks then run
+  // alone, one after another. Each result lands at its check's registry index.
+  const results = new Array<CheckResult>(selected.length);
+  const parallel: number[] = [];
+  const serial: number[] = [];
+  selected.forEach((check, index) =>
+    (check.meta?.serial === true ? serial : parallel).push(index),
+  );
+  try {
+    await runPool(parallel, concurrency, async (index) => {
+      results[index] = await runOne(selected[index] as Check);
+    });
+    for (const index of serial) {
+      results[index] = await runOne(selected[index] as Check);
     }
   } finally {
     clearTimeout(runTimer);

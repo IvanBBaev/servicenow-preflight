@@ -185,6 +185,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--severity <check>=<level>` | `run`: report a check's non-pass result as `fail` or `warn`, or skip it (`off`). Repeatable; wins over the config `severity`. |
 | `--timeout <dur>`            | `run`: fail any check still running after `<dur>` (e.g. `30s`, `500ms`) and move on. Default: none; `SNPF_CHECK_TIMEOUT`.     |
 | `--run-timeout <dur>`        | `run`: stop the run (per instance) after `<dur>`; unfinished checks become `fail` rows.                                       |
+| `--concurrency <n>`          | `run`: most checks running at once, 1–32. Default `4`; `SNPF_CONCURRENCY`.                                                    |
 | `--max-inflight <n>`         | Most requests in flight at once, 1–64. Default `4`; `SNPF_MAX_INFLIGHT`.                                                      |
 | `--rps <n>`                  | Requests started per second, 0.5–100. Default: unlimited; `SNPF_RPS`.                                                         |
 | `--no-cache`                 | `run`: fetch every read, instead of sharing identical reads between checks. Also `SNPF_CACHE=0`.                              |
@@ -193,6 +194,14 @@ Durations take a unit: `ms`, `s`, `m`, `h`, `d` or `w`. A timed-out check is
 cancelled — its in-flight requests are aborted — and reported as
 `Check timed out after 30000 ms (--timeout).`; the per-request HTTP timeout
 still applies inside it.
+
+### Performance
+
+A run executes up to `--concurrency` checks at once (default `4`, or
+`SNPF_CONCURRENCY`); the ATF checks always run alone, one after another,
+once the others are done. The report keeps registry order, so it is the same
+at any concurrency. Requests from every running check share the client's
+in-flight cap below.
 
 `--max-inflight` and `--rps` keep a run from tripping the instance's inbound
 REST rate limit or starving its other integrations. A `429` answer also holds
@@ -635,8 +644,11 @@ console.log(report.ok, report.summary); // e.g. false { pass: 2, warn: 4, fail: 
 - **`runPreflight(ctx, checks?, opts?)`** → `Promise<PreflightReport>`. Defaults
   to `defaultChecks`; `ctx.select` (only / skip by name) filters before they run.
   `opts` (`RunPreflightOptions`) takes `signal` (an `AbortSignal` that cancels
-  the run), `timeoutMs` (per check) and `runTimeoutMs` (whole run); a budget
-  that is not a positive finite number throws `RangeError`. Every check gets
+  the run), `timeoutMs` (per check), `runTimeoutMs` (whole run) and
+  `concurrency` (checks at once, 1–32, default `1`; checks with
+  `meta.serial` run alone after the others, and results keep registry order).
+  A budget that is not a positive finite number, or a concurrency out of
+  range, throws `RangeError`. Every check gets
   its own `ctx.signal`, aborted when it times out or the run stops, and a
   `ctx.http` bound to that signal, so a check that only uses `ctx.http` is
   cancelled with no extra code; pass `ctx.signal` on to any other async work.

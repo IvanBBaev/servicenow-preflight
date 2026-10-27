@@ -273,6 +273,8 @@ export const atfRun: Check = {
   description: "The configured ATF test suite passes.",
   meta: {
     requires: "atfSuites",
+    // Runs alone: ATF executions contend with every other read on the instance.
+    serial: true,
     summary:
       "The configured ATF test suites run green — no failing or errored tests.",
     severity: "blocker",

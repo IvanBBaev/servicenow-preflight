@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { runPreflight } from "./index.js";
 import {
   loadConfig,
+  parseConcurrency,
   parseRequestLimit,
   UsageError,
   type RequestLimits,
@@ -119,6 +120,8 @@ interface ParsedArgs {
   maxInFlight?: number;
   /** Client requests-per-second limit; `SNPF_RPS` otherwise (default none). */
   rps?: number;
+  /** `run`: checks run at once; `SNPF_CONCURRENCY` otherwise (default 4). */
+  concurrency?: number;
   /** `run`: `--no-cache` — fetch every read, even a repeated one (F-X-2). */
   noCache: boolean;
   /** `drift`: downgrade a skipped pipeline stage from fail to warn. */
@@ -197,6 +200,9 @@ function parseBudget(value: string, flag: string): number {
   }
   return ms;
 }
+
+/** Default check concurrency the CLI applies when neither flag nor env sets one. */
+const DEFAULT_CONCURRENCY = 4;
 
 /** Default in-flight cap the CLI applies when neither flag nor env sets one. */
 const DEFAULT_MAX_IN_FLIGHT = 4;
@@ -359,6 +365,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--no-cache":
         args.noCache = true;
         break;
+      case "--concurrency":
+        args.concurrency = parseConcurrency(takeValue(arg), arg);
+        break;
       case "--max-inflight":
         args.maxInFlight = parseRequestLimit(
           "maxInFlight",
@@ -395,6 +404,11 @@ function parseArgs(argv: string[]): ParsedArgs {
           args.runTimeoutMs = parseBudget(
             arg.slice("--run-timeout=".length),
             "--run-timeout",
+          );
+        } else if (arg?.startsWith("--concurrency=")) {
+          args.concurrency = parseConcurrency(
+            arg.slice("--concurrency=".length),
+            "--concurrency",
           );
         } else if (arg?.startsWith("--max-inflight=")) {
           args.maxInFlight = parseRequestLimit(
@@ -502,6 +516,9 @@ Options:
       --run-timeout <dur>
                          run: budget for each instance's whole run; checks
                          not finished in time fail as aborted
+      --concurrency <n>  run: most checks running at once, 1-32 (default 4;
+                         env SNPF_CONCURRENCY). ATF checks always run alone,
+                         after the others; the report keeps registry order
       --max-inflight <n> run/sync: most requests in flight at once, 1-64
                          (default 4; env SNPF_MAX_INFLIGHT)
       --rps <n>          run/sync: most requests started per second, 0.5-100
@@ -961,6 +978,8 @@ async function runOneInstance(
   const report = applyPolicy(
     await runPreflight(ctx, defaultChecks, {
       signal: interrupt.signal,
+      concurrency:
+        args.concurrency ?? loaded.concurrency ?? DEFAULT_CONCURRENCY,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(args.runTimeoutMs !== undefined
         ? { runTimeoutMs: args.runTimeoutMs }

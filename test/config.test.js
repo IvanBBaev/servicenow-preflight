@@ -1106,3 +1106,38 @@ test("loadConfig reads SNPF_CACHE as a switch", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- F-X-3: SNPF_CONCURRENCY -------------------------------------------------
+
+test("loadConfig reads SNPF_CONCURRENCY in the instance namespace", async () => {
+  const dir = tempDir();
+  try {
+    const at = async (env, envPrefix) =>
+      (
+        await loadConfig(dir, {
+          dotenv: false,
+          env,
+          ...(envPrefix ? { envPrefix } : {}),
+        })
+      ).concurrency;
+    assert.equal(await at({}), undefined);
+    assert.equal(await at({ SNPF_CONCURRENCY: " " }), undefined);
+    assert.equal(await at({ SNPF_CONCURRENCY: " 8 " }), 8);
+    assert.equal(
+      await at({ SNPF_CONCURRENCY: "8", SNPF_PROD_CONCURRENCY: "2" }, "PROD"),
+      2,
+    );
+    for (const bad of ["0", "33", "2.5", "many"]) {
+      await assert.rejects(
+        at({ SNPF_CONCURRENCY: bad }),
+        (err) =>
+          err instanceof UsageError &&
+          /SNPF_CONCURRENCY must be a whole number between 1 and 32/.test(
+            err.message,
+          ),
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

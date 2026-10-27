@@ -28,8 +28,18 @@ test("every default check declares verdicts, severity and tables", () => {
     }
     assert.ok(meta.remediation && meta.remediation.length > 0, check.name);
     assert.equal(meta.offline, undefined, check.name);
-    assert.equal(meta.serial, undefined, check.name);
   }
+});
+
+test("only the ATF checks run serially", () => {
+  const serial = defaultChecks
+    .filter((check) => check.meta?.serial !== undefined)
+    .map((check) => [check.name, check.meta.serial])
+    .sort();
+  assert.deepEqual(serial, [
+    ["atf-enablement", true],
+    ["atf-run", true],
+  ]);
 });
 
 test("advisory checks are the nine that never fail on a finding", () => {

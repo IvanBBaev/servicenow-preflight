@@ -1469,3 +1469,66 @@ test("CLI rejects an unknown SNPF_CACHE value with exit 2", () => {
   assert.equal(res.status, 2, res.stderr);
   assert.match(res.stderr, /SNPF_CACHE must be one of/);
 });
+
+// F-X-3: --concurrency / SNPF_CONCURRENCY.
+for (const [label, args, env] of [
+  ["--concurrency 0", ["--concurrency", "0"], {}],
+  ["--concurrency=33", ["--concurrency=33"], {}],
+  ["SNPF_CONCURRENCY=x", [], { SNPF_CONCURRENCY: "x" }],
+]) {
+  test(`CLI rejects an invalid concurrency (${label}) with exit 2`, () => {
+    const res = runCli(
+      [
+        ...args,
+        "--only",
+        "instance-url-configured",
+        "--instance",
+        "https://dev12345.service-now.com",
+      ],
+      { env },
+    );
+    assert.equal(res.status, 2, res.stderr);
+    assert.match(
+      res.stderr,
+      /(--concurrency|SNPF_CONCURRENCY) must be a whole number between 1 and 32/,
+    );
+  });
+}
+
+test("CLI reports are identical at --concurrency 1 and 4 in every format", async () => {
+  const server = createHttpServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ result: [] }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const dir = mkdtempSync(join(tmpdir(), "snpf-concurrency-"));
+  writeFileSync(
+    join(dir, "preflight.config.json"),
+    JSON.stringify({ scope: "x_acme_app" }),
+  );
+  const run = async (format, concurrency) => {
+    const res = await runCliAsync(
+      ["run", "--instance", url, "--format", format, ...concurrency],
+      { cwd: dir, env: { SNPF_USER: "u", SNPF_PASS: "p" } },
+    );
+    // Timestamps and JUnit timings are wall-clock; they legitimately differ.
+    return res.stdout
+      .replace(/time="[^"]*"/g, 'time=""')
+      .replace(/timestamp="[^"]*"/g, 'timestamp=""')
+      .replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, "<time>");
+  };
+  try {
+    for (const format of ["json", "sarif", "junit"]) {
+      const serial = await run(format, ["--concurrency", "1"]);
+      const pooled = await run(format, ["--concurrency=4"]);
+      assert.ok(serial.length > 0, format);
+      assert.equal(pooled, serial, format);
+    }
+  } finally {
+    server.closeAllConnections();
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

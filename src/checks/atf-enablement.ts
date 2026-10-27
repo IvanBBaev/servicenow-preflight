@@ -124,6 +124,8 @@ export const atfEnablement: Check = {
   description: "ATF test execution is enabled on the target instance.",
   meta: {
     requires: "ALWAYS",
+    // Runs alone, next to atf-run, so ATF state is read with nothing else in flight.
+    serial: true,
     summary:
       "ATF test execution is enabled instance-wide — optionally with an online client test runner.",
     severity: "blocker",

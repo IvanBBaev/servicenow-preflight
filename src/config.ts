@@ -5,6 +5,7 @@ import { resolve, isAbsolute } from "node:path";
 import type { CheckSelection, PreflightAuth, SnTls } from "./types.js";
 import { isSafeIdentifier } from "./http/query.js";
 import { limitProblem } from "./http/limiter.js";
+import { concurrencyProblem } from "./runner/pool.js";
 import type { SeverityPolicy } from "./policy.js";
 
 /**
@@ -108,6 +109,25 @@ export interface LoadedConfig {
    * when set. The CLI caches reads unless this is `false` (F-X-2).
    */
   cache?: boolean;
+  /** `SNPF_CONCURRENCY` (checks run at once, 1-32), when set (F-X-3). */
+  concurrency?: number;
+}
+
+/**
+ * Parse a check concurrency from a flag or an env variable. Blank yields
+ * `undefined`; anything outside 1-32 is a {@link UsageError} naming `label`.
+ */
+export function parseConcurrency(
+  value: string | undefined,
+  label: string,
+): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const n = Number(value.trim());
+  const problem = concurrencyProblem(n);
+  if (problem) {
+    throw new UsageError(`${label} ${problem} (got "${value.trim()}").`);
+  }
+  return n;
 }
 
 /** Client request limits (see `SnClientConfig.maxInFlight` / `rps`). */
@@ -207,6 +227,8 @@ const ENV = {
   rps: "SNPF_RPS",
   /** Per-run read cache switch (F-X-2). */
   cache: "SNPF_CACHE",
+  /** Checks run at once (F-X-3). */
+  concurrency: "SNPF_CONCURRENCY",
 } as const;
 
 /**
@@ -806,6 +828,7 @@ export async function loadConfig(
   if (rps !== undefined) limits.rps = rps;
 
   const cache = parseSwitch(env[ENV.cache], ENV.cache);
+  const concurrency = parseConcurrency(env[ENV.concurrency], ENV.concurrency);
 
   return {
     config,
@@ -815,5 +838,6 @@ export async function loadConfig(
     env: fullEnv,
     limits,
     ...(cache !== undefined ? { cache } : {}),
+    ...(concurrency !== undefined ? { concurrency } : {}),
   };
 }
