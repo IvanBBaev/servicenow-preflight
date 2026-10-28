@@ -258,13 +258,19 @@
               <div class="head">
                 <span class="num">1</span><span class="code">BLOCKED</span>
               </div>
-              <p>A fail, a zero-match selection, or an unexpected runtime error.</p>
+              <p>A check returned fail, or a selection matched zero checks.</p>
             </div>
             <div class="exit-card warn">
               <div class="head">
                 <span class="num">2</span><span class="code">REJECTED</span>
               </div>
               <p>A usage error — bad flags or config, caught before any check runs.</p>
+            </div>
+            <div class="exit-card warn">
+              <div class="head">
+                <span class="num">3</span><span class="code">GROUNDED</span>
+              </div>
+              <p>A runtime error — network, instance outage or unreadable file; the tool could not run.</p>
             </div>
           </div>
         </div>

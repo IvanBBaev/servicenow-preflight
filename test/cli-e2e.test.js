@@ -966,6 +966,31 @@ test("CLI splits exit codes: a check failure is 1, a usage error is 2 (CC-41)", 
   assert.match(misused.stderr, /Unknown option "--nope"/);
 });
 
+test("CLI exits 2 when an SNPF_* '@' file cannot be read (config error, A-4)", () => {
+  const res = runCli(["--only", "instance-url-configured"], {
+    env: {
+      SNPF_INSTANCE: "https://example.service-now.com",
+      SNPF_OAUTH_CLIENT_ID: "cid",
+      SNPF_OAUTH_CLIENT_SECRET: "csecret",
+      SNPF_OAUTH_JWT_KEY: "@/no/such/file.key",
+    },
+  });
+  assert.equal(res.status, 2, res.stderr);
+  assert.match(
+    res.stderr,
+    /Could not read the file referenced by an SNPF_\* '@' value/,
+  );
+});
+
+test("CLI help documents exit 3 for runtime errors (A-4)", () => {
+  const res = runCli(["--help"]);
+  assert.equal(res.status, 0);
+  assert.match(
+    res.stdout,
+    /\n {2}3 {2}a runtime error: the tool could not run/,
+  );
+});
+
 // --- Config-file proxy / noProxy reach the client (SR-5) -------------------
 
 /**
@@ -1973,8 +1998,10 @@ test("CLI explains a basic-auth 401 in the row and on a sync error", async () =>
     assert.match(row.message, /Possible causes: Wrong user name or password/);
     assert.ok(!row.message.includes(CREDS.SNPF_PASS));
 
+    // The refused request fails a check row inside `run` (exit 1) but escapes
+    // `sync` as a runtime error: exit 3, the tool could not run (A-4).
     const sync = await runCliAsync(["sync", "dev"], { cwd: dir, env: CREDS });
-    assert.equal(sync.status, 1);
+    assert.equal(sync.status, 3);
     assert.match(
       sync.stderr,
       /authentication failed \(401\): User is not authenticated\.\n {2}Possible causes:\n {2}- Wrong user name or password/,

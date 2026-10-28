@@ -286,7 +286,7 @@ function readMaybeFile(
   try {
     return readFileSync(abs, "utf8");
   } catch {
-    throw new Error(
+    throw new UsageError(
       `Could not read the file referenced by an SNPF_* '@' value: ${abs}`,
     );
   }

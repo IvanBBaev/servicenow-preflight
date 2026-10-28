@@ -165,11 +165,16 @@ suites you configure).
 **Exit codes:** `0` when no check `fail`ed; `1` when a check `fail`ed (or, under
 `--fail-on warn`, when a row `warn`ed that no baseline accepted), when a
 selection matched zero checks (nothing verified — treated as a failure, never a
-vacuous pass), or when the CLI hit an unexpected runtime error; `2` for a usage
+vacuous pass); `2` for a usage
 error — a bad invocation or config caught before any check runs (unknown option,
 invalid `--format` value, malformed `--max-age` or `--timeout`, missing required
-argument); `130` when the run was interrupted with Ctrl-C (SIGINT) — the checks
-cut short are reported as `fail` rows in the report that is still printed.
+argument, an invalid config, registry or state manifest); `3` for a runtime
+error — the tool could not run (a network or HTTP failure outside the checks,
+such as during `sync`, an unreadable or unwritable file, an unexpected crash),
+so CI can retry or page instead of treating it as a blocked release; `130` when
+the run was interrupted with Ctrl-C (SIGINT) — the checks cut short are reported
+as `fail` rows in the report that is still printed. A failure inside a check is
+always a `fail` row (exit `1`), never exit `3`.
 
 ## CLI
 
@@ -797,7 +802,9 @@ with `toEnvelope(runs, { version })` and `formatJson(envelope)`.
 ## CI integration
 
 `servicenow-preflight` exits non-zero on failure, so a single step gates a
-pipeline.
+pipeline. Exit `1` means a check blocked the release; exit `3` means the tool
+could not run (network, instance outage, unreadable file) — a pipeline can retry
+on `3` and treat only `1` as a blocked change.
 
 ### GitHub Action
 
@@ -848,7 +855,8 @@ by default it runs the CLI version matching its own `vX.Y.Z` tag, else
 | `working-directory` | `.`                    | directory to run in                                     |
 
 Outputs: `ok`, `pass`, `warn`, `fail` (summed over every instance),
-`sarif-file` and `report-json` (paths under `runner.temp`). On pull requests
+`sarif-file` and `report-json` (paths under `runner.temp`), and `exit-code`
+(`1` a check failed, `3` the tool could not run). On pull requests
 from forks set `sarif: false` — the token cannot upload there. The repo's own
 `action-selftest` workflow runs the action against the committed
 `test/fixtures/replay-sample` recording with no secrets.

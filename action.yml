@@ -86,6 +86,11 @@ outputs:
   report-json:
     description: Path of the JSON report.
     value: ${{ steps.run.outputs.report-json }}
+  exit-code:
+    description: >-
+      CLI exit code: `0` passed, `1` a check failed, `2` usage or config
+      error, `3` runtime error (the tool could not run), `130` interrupted.
+    value: ${{ steps.run.outputs.exit-code }}
 
 runs:
   using: composite

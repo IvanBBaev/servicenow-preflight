@@ -372,6 +372,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Exit code `3` for runtime errors** (breaking, pre-1.0) — an error that
+  escapes a command without being a usage or config error (a network or HTTP
+  failure outside the checks, e.g. during `sync`; an unreadable or unwritable
+  file; a crash) now exits `3` instead of `1`, so CI can tell "the tool could
+  not run" from "a check failed" (`1`). Failures inside a check are still
+  `fail` rows (exit `1`). An unreadable `SNPF_*` `@file` value is now a config
+  error (exit `2`). The GitHub Action exposes the code as the `exit-code`
+  output; HELP and README document `3`.
+
 - **Certification rule mapping** — `deprecated-apis` now declares rule 4.7
   (callback-less `g_form.getReference()`) and `inactive-artifacts` rule 6.6
   (dead metadata removed before packaging), so `list`, `explain` and SARIF

@@ -982,6 +982,9 @@ Exit codes:
      bad --format / --max-age / --timeout, a required registry absent, a --registry path
      that does not exist, an invalid config, registry or state manifest
      file, a drift manifest that was never synced)
+  3  a runtime error: the tool could not run (a network or HTTP failure
+     outside the checks, e.g. during sync; an unreadable or unwritable file;
+     an unexpected crash). Failures inside a check are fail rows (exit 1)
   130 interrupted (Ctrl-C): the partial report is printed first; checks cut
      short or never started fail as aborted
 
@@ -2200,8 +2203,12 @@ void main().catch((err: unknown) => {
       ),
     );
   }
-  // Split exit codes (CC-41): a usage/config error (wrong invocation, invalid
-  // config or registry) is a distinct failure mode from a check that ran and
-  // failed. Exit 2 for the former, 1 for a check failure or a runtime error.
-  process.exit(err instanceof UsageError ? 2 : 1);
+  // Split exit codes (CC-41, A-4): a usage/config error (wrong invocation,
+  // invalid config, registry or manifest) exits 2; anything else that escapes
+  // the command — a network or HTTP failure outside the checks, an unreadable
+  // or unwritable file, a crash — is a runtime error and exits 3, so CI can
+  // tell "the tool could not run" apart from "a check failed" (exit 1, set by
+  // the command through process.exitCode). Failures inside a check stay `fail`
+  // rows (fail-closed), so they still exit 1.
+  process.exit(err instanceof UsageError ? 2 : 3);
 });

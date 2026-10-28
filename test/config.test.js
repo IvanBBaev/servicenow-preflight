@@ -423,7 +423,12 @@ test("resolveAuthFromEnv throws when an '@path' value points at a missing file",
         SNPF_OAUTH_CLIENT_SECRET: "csecret",
         SNPF_OAUTH_JWT_KEY: "@/no/such/file.key",
       }),
-    /Could not read the file referenced by an SNPF_\* '@' value/,
+    (err) =>
+      // A config error, not a runtime one: the CLI maps it to exit 2 (A-4).
+      err.name === "UsageError" &&
+      /Could not read the file referenced by an SNPF_\* '@' value/.test(
+        err.message,
+      ),
   );
 });
 

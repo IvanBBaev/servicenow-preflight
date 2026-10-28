@@ -659,8 +659,8 @@ test("sync against an unreachable instance fails cleanly without leaking credent
   try {
     // A registry pointing at a host that does not resolve. With credentials in
     // the environment, the sync attempts the network, fails fast on DNS, and
-    // must surface a clean message (exit 1) that never echoes the password or a
-    // stack trace.
+    // must surface a clean message (exit 3, a runtime error — A-4) that never
+    // echoes the password or a stack trace.
     writeRegistry(dir, {
       dev: { url: "https://dev-nonexistent-xyz-abc.service-now.com" },
     });
@@ -669,7 +669,7 @@ test("sync against an unreachable instance fails cleanly without leaking credent
       cwd: dir,
       env: { SNPF_DEV_USER: "admin", SNPF_DEV_PASS: secret },
     });
-    assert.equal(res.status, 1);
+    assert.equal(res.status, 3);
     // A helpful, network-level error — not a crash.
     assert.match(
       res.stderr,

@@ -79,6 +79,7 @@ test("outputs map to the run step's outputs", () => {
     "fail",
     "sarif-file",
     "report-json",
+    "exit-code",
   ]);
   for (const name of outputs) {
     assert.ok(
