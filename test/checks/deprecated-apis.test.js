@@ -41,11 +41,11 @@ function run(http, extra = {}) {
   });
 }
 
-test("deprecated-apis is registered with blocker metadata and no rule id", () => {
+test("deprecated-apis is registered with blocker metadata and rule 4.7", () => {
   assert.ok(defaultChecks.some((c) => c.name === "deprecated-apis"));
   const { meta } = deprecatedApis;
   assert.equal(meta.requires, "scope");
-  assert.equal(meta.rule, undefined);
+  assert.equal(meta.rule, "4.7");
   assert.equal(meta.severity, "blocker");
   assert.ok(meta.tables.includes("sys_script_include"));
   assert.ok(meta.tables.includes("sys_ui_script"));

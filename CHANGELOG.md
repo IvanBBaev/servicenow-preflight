@@ -353,6 +353,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Certification rule mapping** — `deprecated-apis` now declares rule 4.7
+  (callback-less `g_form.getReference()`) and `inactive-artifacts` rule 6.6
+  (dead metadata removed before packaging), so `list`, `explain` and SARIF
+  rule properties show them; 19 checks now carry a rule id.
+
 - **`.env` no longer mutates `process.env`** — `.env` values merge into a
   private copy, so library embedders that load several configs in one process
   no longer leak credentials between them. Code that read a `.env` value back

@@ -66,6 +66,8 @@ test("certification rule ids look like CHECKLIST headings", () => {
     if (rule !== undefined) assert.match(rule, /^\d+\.\d+$/, check.name);
   }
   assert.equal(findCheck("table-crud-acl").meta.rule, "1.1");
+  assert.equal(findCheck("deprecated-apis").meta.rule, "4.7");
+  assert.equal(findCheck("inactive-artifacts").meta.rule, "6.6");
 });
 
 test("describeChecks covers the default suite in order", () => {

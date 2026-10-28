@@ -57,12 +57,14 @@ export const RULE_TITLES: Readonly<Record<string, string>> = {
   "2.8": "No client-side eval(); validate GlideScopedEvaluator sources",
   "4.3": "Use jslog() not console.log()",
   "4.5": "No hard-coded URLs/constants",
+  "4.7": "Prefer g_scratchpad/GlideAjax over g_form.getReference()",
   "4.10":
     "Remove empty/commented Fix Scripts & duplicate-named Script Includes",
   "5.1": "Remove mobile Application Menus & Modules from non-mobile apps",
   "5.5": "Modules have roles",
   "6.1": "All tables namespaced",
   "6.2": 'Scheduled Jobs have empty "Run as"',
+  "6.6": "Deleted/withdrawn artifacts are actually gone",
 };
 
 /** Levenshtein edit distance between two strings. */

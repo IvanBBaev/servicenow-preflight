@@ -46,7 +46,7 @@ test("inactive-artifacts is registered as an advisory sweep over seven tables", 
   assert.ok(defaultChecks.includes(inactiveArtifacts));
   const { meta } = inactiveArtifacts;
   assert.equal(meta.requires, "scope");
-  assert.equal(meta.rule, undefined);
+  assert.equal(meta.rule, "6.6");
   assert.equal(meta.severity, "advisory");
   assert.equal(meta.tables.length, 7);
   assert.equal(new Set(meta.tables).size, 7);

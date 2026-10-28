@@ -47,7 +47,7 @@ export const INACTIVE_ARTIFACT_TABLES: readonly ArtifactTable[] = [
 const MAX_NAMES_PER_TABLE = 5;
 
 /**
- * Install hygiene (no certification rule number): an app ships its inactive
+ * Install hygiene (certification rule 6.6): an app ships its inactive
  * Business Rules, Client Scripts, Script Includes, UI Actions, UI Policies,
  * Scheduled Jobs and Notifications along with the active ones. Dead code
  * still lands on every customer instance, still shows up in the Store review,
@@ -68,6 +68,7 @@ export const inactiveArtifacts: Check = {
     "No inactive Business Rules, Client Scripts, Script Includes, UI Actions, UI Policies, Scheduled Jobs or Notifications ship with the app.",
   meta: {
     requires: "scope",
+    rule: "6.6",
     summary:
       "The app ships no inactive script, UI or notification artifacts — dead code that still lands on every install. Advisory — never fails.",
     severity: "advisory",

@@ -59,6 +59,7 @@ export const deprecatedApis: Check = {
     "No Packages.* Java calls in server scripts, and no synchronous getXMLWait, callback-less g_form.getReference or gs.hasRole in client scripts.",
   meta: {
     requires: "scope",
+    rule: "4.7",
     severity: "blocker",
     tables: sourceTables([...SERVER_SCRIPT_SOURCES, ...CLIENT_SCRIPT_SOURCES]),
     remediation:
