@@ -17,11 +17,11 @@ import { anySignal } from "./http/abort.js";
 import { withSignal } from "./http/client.js";
 import { linkRunContext } from "./http/query.js";
 import { concurrencyProblem, runPool } from "./runner/pool.js";
+import { summarizeResults } from "./summary.js";
 import { checkScope, publishCheck, publishRun } from "./trace.js";
 import type {
   Check,
   CheckResult,
-  CheckStatus,
   CheckSelection,
   PreflightContext,
   PreflightReport,
@@ -613,32 +613,15 @@ export async function runPreflight(
     clearTimeout(runTimer);
   }
 
-  // Summarise fail-closed: an unrecognised status is untrustworthy for a gate,
-  // so it is counted (and surfaced) as a failure rather than silently producing
-  // a NaN bucket and a vacuous `ok: true`.
-  const validStatuses: readonly CheckStatus[] = ["pass", "warn", "fail"];
-  const summary: Record<CheckStatus, number> = { pass: 0, warn: 0, fail: 0 };
-  const normalized: CheckResult[] = results.map((result) => {
-    if ((validStatuses as readonly string[]).includes(result.status)) {
-      summary[result.status] += 1;
-      return result;
-    }
-    summary.fail += 1;
-    return {
-      name: result.name,
-      status: "fail",
-      message: `Check "${result.name}" returned an unrecognised status "${String(
-        result.status,
-      )}"; treated as fail. Original message: ${result.message}`,
-    };
-  });
+  // Summarise fail-closed: an unrecognised status counts as a failure.
+  const report = summarizeResults(results);
 
   publishRun({
     phase: "end",
     ms: performance.now() - runStartedAt,
-    summary: { ...summary },
+    summary: { ...report.summary },
   });
-  return { ok: summary.fail === 0, results: normalized, summary };
+  return report;
 }
 
 // Re-exported for consumers that only need the auth type name.

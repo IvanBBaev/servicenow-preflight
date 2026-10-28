@@ -80,6 +80,7 @@ import {
 } from "./registry.js";
 import { loadManifest, writeManifest } from "./state/manifest.js";
 import { syncManifest } from "./state/sync.js";
+import { summarizeResults } from "./summary.js";
 import {
   DEFAULT_STALE_WARN_MS,
   stalenessResults,
@@ -931,19 +932,15 @@ interface NamedReport {
   timings?: RunTimings;
 }
 
-/** Append extra results to a report, recomputing its summary and `ok`. */
+/**
+ * Append extra results to a report, recomputing its summary and `ok`
+ * fail-closed: an unrecognised status counts as a failure.
+ */
 function mergeResults(
   report: PreflightReport,
   extra: CheckResult[],
 ): PreflightReport {
-  const results = [...report.results, ...extra];
-  const summary = { pass: 0, warn: 0, fail: 0 };
-  for (const r of results) {
-    if (r.status === "warn") summary.warn += 1;
-    else if (r.status === "fail") summary.fail += 1;
-    else summary.pass += 1;
-  }
-  return { ok: summary.fail === 0, results, summary };
+  return summarizeResults([...report.results, ...extra]);
 }
 
 /** A parsed SARIF log — enough shape to merge runs across instances. */

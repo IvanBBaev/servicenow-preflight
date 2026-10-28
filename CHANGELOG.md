@@ -399,6 +399,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`drift` verdict is fail-closed** — results folded into a `drift` report
+  (promotion order, manifest staleness, version parity) are now summarised by
+  the same rule as `runPreflight`: an unrecognised status counts as a failure
+  instead of a pass, so it can no longer yield `ok: true` on the promote gate.
 - **Tessera review digests survive a CRLF checkout** (PA-10) — `tess review`
   and `tess run --live` now read a unit spec through one canonical form,
   `canonicalSpecBody` (exported from `@tessera/cli`), which folds every run
