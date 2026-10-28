@@ -19,6 +19,7 @@ import {
   parseInitAuth,
   parseInitCi,
   planInit,
+  MULTI_INSTANCE,
   type InitAnswers,
   type InitAuth,
   type InitCi,
@@ -26,9 +27,11 @@ import {
 import { promptInit } from "./init-prompt.js";
 import { describeIssue, validateConfig } from "./options/config-schema.js";
 import { fileURLToPath } from "node:url";
-import { runPreflight } from "./index.js";
+import { runPreflight, selectChecks } from "./index.js";
+import { doctorChecks, type InstanceSource } from "./doctor.js";
 import {
   loadConfig,
+  readConfigFile,
   parseConcurrency,
   parseFailOn,
   parseSwitch,
@@ -137,10 +140,11 @@ const FORMATS: readonly OutputFormat[] = [
 /**
  * Subcommand: run checks, sync a manifest, compare two instances, or browse
  * the check catalogue (`list` / `explain`), or work on the config file
- * (`config schema | validate | migrate`), or scaffold a project (`init`).
+ * (`config schema | validate | migrate`), scaffold a project (`init`), or
+ * check that the account and transport can run the gate (`doctor`).
  */
 type Subcommand =
-  "run" | "sync" | "drift" | "list" | "explain" | "config" | "init";
+  "run" | "sync" | "drift" | "list" | "explain" | "config" | "init" | "doctor";
 
 const SUBCOMMANDS: readonly Subcommand[] = [
   "run",
@@ -150,6 +154,7 @@ const SUBCOMMANDS: readonly Subcommand[] = [
   "explain",
   "config",
   "init",
+  "doctor",
 ];
 
 interface ParsedArgs {
@@ -227,6 +232,8 @@ interface ParsedArgs {
   multi: boolean;
   /** `init`: never prompt, flags only. */
   yes: boolean;
+  /** `init`: run `doctor` against the scaffolded config afterwards. */
+  check: boolean;
   help: boolean;
   /** Print the package version and exit. */
   version: boolean;
@@ -360,6 +367,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     write: false,
     multi: false,
     yes: false,
+    check: false,
     help: false,
     version: false,
   };
@@ -466,6 +474,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "-y":
       case "--yes":
         args.yes = true;
+        break;
+      case "--check":
+        args.check = true;
         break;
       case "--baseline":
         args.baseline = takeOptionalValue();
@@ -689,9 +700,141 @@ async function commandInit(args: ParsedArgs, cwd: string): Promise<void> {
     "",
     "Next:",
     "  servicenow-preflight config validate",
-    `  servicenow-preflight run${answers.multi ? " dev" : ""}`,
+    `  servicenow-preflight doctor${answers.multi ? ` ${MULTI_INSTANCE}` : ""}`,
+    `  servicenow-preflight run${answers.multi ? ` ${MULTI_INSTANCE}` : ""}`,
   ];
   process.stdout.write(`${lines.join("\n")}\n`);
+  if (!args.check) return;
+  // F-X-13 / F-X-15: `--check` runs doctor against what was just written.
+  process.stdout.write("\nservicenow-preflight doctor\n");
+  const run = await doctorRun(
+    { ...args, instanceUrl: undefined, configPath: undefined },
+    cwd,
+    answers.multi ? MULTI_INSTANCE : undefined,
+  );
+  process.stdout.write(render(run.report, "pretty", run.name));
+  if (!run.report.ok) process.exitCode = 1;
+}
+
+/** One doctor report and what it ran against. */
+interface DoctorRun {
+  report: PreflightReport;
+  checks: Check[];
+  name?: string;
+  url?: string;
+}
+
+/**
+ * Run the doctor rows (F-X-15) against one instance: a registry instance when
+ * `name` is given, else the single-instance URL from `--instance`, the config
+ * file or `SNPF_INSTANCE`. Read-only; the selection (`--only` / `--skip`, else
+ * the config's `select`) decides which tables the access row probes.
+ */
+async function doctorRun(
+  args: ParsedArgs,
+  cwd: string,
+  name: string | undefined,
+): Promise<DoctorRun> {
+  let target: RunTarget = {};
+  if (name !== undefined) {
+    const registry = await loadRegistry(cwd, args.registryPath);
+    if (!registry) {
+      throw new UsageError(
+        `No registry found; cannot resolve instance "${name}". Create .preflight/instances.json or use --instance <url>.`,
+      );
+    }
+    if (args.instanceUrl) {
+      throw new UsageError(
+        `--instance conflicts with the registry instance "${name}"; pass one or the other.`,
+      );
+    }
+    const inst = resolveInstance(registry, name);
+    target = {
+      name,
+      instanceUrl: inst.url,
+      envPrefix: inst.envPrefix,
+      scope: inst.scope,
+    };
+  }
+  const loaded = await loadConfig(cwd, {
+    configPath: args.configPath,
+    envPrefix: target.envPrefix,
+  });
+  const instanceUrl =
+    args.instanceUrl ?? target.instanceUrl ?? loaded.config.instanceUrl;
+  let instanceSource: InstanceSource | undefined;
+  if (args.instanceUrl) instanceSource = "flag";
+  else if (target.instanceUrl) instanceSource = "registry";
+  else if (loaded.config.instanceUrl) {
+    // loadConfig folds SNPF_INSTANCE into config.instanceUrl when the file
+    // has none; re-read the file to tell the two apart.
+    const fromFile = loaded.configPath
+      ? (await readConfigFile(loaded.configPath)).instanceUrl
+      : undefined;
+    instanceSource = fromFile ? "config" : "env";
+  }
+  const selected = selectChecks(defaultChecks, {
+    only: args.only ?? loaded.config.select?.only,
+    skip: args.skip ?? loaded.config.select?.skip,
+  });
+  const clientConfig: InternalClientConfig = {
+    instanceUrl: instanceUrl ?? "https://invalid.invalid",
+    ...(loaded.auth ? { auth: loaded.auth } : {}),
+    ...(loaded.tls ? { tls: loaded.tls } : {}),
+    ...(loaded.config.proxy ? { proxy: loaded.config.proxy } : {}),
+    ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
+    env: loaded.env,
+    ...requestLimits(args, loaded.limits),
+    cache: false,
+  };
+  const ctx: PreflightContext = {
+    instanceUrl,
+    auth: loaded.auth,
+    tls: loaded.tls,
+    http: createSnClient(clientConfig),
+    scope: target.scope ?? loaded.config.scope,
+    instance: target.name,
+  };
+  const checks = doctorChecks({
+    selected,
+    version: readVersion(),
+    ...(instanceSource ? { instanceSource } : {}),
+    ...(loaded.configPath ? { configPath: loaded.configPath } : {}),
+    ...(target.name ? { instance: target.name } : {}),
+    ...(target.envPrefix ? { envPrefix: target.envPrefix } : {}),
+    ...(loaded.config.proxy ? { proxy: loaded.config.proxy } : {}),
+    ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
+    env: loaded.env,
+  });
+  const report = await runPreflight(ctx, checks, {
+    signal: interrupt.signal,
+    concurrency: DEFAULT_CONCURRENCY,
+  });
+  return {
+    report,
+    checks,
+    ...(target.name ? { name: target.name } : {}),
+    ...(instanceUrl ? { url: instanceUrl } : {}),
+  };
+}
+
+/** `doctor [env]` (F-X-15): readiness report; exit 1 when a row fails. */
+async function commandDoctor(args: ParsedArgs, cwd: string): Promise<void> {
+  if (args.all) {
+    throw new UsageError(
+      "doctor checks one instance; drop --all and name the instance.",
+    );
+  }
+  const name = singleInstanceName(
+    "doctor",
+    args,
+    "Run doctor once per instance.",
+  );
+  const run = await doctorRun(args, cwd, name);
+  process.stdout.write(
+    render(run.report, args.format, run.name, run.checks, run.url),
+  );
+  if (!run.report.ok) process.exitCode = 1;
 }
 
 /**
@@ -735,11 +878,20 @@ Usage:
   servicenow-preflight init [--instance <url>] [--scope <s>] [--multi]
                     [--ci github|gitlab|azure|none]
                     [--auth basic|oauth-client|bearer|mtls] [--force] [--yes]
+                    [--check]
                                                Scaffold the config, registry,
                                                CI pipeline and .gitignore
                                                (prompts on a TTY unless --yes;
-                                               never writes credentials)
-  (list, explain, config and init need no credentials or network.)
+                                               never writes credentials);
+                                               --check runs doctor afterwards
+  servicenow-preflight doctor [env] [-i <url>] [--only|--skip <csv>] [--json]
+                                               Read-only readiness report:
+                                               config sources, DNS/proxy, auth,
+                                               basic-auth restriction, account
+                                               role, table read access, CI/CD
+                                               API, runtime (exit 1 on a fail)
+  (list, explain, config and init without --check need no credentials or
+  network.)
 
 Multi-instance (registry at .preflight/instances.json):
   <env>                  A registry instance name (dev | staging | test | prod)
@@ -1995,15 +2147,19 @@ async function main(): Promise<void> {
       args.ci !== undefined ||
       args.auth !== undefined ||
       args.multi ||
-      args.yes)
+      args.yes ||
+      args.check)
   ) {
     throw new UsageError(
-      `--scope / --ci / --auth / --multi / --yes apply to init only, not ${args.command}.`,
+      `--scope / --ci / --auth / --multi / --yes / --check apply to init only, not ${args.command}.`,
     );
   }
   switch (args.command) {
     case "init":
       await commandInit(args, cwd);
+      return;
+    case "doctor":
+      await commandDoctor(args, cwd);
       return;
     case "config":
       await commandConfig(args, cwd, [...defaultChecks, testDrift]);

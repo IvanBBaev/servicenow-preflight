@@ -51,7 +51,7 @@ export const INIT_GITIGNORE = [
 ];
 
 /** Registry instance name used by `--multi`. */
-const MULTI_INSTANCE = "dev";
+export const MULTI_INSTANCE = "dev";
 
 /** Credential env names per auth kind; values are placeholders. */
 const AUTH_ENV: Record<InitAuth, string[]> = {

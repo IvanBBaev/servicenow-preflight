@@ -206,6 +206,14 @@ export {
   type CheckDescriptor,
 } from "./catalogue.js";
 export {
+  BASIC_AUTH_PROPERTIES,
+  BASIC_AUTH_ROLE,
+  doctorChecks,
+  tablesOf,
+  type DoctorOptions,
+  type InstanceSource,
+} from "./doctor.js";
+export {
   applyBaseline,
   baselineFromReport,
   baselinePath,

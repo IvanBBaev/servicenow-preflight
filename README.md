@@ -111,6 +111,10 @@ defaults); with `--yes` or without a TTY it uses the flags only and never
 waits for input. An existing file is never overwritten without `--force` —
 `init` exits `2` and names the files, and writes nothing.
 
+`init --check` runs [`doctor`](#readiness-check-doctor) against what it just
+wrote (the `dev` instance with `--multi`) once the credentials are in the
+environment; it exits `1` when a doctor row fails.
+
 ## What it checks
 
 `runPreflight(ctx, checks?)` runs each check against the target instance and
@@ -407,6 +411,34 @@ ServiceNow authentication failed (401): User is not authenticated.
 For the instance-side settings (OAuth application registry, inbound REST
 authentication policies, ACLs), see the ServiceNow product documentation for
 your release.
+
+### Readiness check: `doctor`
+
+```bash
+npx servicenow-preflight doctor -i https://dev12345.service-now.com
+npx servicenow-preflight doctor dev --json   # a registry instance
+```
+
+`doctor` answers "can this account run the gate here?" before the first real
+run. It only reads (Table API `GET`s limited to one row, and one `GET` on the
+CI/CD API) and prints one row per question:
+
+| Row                   | What it checks                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `doctor-config`       | where the instance URL (flag, registry, config file or `SNPF_INSTANCE`), the config file and the credentials come from — fails with no URL |
+| `doctor-reachability` | the host (or the proxy host) resolves; proxy settings parse; warns on plain `http://`                                                      |
+| `connectivity-auth`   | the credentials authenticate (the same row `run` has)                                                                                      |
+| `doctor-basic-auth`   | the instance's basic-auth API restriction (`glide.authenticate.basic_auth.restriction.*`) and whether this account stays allowed under it  |
+| `doctor-account`      | the account has `snc_basic_auth_api_access` or is Web Service Access Only                                                                  |
+| `doctor-table-access` | the account reads every table the selected checks query (`--only` / `--skip` / config `select`); a `403` names the checks it affects       |
+| `doctor-cicd`         | the CI/CD API answers, only when `atf-run` is selected                                                                                     |
+| `doctor-runtime`      | Node.js and servicenow-preflight versions                                                                                                  |
+
+Every warning carries the fix. A property or role table the account cannot
+read is a warning ("ask an admin to confirm"), never a failure. `doctor` exits
+`0` when every row passes or warns and `1` when one fails; `--format` works as
+for `run`. The basic-auth property names and the `sys_user_has_role` read are
+not yet confirmed on a live instance.
 
 ### HTTP(S) proxy
 

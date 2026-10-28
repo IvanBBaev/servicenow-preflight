@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`doctor`** — `servicenow-preflight doctor [env] [-i <url>]` is a read-only
+  readiness report: config sources, DNS / proxy, authentication, the
+  basic-auth API restriction properties, the account's
+  `snc_basic_auth_api_access` role or Web Service Access Only flag, read access
+  to every table the selected checks query (a `403` names the affected
+  checks), the CI/CD API when `atf-run` is selected, and the Node / tool
+  versions. A table it cannot read warns with "ask an admin", never fails;
+  exit `1` only when a row fails. `init --check` runs it after scaffolding.
+  Library: `doctorChecks(options)` returns the rows as `Check`s for
+  `runPreflight`.
 - **MFA one-time password for basic auth** (experimental) —
   `SNPF_MFA_TOTP_SECRET` (base32 seed) makes every basic-auth request carry
   the current RFC 6238 code appended to the password; `SNPF_MFA_TOTP_DIGITS` /
