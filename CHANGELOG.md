@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MFA one-time password for basic auth** (experimental) —
+  `SNPF_MFA_TOTP_SECRET` (base32 seed) makes every basic-auth request carry
+  the current RFC 6238 code appended to the password; `SNPF_MFA_TOTP_DIGITS` /
+  `_PERIOD` override the 6-digit / 30 s defaults and `SNPF_MFA_CODE` passes a
+  one-off code. A 401 is retried once with the next window's code, a
+  Retry-After wait takes a fresh code, and an MFA challenge without a seed
+  names `SNPF_MFA_TOTP_SECRET` in the diagnosis. Library: `SnAuth` basic gains
+  `mfa` (`SnMfa`). MFA keys in the config file are refused. The wire format is
+  not documented by ServiceNow and is still to be confirmed on an instance.
 - **`init`** — `servicenow-preflight init` scaffolds `preflight.config.json`
   (with `$schema`), an optional one-instance registry (`--multi`), a GitHub /
   GitLab / Azure pipeline (`--ci`) and `.gitignore` entries, and prints the

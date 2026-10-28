@@ -47,6 +47,7 @@ export type {
   SnTable,
   SnCicd,
   SnAuth,
+  SnMfa,
   SnTls,
   SnRawResponse,
   SnRequestOptions,

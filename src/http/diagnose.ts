@@ -29,6 +29,8 @@ export interface AuthFailure {
   path?: string;
   /** The failure came from the OAuth token endpoint, not an API call. */
   tokenEndpoint?: boolean;
+  /** Basic auth presented an MFA one-time password (F-X-11). */
+  mfa?: boolean;
 }
 
 const OAUTH_REGISTRY =
@@ -44,7 +46,7 @@ export function diagnoseAuthFailure(failure: AuthFailure): string[] {
 
   switch (authKind) {
     case "basic":
-      return basicHints(detail);
+      return basicHints(detail, failure.mfa === true);
     case "oauth":
       return [
         "The bearer token (SNPF_TOKEN) is expired, revoked or was issued by another instance.",
@@ -74,14 +76,22 @@ export function diagnoseAuthFailure(failure: AuthFailure): string[] {
   }
 }
 
-function basicHints(detail: string): string[] {
+function basicHints(detail: string, mfa: boolean): string[] {
   const wrong =
     "Wrong user name or password, or the account is locked or inactive.";
   const restriction =
     "The instance may restrict basic auth for API calls: the account must be allowed by the basic-auth restriction policy (for example a Web Service Access Only user).";
+  if (mfa) {
+    return [
+      "The MFA one-time password was rejected: check SNPF_MFA_TOTP_SECRET (the seed the account is enrolled with) and the machine clock, or use a fresh SNPF_MFA_CODE.",
+      wrong,
+      restriction,
+      PREFER_OAUTH,
+    ];
+  }
   if (/multi[- ]?factor|\bmfa\b|one[- ]time/i.test(detail)) {
     return [
-      "The account requires multi-factor authentication, which a basic-auth API call cannot answer.",
+      "The account requires multi-factor authentication: set SNPF_MFA_TOTP_SECRET to the account's base32 TOTP seed (or SNPF_MFA_CODE for a one-off run).",
       restriction,
       PREFER_OAUTH,
     ];

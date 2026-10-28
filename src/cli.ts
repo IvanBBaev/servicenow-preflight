@@ -842,6 +842,8 @@ Authentication (via environment / .env — never the config file, never logged):
                                  basic | token | apikey | oauth-password
                                  | oauth-client | oauth-refresh | oauth-jwt
   Basic:        SNPF_USER, SNPF_PASS
+                + SNPF_MFA_TOTP_SECRET (or SNPF_MFA_CODE) → MFA code
+                  (SNPF_MFA_TOTP_DIGITS, _PERIOD; experimental)
   Static token: SNPF_TOKEN
   API key:      SNPF_API_KEY                         (x-sn-apikey; Tokyo+)
   OAuth grant:  SNPF_OAUTH_CLIENT_ID, SNPF_OAUTH_CLIENT_SECRET

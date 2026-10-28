@@ -1178,3 +1178,97 @@ test("loadConfig reads failOn from the config file and SNPF_FAIL_ON (F-X-17)", a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("resolveAuthFromEnv attaches MFA settings to basic auth (F-X-11)", () => {
+  const seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+  assert.deepEqual(
+    resolveAuthFromEnv({
+      SNPF_USER: "alice",
+      SNPF_PASS: "pw",
+      SNPF_MFA_TOTP_SECRET: ` ${seed} `,
+      SNPF_MFA_TOTP_DIGITS: "8",
+      SNPF_MFA_TOTP_PERIOD: "60",
+    }),
+    {
+      kind: "basic",
+      user: "alice",
+      pass: "pw",
+      mfa: { totpSecret: seed, digits: 8, period: 60 },
+    },
+  );
+  assert.deepEqual(
+    resolveAuthFromEnv({
+      SNPF_AUTH: "basic",
+      SNPF_USER: "alice",
+      SNPF_PASS: "pw",
+      SNPF_MFA_CODE: "123456",
+    }),
+    { kind: "basic", user: "alice", pass: "pw", mfa: { code: "123456" } },
+  );
+  // Namespaced like every credential.
+  assert.deepEqual(
+    resolveAuthFromEnv(
+      { SNPF_USER: "a", SNPF_PASS: "p", SNPF_DEV_MFA_CODE: "654321" },
+      "dev",
+    ).mfa,
+    { code: "654321" },
+  );
+  // No MFA variables: unchanged basic auth.
+  assert.deepEqual(resolveAuthFromEnv({ SNPF_USER: "a", SNPF_PASS: "p" }), {
+    kind: "basic",
+    user: "a",
+    pass: "p",
+  });
+});
+
+test("resolveAuthFromEnv rejects malformed MFA values without echoing them", () => {
+  const base = { SNPF_USER: "a", SNPF_PASS: "p" };
+  const cases = [
+    [{ SNPF_MFA_TOTP_SECRET: "bad seed 189" }, /SNPF_MFA_TOTP_SECRET/, "189"],
+    [{ SNPF_MFA_CODE: "12x456" }, /SNPF_MFA_CODE/, "12x456"],
+    [
+      { SNPF_MFA_CODE: "123456", SNPF_MFA_TOTP_DIGITS: "9" },
+      /DIGITS/,
+      undefined,
+    ],
+    [
+      { SNPF_MFA_CODE: "123456", SNPF_MFA_TOTP_PERIOD: "0" },
+      /PERIOD/,
+      undefined,
+    ],
+  ];
+  for (const [extra, pattern, secret] of cases) {
+    assert.throws(
+      () => resolveAuthFromEnv({ ...base, ...extra }),
+      (err) =>
+        err instanceof UsageError &&
+        pattern.test(err.message) &&
+        (secret === undefined || !err.message.includes(secret)),
+    );
+  }
+});
+
+test("loadConfig refuses an MFA seed in the config file (credentials are env-only)", async () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(
+      join(dir, "preflight.config.json"),
+      JSON.stringify({
+        instanceUrl: "https://x.service-now.com",
+        mfaTotpSecret: "GEZDGNBV",
+      }),
+    );
+    await assert.rejects(
+      loadConfig(dir, { skipDotEnv: true, env: {} }),
+      (err) => {
+        assert.ok(err instanceof UsageError);
+        assert.match(err.message, /mfaTotpSecret/);
+        assert.match(err.message, /SNPF_MFA_TOTP_SECRET/);
+        assert.ok(!err.message.includes("GEZDGNBV"));
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

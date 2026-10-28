@@ -5,6 +5,8 @@ import { resolve, isAbsolute } from "node:path";
 import type { CheckSelection, PreflightAuth, SnTls } from "./types.js";
 import { isSafeIdentifier } from "./http/query.js";
 import { limitProblem } from "./http/limiter.js";
+import { decodeBase32, totpOptionsProblem } from "./http/totp.js";
+import type { SnMfa } from "./http/client.js";
 import { concurrencyProblem } from "./runner/pool.js";
 import type { SeverityPolicy } from "./policy.js";
 
@@ -243,6 +245,12 @@ const ENV = {
   mtlsKey: "SNPF_MTLS_KEY",
   mtlsCa: "SNPF_MTLS_CA",
   mtlsPassphrase: "SNPF_MTLS_PASSPHRASE",
+  /** Base32 TOTP seed for a basic-auth MFA account (F-X-11). */
+  mfaTotpSecret: "SNPF_MFA_TOTP_SECRET",
+  /** One-shot MFA code for a manual basic-auth run (F-X-11). */
+  mfaCode: "SNPF_MFA_CODE",
+  mfaTotpDigits: "SNPF_MFA_TOTP_DIGITS",
+  mfaTotpPeriod: "SNPF_MFA_TOTP_PERIOD",
   /** Outbound proxy URL (mirrors the config file's `proxy`) — SR-5. */
   proxy: "SNPF_PROXY",
   /** Extra proxy-bypass entries (mirrors the config file's `noProxy`) — SR-5. */
@@ -407,6 +415,55 @@ function mergeDotEnv(
 }
 
 /**
+ * The MFA one-time-password settings for basic auth (F-X-11), or `undefined`
+ * when neither `SNPF_MFA_TOTP_SECRET` nor `SNPF_MFA_CODE` is set. A malformed
+ * value is a {@link UsageError} that never repeats the secret or the code.
+ */
+function resolveMfaFromEnv(env: NodeJS.ProcessEnv): SnMfa | undefined {
+  const totpSecret = env[ENV.mfaTotpSecret]?.trim() || undefined;
+  const code = env[ENV.mfaCode]?.trim() || undefined;
+  if (!totpSecret && !code) return undefined;
+  const mfa: SnMfa = {};
+  if (totpSecret) {
+    try {
+      decodeBase32(totpSecret);
+    } catch {
+      throw new UsageError(
+        `${ENV.mfaTotpSecret} is not a valid base32 TOTP seed (A-Z, 2-7).`,
+      );
+    }
+    mfa.totpSecret = totpSecret;
+  } else if (code) {
+    if (!/^\d{6,8}$/.test(code)) {
+      throw new UsageError(`${ENV.mfaCode} must be a 6 to 8 digit code.`);
+    }
+    mfa.code = code;
+  }
+  for (const [name, label] of [
+    ["digits", ENV.mfaTotpDigits],
+    ["period", ENV.mfaTotpPeriod],
+  ] as const) {
+    const raw = env[label]?.trim();
+    if (!raw) continue;
+    const n = Number(raw);
+    const problem = totpOptionsProblem({ [name]: n });
+    if (problem) throw new UsageError(`${label}: ${problem} (got "${raw}").`);
+    mfa[name] = n;
+  }
+  return mfa;
+}
+
+/** Basic auth from the environment, with MFA settings when present. */
+function basicAuth(
+  env: NodeJS.ProcessEnv,
+  user: string,
+  pass: string,
+): PreflightAuth {
+  const mfa = resolveMfaFromEnv(env);
+  return { kind: "basic", user, pass, ...(mfa ? { mfa } : {}) };
+}
+
+/**
  * Build a specific auth {@link PreflightAuth} kind from the environment, or
  * `undefined` when the inputs that kind requires are not all present.
  */
@@ -418,7 +475,7 @@ function buildAuthByKind(
     case "basic": {
       const user = env[ENV.user]?.trim();
       const pass = env[ENV.pass];
-      return user && pass ? { kind: "basic", user, pass } : undefined;
+      return user && pass ? basicAuth(env, user, pass) : undefined;
     }
     case "token":
     case "oauth": {
@@ -504,7 +561,8 @@ function buildAuthByKind(
  *    `oauth-password` (user+pass present), else `oauth-client`.
  * 2. `SNPF_TOKEN` → a static `oauth` bearer.
  * 3. `SNPF_API_KEY` → `apikey`.
- * 4. `SNPF_USER` + `SNPF_PASS` → `basic`.
+ * 4. `SNPF_USER` + `SNPF_PASS` → `basic`, carrying an MFA one-time password
+ *    when `SNPF_MFA_TOTP_SECRET` (or `SNPF_MFA_CODE`) is set (F-X-11).
  * 5. otherwise no header auth (mutual TLS may still identify the caller).
  */
 export function resolveAuthFromEnv(
@@ -531,7 +589,7 @@ export function resolveAuthFromEnv(
   if (apiKey) return { kind: "apikey", apiKey };
   const user = src[ENV.user]?.trim();
   const pass = src[ENV.pass];
-  if (user && pass) return { kind: "basic", user, pass };
+  if (user && pass) return basicAuth(src, user, pass);
   return undefined;
 }
 
@@ -760,6 +818,21 @@ function assertSeverityConfigType(config: PreflightConfig): void {
   }
 }
 
+/**
+ * Credentials are env-only (F-X-11): a config-file key that looks like an MFA
+ * seed or code is refused rather than ignored, so a seed committed to a config
+ * file fails the run instead of silently doing nothing.
+ */
+function assertNoMfaInConfig(config: PreflightConfig): void {
+  for (const key of Object.keys(config)) {
+    if (/mfa|totp|otp/i.test(key)) {
+      throw new UsageError(
+        `Config key "${key}" looks like an MFA credential. Credentials are read only from the environment: set ${ENV.mfaTotpSecret} or ${ENV.mfaCode}.`,
+      );
+    }
+  }
+}
+
 /** Fail closed on a `failOn` value other than `"fail"` or `"warn"`. */
 function assertFailOnConfigType(config: PreflightConfig): void {
   const value: unknown = config.failOn;
@@ -853,6 +926,7 @@ export async function loadConfig(
   assertSeverityConfigType(config);
   assertFailOnConfigType(config);
   assertCheckOptionsConfigType(config);
+  assertNoMfaInConfig(config);
 
   // Fail closed at load time on config values that would inject into an encoded
   // query (SR-1), after env fallbacks so env-supplied values are covered too.

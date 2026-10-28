@@ -337,6 +337,7 @@ of ServiceNow inbound-auth methods, plus transport-level mutual TLS:
 | Method                     | `kind`           | Environment inputs                                          | Applied as                    |
 | -------------------------- | ---------------- | ----------------------------------------------------------- | ----------------------------- |
 | Basic                      | `basic`          | `SNPF_USER` + `SNPF_PASS`                                   | `Authorization: Basic …`      |
+| Basic + MFA one-time code  | `basic`          | the above + `SNPF_MFA_TOTP_SECRET` (or `SNPF_MFA_CODE`)     | code appended to the password |
 | Static bearer              | `oauth`          | `SNPF_TOKEN`                                                | `Authorization: Bearer …`     |
 | API key                    | `apikey`         | `SNPF_API_KEY`                                              | `x-sn-apikey: …` (Tokyo+)     |
 | OAuth — password grant     | `oauth-password` | client id/secret + `SNPF_USER` / `SNPF_PASS`                | `Bearer` (acquired at run)    |
@@ -350,6 +351,17 @@ For the four **grant flows** the token is minted at run time (POST to
 just before expiry, and re-acquired once on a 401. JWT assertions are signed
 **RS256** with `node:crypto`. **Mutual TLS is a transport concern**: a client
 cert composes with _any_ header method above, or stands alone (cert-only).
+
+**MFA for basic auth** (experimental). When the instance enforces MFA on
+basic-auth API calls, set `SNPF_MFA_TOTP_SECRET` to the account's base32 TOTP
+seed: every request then carries the current RFC 6238 code (SHA-1, 6 digits,
+30 s; override with `SNPF_MFA_TOTP_DIGITS` / `SNPF_MFA_TOTP_PERIOD`). A code
+rejected with a 401 is retried once with the next window's code. For a manual
+run, `SNPF_MFA_CODE` passes a one-off code instead. The code is appended to the
+password, the widely reported mechanism; ServiceNow does not document the wire
+format, so treat this as unverified until it passes on your instance. Like every
+credential, the seed is read from the environment only; an MFA key in the
+config file is refused.
 
 > **A note on token lifetimes.** A static `SNPF_TOKEN` bearer is convenient, but
 > on a real instance it is usually an OAuth **access token** carrying the

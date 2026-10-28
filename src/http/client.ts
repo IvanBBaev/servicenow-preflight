@@ -23,6 +23,12 @@ import { abortReason, anySignal, raceAbort, sleep } from "./abort.js";
 import { createLimiter, limitProblem, type Limiter } from "./limiter.js";
 import { createReadCache, deepFreeze, readKey } from "./cache.js";
 import { diagnoseAuthFailure } from "./diagnose.js";
+import {
+  decodeBase32,
+  totpForWindow,
+  totpOptionsProblem,
+  totpWindow,
+} from "./totp.js";
 import { openProxyTunnel, parseProxyUrl, resolveProxy } from "./proxy.js";
 import {
   cacheScope,
@@ -42,7 +48,7 @@ import {
  * configured via {@link SnClientConfig.tls} and composes with any of these.
  */
 export type SnAuth =
-  | { kind: "basic"; user: string; pass: string }
+  | { kind: "basic"; user: string; pass: string; mfa?: SnMfa }
   | { kind: "oauth"; token: string }
   | { kind: "apikey"; apiKey: string }
   | ({
@@ -80,6 +86,25 @@ export type SnAuth =
       /** `iss` claim (default: `clientId`). */
       issuer?: string;
     } & OAuthGrantCommon);
+
+/**
+ * An MFA one-time password for a basic-auth account (F-X-11). Give either a
+ * base32 TOTP seed, from which the client computes the current RFC 6238 code
+ * for every request, or a one-shot `code` for a manual run. The code rides as
+ * a password suffix (`pass + code`); see {@link presentMfaCode}.
+ */
+export interface SnMfa {
+  /** Base32 TOTP seed (what an authenticator app is enrolled with). */
+  totpSecret?: string;
+  /** A fixed one-time code, used when no `totpSecret` is set. */
+  code?: string;
+  /** TOTP code length, 6..8 (default 6). */
+  digits?: number;
+  /** TOTP time step in seconds (default 30). */
+  period?: number;
+  /** Clock in epoch milliseconds (default `Date.now`); for tests. */
+  now?: () => number;
+}
 
 /** Options shared by every OAuth grant flow. */
 export interface OAuthGrantCommon {
@@ -969,6 +994,88 @@ function staticHeader(name: string, value: string): AuthProvider {
 }
 
 /**
+ * How a basic-auth request presents its MFA one-time password. The platform
+ * documents only that basic-auth accounts "presenting a valid MFA one-time
+ * password" pass its restriction policy, not the wire format; the password
+ * suffix is the widely reported mechanism. Kept in one function so a
+ * confirmed alternative is a one-line switch (F-X-11, to verify on a PDI).
+ */
+export function presentMfaCode(pass: string, code: string): string {
+  return pass + code;
+}
+
+function basicHeader(user: string, pass: string): string {
+  return `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`;
+}
+
+/**
+ * Basic auth with an MFA code. A TOTP seed yields the current window's code
+ * on every request. After a 401 the next attempt moves one window ahead when
+ * the clock is still in the rejected window, so a code that expired in transit
+ * is retried once with the next one; a fixed code cannot be retried.
+ */
+function basicMfaProvider(
+  auth: { user: string; pass: string },
+  mfa: SnMfa,
+): AuthProvider {
+  const options = {
+    ...(mfa.digits !== undefined ? { digits: mfa.digits } : {}),
+    ...(mfa.period !== undefined ? { period: mfa.period } : {}),
+  };
+  const problem = totpOptionsProblem(options);
+  if (problem) throw new SnError(`SnAuth basic mfa: ${problem}.`);
+  if (mfa.totpSecret === undefined) {
+    const code = mfa.code?.trim();
+    if (!code || !/^\d{6,8}$/.test(code)) {
+      throw new SnError(
+        "SnAuth basic mfa needs a totpSecret or a 6 to 8 digit code.",
+      );
+    }
+    return staticHeader(
+      "Authorization",
+      basicHeader(auth.user, presentMfaCode(auth.pass, code)),
+    );
+  }
+  let key: Buffer;
+  try {
+    key = decodeBase32(mfa.totpSecret);
+  } catch (cause) {
+    throw new SnError(
+      `SnAuth basic mfa: ${cause instanceof Error ? cause.message : "invalid TOTP secret."}`,
+    );
+  }
+  const now = mfa.now ?? Date.now;
+  const period = mfa.period ?? 30;
+  const sent = new Map<string, number>();
+  let rejectedWindow: number | undefined;
+  return {
+    header() {
+      let window = totpWindow(now(), period);
+      if (rejectedWindow !== undefined && window <= rejectedWindow) {
+        window = rejectedWindow + 1;
+      }
+      const value = basicHeader(
+        auth.user,
+        presentMfaCode(auth.pass, totpForWindow(key, window, options)),
+      );
+      // Remember which window each value carried, so a 401 can name it. Two
+      // live windows at most matter; keep the map from growing.
+      if (sent.size > 4) sent.clear();
+      sent.set(value, window);
+      return Promise.resolve({ name: "Authorization", value });
+    },
+    invalidate(usedValue) {
+      const window = usedValue === undefined ? undefined : sent.get(usedValue);
+      if (window === undefined) return false;
+      if (rejectedWindow === undefined || window > rejectedWindow) {
+        rejectedWindow = window;
+      }
+      return true;
+    },
+  };
+}
+
+/**
  * Build the {@link AuthProvider} for the configured auth. Static credentials
  * yield a fixed header; grant flows lazily acquire, cache (until ~30s before
  * expiry) and — on {@link AuthProvider.invalidate} — re-acquire a bearer token.
@@ -986,10 +1093,10 @@ function buildAuthProvider(
     };
   }
   switch (auth.kind) {
-    case "basic": {
-      const token = Buffer.from(`${auth.user}:${auth.pass}`).toString("base64");
-      return staticHeader("Authorization", `Basic ${token}`);
-    }
+    case "basic":
+      return auth.mfa
+        ? basicMfaProvider(auth, auth.mfa)
+        : staticHeader("Authorization", basicHeader(auth.user, auth.pass));
     case "oauth":
       return staticHeader("Authorization", `Bearer ${auth.token}`);
     case "apikey":
@@ -1389,7 +1496,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     const caller = opts.signal;
     if (caller?.aborted) throw abortedError(caller);
     const headers: Record<string, string> = { Accept: "application/json" };
-    const cred = await authProvider.header();
+    let cred = await authProvider.header();
     if (cred) headers[cred.name] = cred.value;
     const init: TransportInit = {
       method,
@@ -1479,6 +1586,10 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         } catch {
           throw abortedError(caller as AbortSignal);
         }
+        // F-X-11: a Retry-After wait can outlast an MFA code's window, so
+        // take the credential afresh (a static or cached one is unchanged).
+        cred = await authProvider.header();
+        if (cred) headers[cred.name] = cred.value;
         continue;
       }
 
@@ -1527,6 +1638,9 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
             status,
             authKind: cfg.auth?.kind ?? (cfg.tls ? "mtls" : "none"),
             path,
+            ...(cfg.auth?.kind === "basic" && cfg.auth.mfa
+              ? { mfa: true }
+              : {}),
             ...(detail ? { detail } : {}),
           }),
         );
