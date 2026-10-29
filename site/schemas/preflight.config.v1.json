@@ -318,6 +318,11 @@
           "type": "object",
           "additionalProperties": {}
         },
+        "cross-scope-privileges": {
+          "description": "No cross-scope privilege the app relies on is denied or still only requested.",
+          "type": "object",
+          "additionalProperties": {}
+        },
         "test-drift": {
           "description": "Every test on the current instance also exists on the promote target.",
           "type": "object",
@@ -699,6 +704,14 @@
           ]
         },
         "table-access-settings": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "cross-scope-privileges": {
           "type": "string",
           "enum": [
             "fail",

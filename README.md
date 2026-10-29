@@ -118,7 +118,7 @@ environment; it exits `1` when a doctor row fails.
 ## What it checks
 
 `runPreflight(ctx, checks?)` runs each check against the target instance and
-aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Thirty-three
+aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Thirty-four
 checks ship in the default suite; the CLI is a thin wrapper over that function.
 
 | Check                     | Needs                        | Verifies                                                                                                                                                                                                                                                                                                                                                                              |
@@ -156,6 +156,7 @@ checks ship in the default suite; the CLI is a thin wrapper over that function.
 | `platform-release`        | credentials                  | Reports the release family the instance runs (`glide.buildname`, plus the leading token of `glide.war`); fails below `options.platform.minRelease` and warns when it differs from `options.platform.expect`, when the family is unset or unknown, or when the read was trimmed. Advisory.                                                                                             |
 | `cors-rules`              | `scope`                      | Every active in-scope CORS rule (`sys_cors_rule`) names an exact origin: an empty domain, `*` or a bare-TLD wildcard (`*.com`) fails, a wildcard sub-domain (`*.example.com`) warns. Messages name rules only, never the domain (rule 2.7; blocker — a security-trimmed read fails).                                                                                                  |
 | `table-access-settings`   | `scope`                      | Application Access on every in-scope table: a table accessible from all application scopes that also grants create, update or delete to them fails; public read-only access and web-service access without a user role warn (blocker — a security-trimmed read fails).                                                                                                                |
+| `cross-scope-privileges`  | `scope`                      | No cross-scope privilege the scope holds as a source (`sys_scope_privilege`, keyed on `source_scope`) is denied — those fail; privileges still only requested, or with an unknown status, warn. Messages name the target record and operation only (blocker — a security-trimmed read fails).                                                                                         |
 
 Checks whose only need is credentials always run once credentials are present;
 the rest `warn` (and explain what's missing) until you supply their inputs —

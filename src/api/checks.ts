@@ -56,6 +56,7 @@ export {
   platformRelease,
   corsRules,
   tableAccessSettings,
+  crossScopePrivileges,
   testDrift,
 } from "../checks/index.js";
 export {

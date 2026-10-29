@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table and web-service access without a user role warn. One finding per
   offending table (`public-write:<ops>`, `public-read`, `ws-no-role`). Blocker;
   a security-trimmed read fails. Registry grows to 33 checks.
+- **`cross-scope-privileges` check** — cross-scope access the app depends
+  on (blocker, no checklist rule): reads `sys_scope_privilege` rows whose
+  `source_scope` is the resolved scope's sys_id. A **denied** privilege
+  fails; one still only **requested**, or with an unknown status, warns;
+  a scope that does not resolve to a `sys_scope` record warns. Messages and
+  findings name only the target record and operation. **New blocker in the
+  default suite** — a run whose app holds a denied privilege now fails.
 - **Drift findings and fallback identity** — `test-drift` returns one finding
   per test missing on (`fail`) or extra on (`warn`) the target, keyed on its
   logical id; `app-version-parity` one per downgraded, missing or unverified

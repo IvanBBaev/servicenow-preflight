@@ -77,6 +77,7 @@
 ./checks value compareFamilies
 ./checks value connectivityAuth
 ./checks value corsRules
+./checks value crossScopePrivileges
 ./checks value declaredTables
 ./checks value defaultChecks
 ./checks value defaultSetLeakage

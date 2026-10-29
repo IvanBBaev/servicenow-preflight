@@ -260,7 +260,7 @@ test("planIncremental skips checks whose tables did not change", async () => {
   assert.ok(plan.skip.includes("table-namespace"));
   assert.match(
     plan.preamble,
-    /^Incremental \(dev\): \d+ of 33 checks selected \(changed tables: sys_ui_page\)\.$/,
+    /^Incremental \(dev\): \d+ of 34 checks selected \(changed tables: sys_ui_page\)\.$/,
   );
 });
 
@@ -337,7 +337,7 @@ test("planIncremental runs everything when the change read is truncated", async 
   );
   assert.deepEqual(plan.skip, []);
   assert.equal(plan.empty, false);
-  assert.match(plan.preamble, /row cap; running all 33 checks/);
+  assert.match(plan.preamble, /row cap; running all 34 checks/);
 });
 
 // --- CLI --------------------------------------------------------------------

@@ -297,5 +297,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "A public table lets other scopes create, update or delete, or the read was security-trimmed.",
     "warn": "A public read-only table, web-service access without a user role, no scope, or an ambiguous zero-row read.",
     "pass": "Every in-scope table restricts application access, or the scope ships none."
+  },
+  {
+    "code": "34",
+    "name": "cross-scope-privileges",
+    "tag": "scope",
+    "desc": "Every cross-scope privilege the scope holds as a source is allowed on the target instance; denied ones fail, requested ones warn.",
+    "fail": "A cross-scope privilege is denied, or the read was security-trimmed.",
+    "warn": "A privilege is only requested or has an unknown status, the scope is unset or did not resolve, or a zero-row read was ambiguous.",
+    "pass": "Every cross-scope privilege is allowed, or the scope holds none."
   }
 ];
