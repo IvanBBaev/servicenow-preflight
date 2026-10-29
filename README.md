@@ -118,7 +118,7 @@ environment; it exits `1` when a doctor row fails.
 ## What it checks
 
 `runPreflight(ctx, checks?)` runs each check against the target instance and
-aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Thirty-six
+aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Thirty-seven
 checks ship in the default suite; the CLI is a thin wrapper over that function.
 
 | Check                     | Needs                        | Verifies                                                                                                                                                                                                                                                                                                                                                                                |
@@ -159,6 +159,7 @@ checks ship in the default suite; the CLI is a thin wrapper over that function.
 | `cross-scope-privileges`  | `scope`                      | No cross-scope privilege the scope holds as a source (`sys_scope_privilege`, keyed on `source_scope`) is denied — those fail; privileges still only requested, or with an unknown status, warn. Messages name the target record and operation only (blocker — a security-trimmed read fails).                                                                                           |
 | `update-set-collisions`   | `updateSetId` or `scope`     | Records in the target update set (or, by scope, every in-progress set of the app) that another update set also captures: a collision with another open set fails, one with completed sets only warns; Default sets are ignored and counted. Messages give set names and counts, never record XML (blocker — a security-trimmed read fails).                                             |
 | `connection-credentials`  | `scope`                      | No credential record (`discovery_credentials` and its children) ships in scope — those fail; a REST message or function (`sys_rest_message`, `sys_rest_message_fn`) with a literal `http…` endpoint instead of a Connection & Credential alias warns. Only names and classes are read — never credential values or endpoint URLs (rule 1.7; blocker — a trimmed credential read fails). |
+| `secret-in-scripts`       | `scope`                      | No hard-coded secret in any in-scope server or client script: a secret-named variable assigned a non-empty string literal, a known token shape (AWS key id, GitHub/Slack token, PEM private key, JWT) inside a literal, or `setBasicAuth` with a literal argument. Comments are ignored; messages name the artifact, field, line and pattern, never the value (rule 1.7; blocker).      |
 
 Checks whose only need is credentials always run once credentials are present;
 the rest `warn` (and explain what's missing) until you supply their inputs —

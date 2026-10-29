@@ -34,6 +34,7 @@ import { tableAccessSettings } from "./table-access-settings.js";
 import { crossScopePrivileges } from "./cross-scope-privileges.js";
 import { updateSetCollisions } from "./update-set-collisions.js";
 import { connectionCredentials } from "./connection-credentials.js";
+import { secretInScripts } from "./secret-in-scripts.js";
 
 export { connectivityAuth } from "./connectivity-auth.js";
 export { updateSetState } from "./update-set-state.js";
@@ -70,6 +71,7 @@ export { tableAccessSettings } from "./table-access-settings.js";
 export { crossScopePrivileges } from "./cross-scope-privileges.js";
 export { updateSetCollisions } from "./update-set-collisions.js";
 export { connectionCredentials } from "./connection-credentials.js";
+export { secretInScripts } from "./secret-in-scripts.js";
 export { testDrift } from "./test-drift.js";
 
 /**
@@ -188,4 +190,5 @@ export const defaultChecks: Check[] = [
   crossScopePrivileges,
   updateSetCollisions,
   connectionCredentials,
+  secretInScripts,
 ];

@@ -324,5 +324,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "A credential record ships in the app, the credential read was security-trimmed, or authentication failed.",
     "warn": "A REST message or function uses a hard-coded endpoint, the scope is unset, or a REST/alias read was trimmed, ambiguous or unreachable.",
     "pass": "No credential records and no hard-coded REST endpoints in scope."
+  },
+  {
+    "code": "37",
+    "name": "secret-in-scripts",
+    "tag": "scope",
+    "desc": "No hard-coded passwords, API keys, tokens or private keys in in-scope scripts.",
+    "fail": "A possible hard-coded secret in an in-scope script, or a script table read was security-trimmed.",
+    "warn": "No scope, or an ambiguous zero-row read.",
+    "pass": "No hard-coded secret pattern in any in-scope script, or the scope ships no scripts."
   }
 ];

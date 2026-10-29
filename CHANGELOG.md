@@ -65,6 +65,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   independent: a trimmed credential read fails, a trimmed REST or alias read
   warns. **New blocker in the default suite** — an app that ships a credential
   record now fails the run.
+- **`secret-in-scripts` check** (rule 1.7, blocker) — scans every standard
+  in-scope script source for hard-coded secrets: a secret-named identifier
+  (`password`, `api_key`, `token`, …) assigned a non-empty string literal
+  (code view), a known token shape inside a literal body (AWS access key id,
+  GitHub and Slack tokens, PEM private key, JWT; string view), and
+  `setBasicAuth(` with a literal first argument. Empty literals, property
+  reads and string concatenations such as `"token=" + x` do not match.
+  Messages and findings name the artifact, field, line and pattern id, never
+  the matched value. **New blocker in the default suite** — an app with a
+  hard-coded secret now fails the run.
 - **Drift findings and fallback identity** — `test-drift` returns one finding
   per test missing on (`fail`) or extra on (`warn`) the target, keyed on its
   logical id; `app-version-parity` one per downgraded, missing or unverified

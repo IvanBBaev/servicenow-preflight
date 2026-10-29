@@ -59,6 +59,7 @@ export {
   crossScopePrivileges,
   updateSetCollisions,
   connectionCredentials,
+  secretInScripts,
   testDrift,
 } from "../checks/index.js";
 export {
