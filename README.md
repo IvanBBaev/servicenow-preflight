@@ -118,7 +118,7 @@ environment; it exits `1` when a doctor row fails.
 ## What it checks
 
 `runPreflight(ctx, checks?)` runs each check against the target instance and
-aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Thirty
+aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Thirty-one
 checks ship in the default suite; the CLI is a thin wrapper over that function.
 
 | Check                     | Needs                        | Verifies                                                                                                                                                                                                                                                                                                                                                                              |
@@ -153,6 +153,7 @@ checks ship in the default suite; the CLI is a thin wrapper over that function.
 | `notification-conditions` | `scope`                      | No active Notification fires on every update of its table — each is tied to an event or carries a condition (mail-storm guard). Advisory.                                                                                                                                                                                                                                             |
 | `log-leftovers`           | `scope`                      | No `console.log(` / `console.debug(` / `console.dir(` or debug `alert(` in active in-scope client scripts, UI Scripts, UI Policy scripts and UI Action client scripts, and no `gs.print(` / `gs.log(` (unavailable in scoped apps) in server scripts; comment lines are ignored and messages give artifact, field and line only (rule 4.3; advisory — a security-trimmed read fails). |
 | `deprecated-apis`         | `scope`                      | No `Packages.` Java calls (not available in scoped apps) in active in-scope server scripts — those fail; synchronous `getXMLWait(`, a callback-less `g_form.getReference(…)` and the server-only `gs.hasRole` in client scripts warn. Comment lines are ignored and messages give artifact, field and line only (blocker — a security-trimmed read fails).                            |
+| `platform-release`        | credentials                  | Reports the release family the instance runs (`glide.buildname`, plus the leading token of `glide.war`); fails below `options.platform.minRelease` and warns when it differs from `options.platform.expect`, when the family is unset or unknown, or when the read was trimmed. Advisory.                                                                                             |
 
 Checks whose only need is credentials always run once credentials are present;
 the rest `warn` (and explain what's missing) until you supply their inputs —

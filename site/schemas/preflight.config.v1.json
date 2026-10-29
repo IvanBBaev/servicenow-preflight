@@ -285,6 +285,29 @@
           "type": "object",
           "additionalProperties": {}
         },
+        "platform-release": {
+          "description": "Reports the instance release family; fails below options.platform.minRelease and warns when it differs from options.platform.expect. Advisory.",
+          "type": "object",
+          "properties": {
+            "platform": {
+              "type": "object",
+              "properties": {
+                "minRelease": {
+                  "description": "Oldest release family the app supports, e.g. \"Xanadu\"; an older instance fails.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "expect": {
+                  "description": "Release family the instance is expected to run; a different one warns.",
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "test-drift": {
           "description": "Every test on the current instance also exists on the promote target.",
           "type": "object",
@@ -365,6 +388,22 @@
         "baseLanguage": {
           "description": "The source language that defines full coverage.",
           "type": "string"
+        },
+        "platform": {
+          "type": "object",
+          "properties": {
+            "minRelease": {
+              "description": "Oldest release family the app supports, e.g. \"Xanadu\"; an older instance fails.",
+              "type": "string",
+              "minLength": 1
+            },
+            "expect": {
+              "description": "Release family the instance is expected to run; a different one warns.",
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -626,6 +665,14 @@
           ]
         },
         "deprecated-apis": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "platform-release": {
           "type": "string",
           "enum": [
             "fail",

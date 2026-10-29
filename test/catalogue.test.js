@@ -42,7 +42,7 @@ test("only the ATF checks run serially", () => {
   ]);
 });
 
-test("advisory checks are the nine that never fail on a finding", () => {
+test("advisory checks are the ten that never fail on a finding", () => {
   const advisory = defaultChecks
     .filter((check) => check.meta?.severity === "advisory")
     .map((check) => check.name)
@@ -54,6 +54,7 @@ test("advisory checks are the nine that never fail on a finding", () => {
     "mobile-menu-hygiene",
     "module-roles",
     "notification-conditions",
+    "platform-release",
     "portal-roles",
     "scheduled-job-run-as",
     "script-hygiene",
@@ -72,7 +73,7 @@ test("certification rule ids look like CHECKLIST headings", () => {
 
 test("describeChecks covers the default suite in order", () => {
   const described = describeChecks(defaultChecks);
-  assert.equal(described.length, 30);
+  assert.equal(described.length, 31);
   assert.deepEqual(
     described.map((d) => d.name),
     defaultChecks.map((c) => c.name),

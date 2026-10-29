@@ -350,6 +350,42 @@ async function classifyMissingProperty(
   return undefined;
 }
 
+/** The platform build properties read by {@link readBuildInfo}. */
+export interface BuildInfo {
+  /** Non-blank `glide.buildname` (release family), when visible. */
+  buildName?: string;
+  /** Non-blank `glide.war` (exact build / patch level), when visible. */
+  war?: string;
+  /** The raw read, for zero-row / security-trim triage by the caller. */
+  read: TableQueryResult;
+}
+
+/**
+ * Read `glide.buildname` and `glide.war` from `sys_properties` in one query
+ * built with the validated {@link inClause} (SR-1). Blank values count as
+ * absent. Errors propagate: the sync swallows them (best-effort capture), the
+ * `platform-release` check maps them to a verdict.
+ */
+export async function readBuildInfo(client: SnClient): Promise<BuildInfo> {
+  const read = await client.table(PROPERTIES_TABLE).queryWithMeta({
+    sysparm_query: inClause("name", [BUILD_NAME_PROPERTY, WAR_PROPERTY]),
+    sysparm_fields: "name,value",
+  });
+  const values = new Map<string, string>();
+  for (const row of read.rows) {
+    const name = str(row.name);
+    if (name !== BUILD_NAME_PROPERTY && name !== WAR_PROPERTY) continue;
+    const value = str(row.value);
+    if (value) values.set(name, value);
+  }
+  const info: BuildInfo = { read };
+  const buildName = values.get(BUILD_NAME_PROPERTY);
+  const war = values.get(WAR_PROPERTY);
+  if (buildName !== undefined) info.buildName = buildName;
+  if (war !== undefined) info.war = war;
+  return info;
+}
+
 /**
  * Read the platform version identity from `sys_properties` (OPP-1). Both
  * property names go through the validated builder ({@link inClause}) — never
@@ -367,12 +403,9 @@ async function classifyMissingProperty(
 async function pullIdentity(
   client: SnClient,
 ): Promise<InstanceIdentity | undefined> {
-  let meta: TableQueryResult;
+  let info: BuildInfo;
   try {
-    meta = await client.table(PROPERTIES_TABLE).queryWithMeta({
-      sysparm_query: inClause("name", [BUILD_NAME_PROPERTY, WAR_PROPERTY]),
-      sysparm_fields: "name,value",
-    });
+    info = await readBuildInfo(client);
   } catch {
     // Version capture is best-effort: the ATF reads (which ran first) already
     // surfaced real auth/network problems, so a failure here is most likely an
@@ -380,15 +413,7 @@ async function pullIdentity(
     // sync — drift downgrades absence to an advisory (OPP-1).
     return undefined;
   }
-  const values = new Map<string, string>();
-  for (const row of meta.rows) {
-    const name = str(row.name);
-    if (name !== BUILD_NAME_PROPERTY && name !== WAR_PROPERTY) continue;
-    const value = str(row.value);
-    if (value) values.set(name, value);
-  }
-  const buildName = values.get(BUILD_NAME_PROPERTY);
-  const war = values.get(WAR_PROPERTY);
+  const { buildName, war, read: meta } = info;
   if (buildName === undefined && war === undefined) return undefined;
   const identity: InstanceIdentity = {};
   if (buildName !== undefined) {

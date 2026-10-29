@@ -11,6 +11,7 @@ import {
 import {
   pullManifest,
   syncManifest,
+  readBuildInfo,
   EmptySnapshotError,
 } from "../../build/state/sync.js";
 
@@ -1053,6 +1054,43 @@ test("pullManifest captures the platform identity from sys_properties (OPP-1)", 
     buildName: "Xanadu",
     war: "glide-xanadu-07-02-2026",
   });
+});
+
+test("syncManifest still records the same identity after the readBuildInfo extraction (F-C-19)", async () => {
+  const merged = await syncManifest(
+    versionSeededClient(),
+    "dev",
+    undefined,
+    undefined,
+    { scope: "x_acme_app" },
+  );
+  assert.deepEqual(merged.identity, {
+    buildName: "Xanadu",
+    war: "glide-xanadu-07-02-2026",
+  });
+});
+
+test("readBuildInfo returns the non-blank build properties and the raw read", async () => {
+  const info = await readBuildInfo(versionSeededClient());
+  assert.equal(info.buildName, "Xanadu");
+  assert.equal(info.war, "glide-xanadu-07-02-2026");
+  assert.ok(Array.isArray(info.read.rows));
+  const blank = await readBuildInfo(
+    createFakeSnClient({
+      tables: {
+        sys_properties: [
+          { name: "glide.buildname", value: "  " },
+          { name: "other.prop", value: "x" },
+        ],
+      },
+    }),
+  );
+  assert.equal(blank.buildName, undefined);
+  assert.equal(blank.war, undefined);
+  await assert.rejects(
+    readBuildInfo(createFakeSnClient({ fail: { auth: true } })),
+    SnAuthError,
+  );
 });
 
 test("identity read goes through the validated IN builder and pins its fields (SR-1)", async () => {

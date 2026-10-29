@@ -20,6 +20,7 @@ test("every check that reads ctx.options declares an options schema", () => {
     "atf-enablement",
     "atf-run",
     "i18n-completeness",
+    "platform-release",
     "scoped-app-deps",
   ]);
   assert.deepEqual(Object.keys(declaredOptions(ALL)).sort(), [
@@ -29,6 +30,7 @@ test("every check that reads ctx.options declares an options schema", () => {
     "atfSuites",
     "baseLanguage",
     "languages",
+    "platform",
     "requiredApps",
   ]);
 });

@@ -53,6 +53,7 @@ export {
   notificationConditions,
   logLeftovers,
   deprecatedApis,
+  platformRelease,
   testDrift,
 } from "../checks/index.js";
 export {
@@ -95,3 +96,4 @@ export {
   type SeverityOverride,
   type SeverityPolicy,
 } from "../policy.js";
+export { FAMILY_ORDER, compareFamilies, releaseFamily } from "../releases.js";

@@ -270,5 +270,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "A Packages.* call in a server script, or a script table read was security-trimmed.",
     "warn": "Only synchronous or server-only calls in client scripts (getXMLWait, callback-less g_form.getReference, gs.hasRole), no scope, or an ambiguous zero-row read.",
     "pass": "No deprecated or scope-unavailable API call in any in-scope script, or the scope ships none."
+  },
+  {
+    "code": "31",
+    "name": "platform-release",
+    "tag": "ALWAYS",
+    "desc": "The instance runs a known release family — at least options.platform.minRelease, and options.platform.expect when set.",
+    "fail": "The instance runs a family older than the configured minimum.",
+    "warn": "The family differs from the expected one, is unset or unknown, an option is malformed, or the read was trimmed.",
+    "pass": "The release family is known and meets the configured minimum and expectation."
   }
 ];

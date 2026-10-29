@@ -38,6 +38,8 @@ export {
   pullManifest,
   syncManifest,
   EmptySnapshotError,
+  readBuildInfo,
+  type BuildInfo,
   type SyncOptions,
 } from "../state/sync.js";
 export {

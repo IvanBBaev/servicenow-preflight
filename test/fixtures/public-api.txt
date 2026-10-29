@@ -48,6 +48,7 @@
 ./checks type CheckSeverity
 ./checks type CheckStatus
 ./checks type DoctorOptions
+./checks value FAMILY_ORDER
 ./checks type Finding
 ./checks type FindingLocation
 ./checks value INCREMENTAL_ROW
@@ -73,6 +74,7 @@
 ./checks value changedTables
 ./checks value clientCallableAcl
 ./checks value clientScriptSafety
+./checks value compareFamilies
 ./checks value connectivityAuth
 ./checks value declaredTables
 ./checks value defaultChecks
@@ -93,9 +95,11 @@
 ./checks value moduleRoles
 ./checks value notificationConditions
 ./checks value planIncremental
+./checks value platformRelease
 ./checks value policySkips
 ./checks value portalRoles
 ./checks value propertyPrivacy
+./checks value releaseFamily
 ./checks value remoteSetPreview
 ./checks value restEndpointSecurity
 ./checks value scheduledJobRunAs
@@ -189,6 +193,7 @@
 ./state type AtfRunRef
 ./state type AtfSuiteState
 ./state type AtfTestState
+./state type BuildInfo
 ./state value DEFAULT_STALE_WARN_MS
 ./state type DriftEntry
 ./state type DriftManifestRef
@@ -222,6 +227,7 @@
 ./state value promotionChain
 ./state value promotionOrderResult
 ./state value pullManifest
+./state value readBuildInfo
 ./state value registryPath
 ./state value resolveInstance
 ./state value stalenessResults

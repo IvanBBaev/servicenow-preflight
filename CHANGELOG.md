@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table, sys_id and record name. Table-level gaps use a `table:<name>`
   logical id; advisory sub-findings carry `status: "warn"`. Error results
   and passing runs carry no findings. Row messages are unchanged.
+- **`platform-release` check** (ADD-13) — reads `glide.buildname` /
+  `glide.war` and reports the release family the run targets. Optional
+  `options.platform.minRelease` fails an older instance;
+  `options.platform.expect` warns on a different family. An unset or unknown
+  family, a malformed option or a trimmed read warns. Messages carry only the
+  family and the war's leading token. The release order is exported as
+  `FAMILY_ORDER` (with `releaseFamily` / `compareFamilies`) from
+  `servicenow-preflight/checks`, and the shared `sys_properties` read as
+  `readBuildInfo` from `servicenow-preflight/state`.
 - **Script-scan findings** — `hardcoded-identifiers`, `client-script-safety`,
   `log-leftovers` and `deprecated-apis` return one `findings[]` entry per
   hit, with kind `pattern:<patternId>`, a location of table, sys_id, record
