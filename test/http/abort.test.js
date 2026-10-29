@@ -6,6 +6,7 @@ import {
   abortReason,
   raceAbort,
   sleep,
+  systemClock,
 } from "../../build/http/abort.js";
 
 test("anySignal drops undefined and returns a lone signal as is", () => {
@@ -111,10 +112,22 @@ test("sleep resolves, or rejects early on abort", async () => {
   pre.abort("pre");
   await assert.rejects(sleep(10_000, pre.signal), { message: "pre" });
 
+  // E-1: no elapsed-time assert. A 10 s sleep can only reject through the
+  // abort, so the rejection itself proves the wait was cut short.
   const mid = new AbortController();
-  const started = Date.now();
   const pending = sleep(10_000, mid.signal);
-  setTimeout(() => mid.abort("mid"), 5);
+  setImmediate(() => mid.abort("mid"));
   await assert.rejects(pending, { message: "mid" });
-  assert.ok(Date.now() - started < 1000);
+});
+
+test("systemClock reads Date.now and sleeps abortably", async () => {
+  const before = Date.now();
+  const now = systemClock.now();
+  assert.ok(now >= before && now <= Date.now());
+  await systemClock.sleep(0);
+  const pre = new AbortController();
+  pre.abort("pre");
+  await assert.rejects(systemClock.sleep(10_000, pre.signal), {
+    message: "pre",
+  });
 });

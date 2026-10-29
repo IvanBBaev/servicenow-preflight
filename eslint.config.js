@@ -11,6 +11,7 @@ export default tseslint.config(
   {
     ignores: [
       "build/",
+      ".build-*/",
       "node_modules/",
       "coverage/",
       "site/",

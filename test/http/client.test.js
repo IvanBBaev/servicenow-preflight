@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, createVerify } from "node:crypto";
 
 import {
+  CLOCK,
   createSnClient,
   SnError,
   SnAuthError,
@@ -75,6 +76,32 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
+
+/**
+ * E-1: a virtual clock for the client's waits. `sleep` records the requested
+ * duration; with `hang` it settles only through its signal (so an abort is the
+ * one way out), otherwise it advances virtual time and resolves at once.
+ */
+function fakeClock({ hang = false } = {}) {
+  const sleeps = [];
+  let now = Date.parse("2026-01-01T00:00:00Z");
+  return {
+    sleeps,
+    now: () => now,
+    sleep(ms, signal) {
+      sleeps.push(ms);
+      if (!hang) {
+        now += ms;
+        return Promise.resolve();
+      }
+      return new Promise((_, reject) => {
+        const onAbort = () => reject(new Error("aborted"));
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+  };
+}
 
 function client(extra = {}) {
   return createSnClient({
@@ -1466,6 +1493,28 @@ test("SN-6: a 429 Retry-After given as an HTTP-date is honoured", async () => {
   assert.equal(hits, 2);
 });
 
+test("E-1: a Retry-After HTTP-date is measured against the client clock", async () => {
+  const clock = fakeClock();
+  let hits = 0;
+  handler = () => {
+    hits += 1;
+    return hits === 1
+      ? fakeResponse({
+          status: 429,
+          headers: {
+            "retry-after": new Date(clock.now() + 5_000).toUTCString(),
+          },
+          body: { error: {} },
+        })
+      : fakeResponse({ body: { result: { sys_id: "z" } } });
+  };
+  const rec = await client({ [CLOCK]: clock })
+    .table("incident")
+    .get("z");
+  assert.deepEqual(rec, { sys_id: "z" });
+  assert.deepEqual(clock.sleeps, [5_000]);
+});
+
 // F-X-4: cancellation. A transport that never answers must not hang a caller
 // whose signal aborts, and the CI/CD poll must stop between polls.
 
@@ -1484,19 +1533,19 @@ test("a pre-aborted signal rejects before any request is sent", async () => {
 });
 
 test("aborting mid-request rejects promptly even if the transport hangs", async () => {
+  // E-1: the transport never settles and the 30 s timeout would read "timed
+  // out", so an "aborted" rejection proves the abort cut the wait short.
   handler = () => new Promise(() => {});
   const controller = new AbortController();
-  const started = Date.now();
   const pending = client().request("GET", "/api/now/table/incident", {
     signal: controller.signal,
   });
-  setTimeout(() => controller.abort(), 5);
+  setImmediate(() => controller.abort());
   await assert.rejects(pending, (err) => {
     assert.ok(err instanceof SnNetworkError);
     assert.match(err.message, /was aborted/);
     return true;
   });
-  assert.ok(Date.now() - started < 1000);
 });
 
 test("the per-request timeout still applies when a signal is passed", async (t) => {
@@ -1547,31 +1596,33 @@ test("cicd.runTestSuite's poll sleep is cut short by an abort", async () => {
         },
       },
     });
-  const started = Date.now();
-  const pending = client({ cicdPollIntervalMs: 60_000 }).cicd.runTestSuite(
-    "suite-1",
-    { signal: controller.signal },
-  );
-  setTimeout(() => controller.abort(), 10);
+  const clock = fakeClock({ hang: true });
+  const pending = client({
+    cicdPollIntervalMs: 60_000,
+    [CLOCK]: clock,
+  }).cicd.runTestSuite("suite-1", { signal: controller.signal });
+  setImmediate(() => controller.abort());
   await assert.rejects(pending, SnNetworkError);
-  assert.ok(Date.now() - started < 1000);
+  // The 60 s poll sleep was the wait in progress, and only the abort ended it.
+  assert.deepEqual(clock.sleeps, [60_000]);
   assert.equal(calls.length, 1);
 });
 
 test("a 429 Retry-After wait is cut short by an abort", async () => {
   const controller = new AbortController();
+  const clock = fakeClock({ hang: true });
   handler = () => {
-    setTimeout(() => controller.abort(), 5);
+    setImmediate(() => controller.abort());
     return fakeResponse({ status: 429, headers: { "retry-after": "60" } });
   };
-  const started = Date.now();
   await assert.rejects(
-    client().request("GET", "/api/now/table/incident", {
+    client({ [CLOCK]: clock }).request("GET", "/api/now/table/incident", {
       signal: controller.signal,
     }),
     (err) => err instanceof SnNetworkError && /was aborted/.test(err.message),
   );
-  assert.ok(Date.now() - started < 1000);
+  // Retry-After 60 clamps to the 30 s ceiling; the abort ended that wait.
+  assert.deepEqual(clock.sleeps, [30_000]);
 });
 
 test("withSignal binds a signal to every call and merges a caller's own", async () => {
@@ -1644,13 +1695,14 @@ test("F-X-1: maxInFlight caps concurrent requests", async () => {
 
 test("F-X-1: a 429 with Retry-After holds back the queued sibling requests", async () => {
   const startedAt = [];
+  const clock = fakeClock();
   handler = () => {
-    startedAt.push(Date.now());
+    startedAt.push(clock.now());
     return startedAt.length === 1
       ? fakeResponse({ status: 429, headers: { "retry-after": "1" } })
       : fakeResponse({ body: { result: { sys_id: "z" } } });
   };
-  const http = client({ maxInFlight: 1 });
+  const http = client({ maxInFlight: 1, [CLOCK]: clock });
   const [a, b] = await Promise.all([
     http.table("incident").get("a"),
     http.table("incident").get("b"),
@@ -1659,8 +1711,9 @@ test("F-X-1: a 429 with Retry-After holds back the queued sibling requests", asy
   assert.deepEqual(b, { sys_id: "z" });
   assert.equal(startedAt.length, 3);
   // The sibling queued behind the 429 waited out the Retry-After window too.
+  // E-1: measured on the virtual clock, so the bound is exact.
   assert.ok(
-    startedAt[1] - startedAt[0] >= 950,
+    startedAt[1] - startedAt[0] >= 1000,
     `gap ${startedAt[1] - startedAt[0]}`,
   );
 });

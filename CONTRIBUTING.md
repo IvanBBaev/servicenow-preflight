@@ -24,12 +24,18 @@ Tessera workspace in [tessera/](tessera/). A change is ready when the gate of
 every project it touches is green.
 
 ```bash
-npm run check                # root: build + lint + format:check + tests with coverage
+npm run check                # root: build + lint + format:check + tests with coverage + pack smoke
 (cd tessera && npm run check) # Tessera: build + lint + format:check + tests with coverage
 ```
 
 Tests import the compiled output, so **build before running tests** on their
 own (`npm run build && npm test`).
+The build compiles into a temporary sibling directory and renames it over
+`build/`, so a concurrent run never sees a half-written tree. Coverage floors
+in `.c8rc.json` sit one point under the measured values; raise them when
+coverage grows, never lower them. Tests must not assert elapsed wall-clock
+time: inject a clock (the `CLOCK` seam of `src/http/client.ts`, the limiter's
+`now`/`sleep` options) and assert the requested waits.
 
 ## Conventions
 

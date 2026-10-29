@@ -481,6 +481,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed; use `PreflightAuth`. A snapshot test
   (`test/fixtures/public-api.txt`) pins every export per entry point.
 
+- **Gate hardening (contributors).** `npm run build` compiles into a private
+  `.build-<pid>-…` directory and swaps it in with renames, so a concurrent test
+  or second build never sees a missing `build/`. `npm run check` now ends with
+  a pack-and-install smoke (`npm run smoke:pack`): the tarball `npm pack`
+  produces is installed offline into a fresh consumer, which imports the
+  library and its schema subpaths and runs both bins. Coverage floors rise to
+  the measured value minus one point. HTTP client tests assert the waits they
+  request on an injected clock instead of elapsed wall-clock time.
+
 - **Exit code `3` for runtime errors** (breaking, pre-1.0) — an error that
   escapes a command without being a usage or config error (a network or HTTP
   failure outside the checks, e.g. during `sync`; an unreadable or unwritable

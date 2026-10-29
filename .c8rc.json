@@ -5,8 +5,8 @@
   "exclude": ["build/**/*.d.ts", "build/**/*.map", "**/*.test.js"],
   "reporter": ["text-summary", "lcov"],
   "check-coverage": true,
-  "statements": 93,
-  "branches": 85,
-  "functions": 95,
-  "lines": 93
+  "statements": 96.6,
+  "branches": 91.3,
+  "functions": 98.5,
+  "lines": 96.6
 }

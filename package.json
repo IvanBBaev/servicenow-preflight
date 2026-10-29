@@ -85,7 +85,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "node -e \"require('fs').rmSync('build',{recursive:true,force:true})\" && tsc",
+    "build": "node scripts/build.mjs",
     "watch": "tsc --watch",
     "start": "node bin/servicenow-preflight.cjs",
     "dev": "npm run build && node bin/servicenow-preflight.cjs",
@@ -97,12 +97,13 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "verify": "npm run build && npm run lint && npm run format:check && node --test --import ./test/setup/hermetic-env.js $(find test -name '*.test.js')",
-    "check": "npm run build && npm run gen:site -- --check && npm run gen:schema -- --check && npm run lint && npm run format:check && npm run test:coverage",
+    "check": "npm run build && npm run gen:site -- --check && npm run gen:schema -- --check && npm run lint && npm run format:check && npm run test:coverage && npm run smoke:pack",
     "gen:site": "node scripts/gen-site.mjs",
     "gen:schema": "node scripts/gen-schema.mjs",
     "prepublishOnly": "npm run check",
     "stage:tessera": "node scripts/stage-tessera.mjs",
     "prepack": "node scripts/stage-tessera.mjs",
+    "smoke:pack": "node scripts/pack-smoke.mjs",
     "smoke:sdist": "node scripts/sdist-smoke.mjs",
     "smoke:sdist:container": "node scripts/sdist-container.mjs",
     "record:sample": "node scripts/record-replay-sample.mjs"

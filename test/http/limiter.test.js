@@ -149,10 +149,18 @@ test("the default timer wakes a waiting acquire", async () => {
   const limiter = createLimiter({ rps: 100 });
   const first = await limiter.acquire();
   first();
-  const started = Date.now();
-  const second = await limiter.acquire();
-  second();
-  assert.ok(Date.now() - started >= 5);
+  // E-1: no elapsed-time assert. The bucket is empty, so the second acquire
+  // must stay pending through a microtask drain (no timer can fire inside
+  // one) and be granted only by the default timer.
+  let granted = false;
+  const second = limiter.acquire().then((release) => {
+    granted = true;
+    return release;
+  });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  assert.equal(granted, false);
+  (await second)();
+  assert.equal(granted, true);
 });
 
 test("limitProblem enforces the documented ranges", () => {

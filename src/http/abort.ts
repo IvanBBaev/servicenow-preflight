@@ -94,3 +94,21 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     signal.addEventListener("abort", onAbort, { once: true });
   });
 }
+
+/**
+ * The time source the client and the limiter read: wall-clock milliseconds and
+ * an abortable sleep. Injected by tests (E-1) so retry, poll and rate-limit
+ * waits are asserted by the durations requested, never by elapsed real time.
+ */
+export interface Clock {
+  /** Epoch milliseconds. */
+  now(): number;
+  /** Wait `ms`; reject with the abort reason if `signal` aborts first. */
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
+}
+
+/** The real clock: `Date.now` and a `setTimeout`-backed {@link sleep}. */
+export const systemClock: Clock = {
+  now: () => Date.now(),
+  sleep: (ms, signal) => sleep(ms, signal),
+};

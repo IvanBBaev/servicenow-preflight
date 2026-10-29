@@ -1,8 +1,9 @@
 # Dependencies
 node_modules/
 
-# Build output
+# Build output (scripts/build.mjs stages into .build-<pid>-… and renames)
 build/
+.build-*/
 dist/
 out/
 *.tsbuildinfo

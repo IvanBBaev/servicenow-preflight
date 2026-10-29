@@ -19,7 +19,13 @@ import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { isIP, type Socket } from "node:net";
 import { createSign } from "node:crypto";
 
-import { abortReason, anySignal, raceAbort, sleep } from "./abort.js";
+import {
+  abortReason,
+  anySignal,
+  raceAbort,
+  systemClock,
+  type Clock,
+} from "./abort.js";
 import { createLimiter, limitProblem, type Limiter } from "./limiter.js";
 import { createReadCache, deepFreeze, readKey } from "./cache.js";
 import { diagnoseAuthFailure } from "./diagnose.js";
@@ -460,9 +466,18 @@ export type Transport = (
  */
 export const TRANSPORT_WRAP: unique symbol = Symbol("snpf.transportWrap");
 
-/** {@link SnClientConfig} plus the internal transport seam. */
+/**
+ * E-1: the internal clock seam. Retry-After and CI/CD poll waits, the limiter's
+ * pacing and Retry-After HTTP-date parsing read this clock (default
+ * {@link systemClock}), so tests can assert the waits a client requests without
+ * measuring real time. Not exported from `src/index.ts`.
+ */
+export const CLOCK: unique symbol = Symbol("snpf.clock");
+
+/** {@link SnClientConfig} plus the internal transport and clock seams. */
 export type InternalClientConfig = SnClientConfig & {
   [TRANSPORT_WRAP]?: (inner: Transport) => Transport;
+  [CLOCK]?: Clock;
 };
 
 /**
@@ -1266,10 +1281,10 @@ const CICD_POLL_ERROR_TOLERANCE = 5;
 /**
  * Parse a `Retry-After` header into a wait in milliseconds, clamped to
  * {@link RETRY_AFTER_CEILING_MS}. Supports both RFC 7231 forms: a delta-seconds
- * integer and an HTTP-date. Falls back to 1s when the header is absent or
- * unparseable.
+ * integer and an HTTP-date (measured from `now`, epoch ms). Falls back to 1s
+ * when the header is absent or unparseable.
  */
-function retryAfterMs(raw: string | undefined): number {
+function retryAfterMs(raw: string | undefined, now: number): number {
   const fallback = 1_000;
   if (!raw) return fallback;
   const trimmed = raw.trim();
@@ -1278,7 +1293,7 @@ function retryAfterMs(raw: string | undefined): number {
   }
   const when = Date.parse(trimmed);
   if (!Number.isNaN(when)) {
-    return Math.min(Math.max(when - Date.now(), 0), RETRY_AFTER_CEILING_MS);
+    return Math.min(Math.max(when - now, 0), RETRY_AFTER_CEILING_MS);
   }
   return fallback;
 }
@@ -1416,6 +1431,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
   }
   const origin = parsedUrl.origin;
   const timeoutMs = cfg.timeoutMs ?? 30_000;
+  const clock = (cfg as InternalClientConfig)[CLOCK] ?? systemClock;
   for (const name of ["maxInFlight", "rps"] as const) {
     const value = cfg[name];
     const problem = value === undefined ? undefined : limitProblem(name, value);
@@ -1432,6 +1448,8 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
             ? { maxInFlight: cfg.maxInFlight }
             : {}),
           ...(cfg.rps !== undefined ? { rps: cfg.rps } : {}),
+          now: () => clock.now(),
+          sleep: (ms) => clock.sleep(ms),
         })
       : undefined;
   const cache = cfg.cache ? createReadCache() : undefined;
@@ -1540,7 +1558,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         // A 429 holds back every queued request too, not only this one — so
         // pause before `finally` releases the slot to the next waiter.
         if (status === 429) {
-          limiter?.pause(retryAfterMs(resHeaders["retry-after"]));
+          limiter?.pause(retryAfterMs(resHeaders["retry-after"], clock.now()));
         }
       } catch (cause) {
         const err = cause instanceof Error ? cause : new Error(String(cause));
@@ -1571,7 +1589,12 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           ms: performance.now() - startedAt,
           attempt: rateLimitAttempts + 1,
           ...(status === 429
-            ? { retryAfterMs: retryAfterMs(resHeaders["retry-after"]) }
+            ? {
+                retryAfterMs: retryAfterMs(
+                  resHeaders["retry-after"],
+                  clock.now(),
+                ),
+              }
             : {}),
         });
       }
@@ -1580,9 +1603,9 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       // An exhausted budget falls through and becomes an SnHttpError below.
       if (status === 429 && rateLimitAttempts < RATE_LIMIT_MAX_RETRIES) {
         rateLimitAttempts += 1;
-        const waitMs = retryAfterMs(resHeaders["retry-after"]);
+        const waitMs = retryAfterMs(resHeaders["retry-after"], clock.now());
         try {
-          await sleep(waitMs, caller);
+          await clock.sleep(waitMs, caller);
         } catch {
           throw abortedError(caller as AbortSignal);
         }
@@ -1716,7 +1739,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       const url = cicdProgressUrl(current);
       if (!url) return current;
       try {
-        await sleep(pollIntervalMs, signal);
+        await clock.sleep(pollIntervalMs, signal);
       } catch {
         throw abortedError(signal as AbortSignal);
       }
