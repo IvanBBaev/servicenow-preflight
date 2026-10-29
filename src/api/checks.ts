@@ -58,6 +58,7 @@ export {
   tableAccessSettings,
   crossScopePrivileges,
   updateSetCollisions,
+  connectionCredentials,
   testDrift,
 } from "../checks/index.js";
 export {

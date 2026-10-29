@@ -315,5 +315,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "A target record is also captured in another in-progress update set, or a read was security-trimmed.",
     "warn": "Collisions only with completed sets, no scope or update set id, no target sets, an ambiguous read, or record keys that could not be queried safely.",
     "pass": "No target record is captured in any other update set."
+  },
+  {
+    "code": "36",
+    "name": "connection-credentials",
+    "tag": "scope",
+    "desc": "No credential records ship in the scope; REST messages and functions reach their endpoints through Connection & Credential aliases rather than a hard-coded URL.",
+    "fail": "A credential record ships in the app, the credential read was security-trimmed, or authentication failed.",
+    "warn": "A REST message or function uses a hard-coded endpoint, the scope is unset, or a REST/alias read was trimmed, ambiguous or unreachable.",
+    "pass": "No credential records and no hard-coded REST endpoints in scope."
   }
 ];

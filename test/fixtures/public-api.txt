@@ -75,6 +75,7 @@
 ./checks value clientCallableAcl
 ./checks value clientScriptSafety
 ./checks value compareFamilies
+./checks value connectionCredentials
 ./checks value connectivityAuth
 ./checks value corsRules
 ./checks value crossScopePrivileges

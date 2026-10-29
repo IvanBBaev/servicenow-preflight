@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a scope that does not resolve to a `sys_scope` record warns. Messages and
   findings name only the target record and operation. **New blocker in the
   default suite** — a run whose app holds a denied privilege now fails.
+- **`connection-credentials` check** (rule 1.7, blocker) — reads in-scope
+  `discovery_credentials` (any row fails: a credential record ships in the
+  app), `sys_rest_message` / `sys_rest_message_fn` (a literal `http…`
+  endpoint without a `${…}` alias placeholder warns) and `sys_alias`
+  (informational count). Only `sys_id`, names and classes are requested —
+  never credential values — and endpoint URLs are never echoed. Each read is
+  independent: a trimmed credential read fails, a trimmed REST or alias read
+  warns. **New blocker in the default suite** — an app that ships a credential
+  record now fails the run.
 - **Drift findings and fallback identity** — `test-drift` returns one finding
   per test missing on (`fail`) or extra on (`warn`) the target, keyed on its
   logical id; `app-version-parity` one per downgraded, missing or unverified
