@@ -1087,6 +1087,17 @@ entries are dropped, a bad `id` is recomputed) and caps the list at
 `MAX_FINDINGS` (500), counting the overflow in `findingsTruncated`. `findings`
 is optional and omitted when empty, and never changes the row's status.
 
+A non-pass row without findings (a degraded read, a connectivity failure)
+still stands for one finding: **`effectiveFindings(result)`** (from
+`servicenow-preflight/checks`) returns the row's own findings, or for such a
+row one implicit finding with kind `"row"` whose id depends only on the check
+name, or none for a passing row. The drift gate emits findings too:
+`test-drift` one per missing (`fail`) or extra (`warn`) test with
+`logicalId: "<scope>/<slug>"`, `app-version-parity` one per downgraded,
+missing or unverified app with `logicalId: "app:<scope>"`, and
+`instance-version-parity` / `manifest-freshness` one `logicalId: "instance"`
+finding per non-pass row.
+
 Rows the tool synthesises carry a **`kind`**: `"runner"` on the `preflight`
 guard rows (duplicate or reserved check names, an empty selection) and
 `"baseline"` on expired-baseline notices. Check rows leave it out (meaning

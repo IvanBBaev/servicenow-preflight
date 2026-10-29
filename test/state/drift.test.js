@@ -1118,3 +1118,173 @@ test("promotionOrderResult warns (unverified) when no promotesTo is declared", (
   assert.equal(r.status, "warn");
   assert.match(r.message, /declares no promotesTo pipeline/);
 });
+
+// --- findings (F-R-5) -----------------------------------------------------------
+
+const ID_FORMAT = /^f1:[0-9a-f]{16}$/;
+
+test("staleness rows carry one instance finding keyed by condition and role", () => {
+  const now = Date.parse("2026-10-29T00:00:00Z");
+  const old = (instance) => ({
+    instance,
+    syncedAt: "2026-01-01T00:00:00Z",
+    tests: [],
+    suites: [],
+  });
+  const refs = [
+    { role: "source", manifest: old("staging") },
+    { role: "target", manifest: old("prod") },
+  ];
+  const warn = stalenessResults(refs, { now });
+  assert.deepEqual(
+    warn.map((r) => [r.findings.length, r.findings[0].kind]),
+    [
+      [1, "stale:source"],
+      [1, "stale:target"],
+    ],
+  );
+  for (const r of warn) {
+    assert.equal(r.findings[0].location.logicalId, "instance");
+    assert.match(r.findings[0].id, ID_FORMAT);
+    assert.equal(r.findings[0].message, r.message);
+  }
+  assert.notEqual(warn[0].findings[0].id, warn[1].findings[0].id);
+  // The id does not move with the age in the message.
+  const later = stalenessResults(refs, { now: now + 86_400_000 });
+  assert.notEqual(later[0].message, warn[0].message);
+  assert.equal(later[0].findings[0].id, warn[0].findings[0].id);
+
+  const failed = stalenessResults(refs, { now, maxAgeMs: 1000 });
+  assert.equal(failed[0].findings[0].kind, "max-age-exceeded:source");
+  const unsynced = stalenessResults(
+    [{ role: "target", manifest: { instance: "prod", tests: [], suites: [] } }],
+    { now, maxAgeMs: 1000 },
+  );
+  assert.equal(unsynced[0].findings[0].kind, "no-synced-at:target");
+});
+
+test("non-pass instance-version rows carry one instance finding; pass rows none", () => {
+  const apps = [];
+  const parity = (src, tgt) =>
+    byCheck(
+      versionParityResults(
+        versioned("staging", { identity: src, apps }),
+        versioned("prod", { identity: tgt, apps }),
+      ),
+    ).instance[0];
+  const mismatch = parity(FULL_IDENTITY, {
+    ...FULL_IDENTITY,
+    buildName: "Yokohama",
+  });
+  assert.equal(mismatch.status, "fail");
+  assert.equal(mismatch.findings.length, 1);
+  assert.equal(mismatch.findings[0].kind, "build-mismatch");
+  assert.equal(mismatch.findings[0].location.logicalId, "instance");
+  assert.match(mismatch.findings[0].id, ID_FORMAT);
+
+  const patch = parity(FULL_IDENTITY, { ...FULL_IDENTITY, war: "other" });
+  assert.equal(patch.findings[0].kind, "patch-mismatch");
+  const unverified = parity(FULL_IDENTITY, { buildName: "Xanadu" });
+  assert.equal(unverified.findings[0].kind, "unverified");
+  const warOnly = parity({ war: "a" }, { war: "b" });
+  assert.equal(warOnly.findings[0].kind, "patch-mismatch");
+  const noCapture = byCheck(
+    versionParityResults(versioned("staging"), versioned("prod")),
+  );
+  assert.equal(noCapture.instance[0].findings[0].kind, "no-capture");
+  // The predates-capture app row has no per-app identity: implicit row finding.
+  assert.equal("findings" in noCapture.apps[0], false);
+
+  assert.equal("findings" in parity(FULL_IDENTITY, FULL_IDENTITY), false);
+  assert.equal("findings" in parity({ war: "a" }, { war: "a" }), false);
+});
+
+test("app-version rows carry one app:<scope> finding per missing, downgraded or unverified app", () => {
+  const results = versionParityResults(
+    versioned("staging", {
+      identity: FULL_IDENTITY,
+      apps: [
+        { id: "x_b", name: "B", version: "2.0.0" },
+        { id: "x_a", version: "1.0.0" },
+        { id: "x_c", version: "1.0.0" },
+        { id: "x_d", version: "1.0.0" },
+        { id: "x_e", version: "1.0.0" },
+      ],
+    }),
+    versioned("prod", {
+      identity: FULL_IDENTITY,
+      apps: [
+        { id: "x_b", version: "1.9.0" },
+        { id: "x_c" },
+        { id: "x_d", version: "1.0.x" },
+        { id: "x_e", version: "1.0.0" },
+      ],
+    }),
+  );
+  const { apps } = byCheck(results);
+  const fail = apps.find((r) => r.status === "fail");
+  const warn = apps.find((r) => r.status === "warn");
+  assert.deepEqual(
+    fail.findings.map((f) => [f.kind, f.location.logicalId, f.status]),
+    [["downgraded", "app:x_b", "fail"]],
+  );
+  assert.deepEqual(
+    warn.findings.map((f) => [f.kind, f.location.logicalId, f.status]),
+    [
+      ["missing-on-target", "app:x_a", "warn"],
+      ["unverified", "app:x_c", "warn"],
+      ["unverified", "app:x_d", "warn"],
+    ],
+  );
+  for (const f of [...fail.findings, ...warn.findings]) {
+    assert.match(f.id, ID_FORMAT);
+  }
+  assert.match(warn.findings[0].message, /x_a is recorded on source "staging"/);
+});
+
+test("app-version finding ids are stable across manifest reordering", () => {
+  const src = [
+    { id: "x_a", version: "2.0.0" },
+    { id: "x_b", version: "1.0.0" },
+    { id: "x_m", version: "1.0.0" },
+  ];
+  const tgt = [
+    { id: "x_a", version: "1.0.0" },
+    { id: "x_b", version: "0.5.0" },
+  ];
+  const ids = (s, t) =>
+    byCheck(
+      versionParityResults(
+        versioned("staging", { identity: FULL_IDENTITY, apps: s }),
+        versioned("prod", { identity: FULL_IDENTITY, apps: t }),
+      ),
+    )
+      .apps.flatMap((r) => r.findings.map((f) => f.id))
+      .sort();
+  assert.deepEqual(ids(src, tgt), ids([...src].reverse(), [...tgt].reverse()));
+  assert.equal(ids(src, tgt).length, 3);
+});
+
+test("passing app-version rows carry no findings", () => {
+  const apps = [{ id: "x_a", version: "1.0.0" }];
+  const { apps: rows } = byCheck(
+    versionParityResults(
+      versioned("staging", { identity: FULL_IDENTITY, apps }),
+      versioned("prod", { identity: FULL_IDENTITY, apps }),
+    ),
+  );
+  assert.equal(rows[0].status, "pass");
+  assert.equal("findings" in rows[0], false);
+});
+
+test("more than 500 missing apps are capped and counted", () => {
+  const apps = Array.from({ length: 502 }, (_, i) => ({ id: `x_${i}` }));
+  const { apps: rows } = byCheck(
+    versionParityResults(
+      versioned("staging", { identity: FULL_IDENTITY, apps }),
+      versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
+    ),
+  );
+  assert.equal(rows[0].findings.length, 500);
+  assert.equal(rows[0].findingsTruncated, 2);
+});

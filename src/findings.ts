@@ -4,7 +4,12 @@
  */
 import { createHash } from "node:crypto";
 
-import type { CheckStatus, Finding, FindingLocation } from "./types.js";
+import type {
+  CheckResult,
+  CheckStatus,
+  Finding,
+  FindingLocation,
+} from "./types.js";
 
 /** Most findings one check result may carry; the overflow is counted, not kept. */
 export const MAX_FINDINGS = 500;
@@ -54,6 +59,34 @@ export function makeFinding(
   if (status !== undefined) finding.status = status;
   if (location !== undefined) finding.location = location;
   return finding;
+}
+
+/** Kind of the implicit finding {@link effectiveFindings} gives a bare row. */
+export const ROW_FINDING_KIND = "row";
+
+/**
+ * The findings a reporter or the baseline should key on for one result row.
+ * A row that carries findings returns them as-is. A non-pass row without
+ * findings (a degraded read, a connectivity failure, an aggregate verdict)
+ * stands for exactly one implicit finding with kind `"row"` and the fixed
+ * logical id `"row"`, so its id depends only on the check name and survives
+ * message rewording. A passing row without findings has none.
+ *
+ * Consumers call this instead of reading `findings` directly, so no non-pass
+ * row is ever lost to a per-finding view.
+ */
+export function effectiveFindings(result: CheckResult): Finding[] {
+  if (result.findings !== undefined && result.findings.length > 0) {
+    return result.findings;
+  }
+  if (result.status === "pass") return [];
+  return [
+    {
+      id: findingId(result.name, ROW_FINDING_KIND, { logicalId: "row" }),
+      kind: ROW_FINDING_KIND,
+      message: result.message,
+    },
+  ];
 }
 
 /** Keep at most `max` findings and count the rest. */

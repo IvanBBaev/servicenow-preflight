@@ -58,6 +58,7 @@
 ./checks type PreflightAuth
 ./checks type PreflightContext
 ./checks type PreflightReport
+./checks value ROW_FINDING_KIND
 ./checks type ReplayInfo
 ./checks value STATE_TABLES
 ./checks type SelectReason
@@ -79,6 +80,7 @@
 ./checks value deprecatedApis
 ./checks value describeChecks
 ./checks value doctorChecks
+./checks value effectiveFindings
 ./checks value findCheck
 ./checks value findingId
 ./checks value hardcodedIdentifiers

@@ -1,4 +1,5 @@
-import type { CheckResult } from "../types.js";
+import type { CheckResult, CheckStatus, Finding } from "../types.js";
+import { capFindings, makeFinding } from "../findings.js";
 import type {
   IdentityMissingReason,
   InstalledAppState,
@@ -140,6 +141,27 @@ export interface StalenessOptions {
   maxAgeMs?: number;
 }
 
+/**
+ * A freshness row with its single `logicalId: "instance"` finding. The kind
+ * carries the condition and the manifest's role (`stale:source`,
+ * `max-age-exceeded:target`, ...), so the source and target rows of one drift
+ * run never share an id, and the id survives the age in the message changing.
+ */
+function freshnessRow(
+  status: CheckStatus,
+  message: string,
+  kind: string,
+): CheckResult {
+  return {
+    name: FRESHNESS_CHECK,
+    status,
+    message,
+    findings: [
+      makeFinding(FRESHNESS_CHECK, kind, message, { logicalId: INSTANCE_ID }),
+    ],
+  };
+}
+
 /** Render a millisecond age as a compact human string (e.g. `45d`, `3h`). */
 function formatAge(ms: number): string {
   const sec = Math.floor(ms / 1000);
@@ -178,27 +200,33 @@ export function stalenessResults(
     const synced = manifest.syncedAt ? Date.parse(manifest.syncedAt) : NaN;
     if (Number.isNaN(synced)) {
       if (maxAgeMs !== undefined) {
-        out.push({
-          name: FRESHNESS_CHECK,
-          status: "fail",
-          message: `Manifest for ${label} has no recorded syncedAt; cannot verify it is within --max-age. Re-run sync.`,
-        });
+        out.push(
+          freshnessRow(
+            "fail",
+            `Manifest for ${label} has no recorded syncedAt; cannot verify it is within --max-age. Re-run sync.`,
+            `no-synced-at:${role}`,
+          ),
+        );
       }
       continue;
     }
     const ageMs = Math.max(0, now - synced);
     if (maxAgeMs !== undefined && ageMs > maxAgeMs) {
-      out.push({
-        name: FRESHNESS_CHECK,
-        status: "fail",
-        message: `Manifest for ${label} was synced ${formatAge(ageMs)} ago, exceeding --max-age (${formatAge(maxAgeMs)}). Re-run sync before promoting.`,
-      });
+      out.push(
+        freshnessRow(
+          "fail",
+          `Manifest for ${label} was synced ${formatAge(ageMs)} ago, exceeding --max-age (${formatAge(maxAgeMs)}). Re-run sync before promoting.`,
+          `max-age-exceeded:${role}`,
+        ),
+      );
     } else if (ageMs > warnAfterMs) {
-      out.push({
-        name: FRESHNESS_CHECK,
-        status: "warn",
-        message: `Manifest for ${label} was synced ${formatAge(ageMs)} ago (older than ${formatAge(warnAfterMs)}); consider re-running sync.`,
-      });
+      out.push(
+        freshnessRow(
+          "warn",
+          `Manifest for ${label} was synced ${formatAge(ageMs)} ago (older than ${formatAge(warnAfterMs)}); consider re-running sync.`,
+          `stale:${role}`,
+        ),
+      );
     }
   }
   return out;
@@ -209,6 +237,47 @@ export const INSTANCE_VERSION_CHECK = "instance-version-parity";
 
 /** Check name for the app/plugin version parity results a drift run emits (OPP-5). */
 export const APP_VERSION_CHECK = "app-version-parity";
+
+/** Logical id of the findings about a whole instance (parity, freshness). */
+const INSTANCE_ID = "instance";
+
+/**
+ * A non-pass platform-parity row with its single `logicalId: "instance"`
+ * finding. `kind` names the condition (`build-mismatch`, `patch-mismatch`,
+ * `unverified`, `no-capture`), so a reworded message keeps the same id.
+ */
+function instanceRow(
+  status: CheckStatus,
+  message: string,
+  kind: string,
+): CheckResult {
+  return {
+    name: INSTANCE_VERSION_CHECK,
+    status,
+    message,
+    findings: [
+      makeFinding(INSTANCE_VERSION_CHECK, kind, message, {
+        logicalId: INSTANCE_ID,
+      }),
+    ],
+  };
+}
+
+/** The `findings` / `findingsTruncated` fields of a row, capped and omitted when empty. */
+function cappedFindings(
+  list: readonly Finding[],
+): Pick<CheckResult, "findings" | "findingsTruncated"> {
+  const { findings, truncated } = capFindings(list);
+  return {
+    ...(findings.length > 0 ? { findings } : {}),
+    ...(truncated > 0 ? { findingsTruncated: truncated } : {}),
+  };
+}
+
+/** Logical id of an app/plugin in parity findings: `app:<scope>`. */
+function appId(app: InstalledAppState): string {
+  return `app:${app.id}`;
+}
 
 /** How many offending names a parity message spells out before truncating. */
 const MAX_NAMED = 3;
@@ -312,11 +381,11 @@ function instanceParityResult(
     const noCapture: string[] = [];
     if (!src) noCapture.push(`source "${source.instance}"`);
     if (!tgt) noCapture.push(`target "${target.instance}"`);
-    return {
-      name: INSTANCE_VERSION_CHECK,
-      status: "warn",
-      message: `Manifest for ${noCapture.join(" and ")} predates version capture (no platform identity recorded) — re-run sync to enable instance-version parity.`,
-    };
+    return instanceRow(
+      "warn",
+      `Manifest for ${noCapture.join(" and ")} predates version capture (no platform identity recorded) — re-run sync to enable instance-version parity.`,
+      "no-capture",
+    );
   }
 
   const srcNoBuild = src.buildName === undefined;
@@ -341,32 +410,32 @@ function instanceParityResult(
       : `target "${target.instance}"`;
     const reason = srcNoBuild ? src.buildNameMissing : tgt.buildNameMissing;
     if (reason === "absent") {
-      return {
-        name: INSTANCE_VERSION_CHECK,
-        status: "warn",
-        message: `glide.buildname is not set on ${which}; instance-version parity is unverified at the release-family level.`,
-      };
+      return instanceRow(
+        "warn",
+        `glide.buildname is not set on ${which}; instance-version parity is unverified at the release-family level.`,
+        "unverified",
+      );
     }
     if (reason === "trimmed") {
-      return {
-        name: INSTANCE_VERSION_CHECK,
-        status: "warn",
-        message: `glide.buildname was ACL-hidden at sync time on ${which}; instance-version parity is unverified${RERUN_HINT}`,
-      };
+      return instanceRow(
+        "warn",
+        `glide.buildname was ACL-hidden at sync time on ${which}; instance-version parity is unverified${RERUN_HINT}`,
+        "unverified",
+      );
     }
-    return {
-      name: INSTANCE_VERSION_CHECK,
-      status: "warn",
-      message: `glide.buildname was unreadable at sync time on ${which}; instance-version parity is unverified${RERUN_HINT}`,
-    };
+    return instanceRow(
+      "warn",
+      `glide.buildname was unreadable at sync time on ${which}; instance-version parity is unverified${RERUN_HINT}`,
+      "unverified",
+    );
   }
 
   if (src.buildName !== tgt.buildName) {
-    return {
-      name: INSTANCE_VERSION_CHECK,
-      status: "fail",
-      message: `Platform version mismatch: source "${source.instance}" is on ${src.buildName} but target "${target.instance}" is on ${tgt.buildName}. Align instance versions before promoting.`,
-    };
+    return instanceRow(
+      "fail",
+      `Platform version mismatch: source "${source.instance}" is on ${src.buildName} but target "${target.instance}" is on ${tgt.buildName}. Align instance versions before promoting.`,
+      "build-mismatch",
+    );
   }
 
   const noWar: MissingSide[] = [];
@@ -384,19 +453,19 @@ function instanceParityResult(
   }
   if (noWar.length > 0) {
     const { clause, trimmed } = missingClause("glide.war", noWar);
-    return {
-      name: INSTANCE_VERSION_CHECK,
-      status: "warn",
-      message: `Build names match (${src.buildName}), but ${clause}; patch-level parity is unverified${trimmed ? RERUN_HINT : "."}`,
-    };
+    return instanceRow(
+      "warn",
+      `Build names match (${src.buildName}), but ${clause}; patch-level parity is unverified${trimmed ? RERUN_HINT : "."}`,
+      "unverified",
+    );
   }
 
   if (src.war !== tgt.war) {
-    return {
-      name: INSTANCE_VERSION_CHECK,
-      status: "warn",
-      message: `Build names match (${src.buildName}), but patch levels differ: source glide.war is "${src.war}" while target is "${tgt.war}".`,
-    };
+    return instanceRow(
+      "warn",
+      `Build names match (${src.buildName}), but patch levels differ: source glide.war is "${src.war}" while target is "${tgt.war}".`,
+      "patch-mismatch",
+    );
   }
 
   return {
@@ -453,19 +522,19 @@ function warOnlyParityResult(
   }
   if (noWar.length > 0) {
     const { clause, trimmed } = missingClause("glide.war", noWar);
-    return {
-      name: INSTANCE_VERSION_CHECK,
-      status: "warn",
-      message: `${lead} and ${clause}; instance-version parity is unverified${trimmed || buildTrimmed ? RERUN_HINT : "."}`,
-    };
+    return instanceRow(
+      "warn",
+      `${lead} and ${clause}; instance-version parity is unverified${trimmed || buildTrimmed ? RERUN_HINT : "."}`,
+      "unverified",
+    );
   }
 
   if (src.war !== tgt.war) {
-    return {
-      name: INSTANCE_VERSION_CHECK,
-      status: "warn",
-      message: `${lead}; patch levels differ: source glide.war is "${src.war}" while target is "${tgt.war}". Confirm both instances are on the same release before promoting${buildTrimmed ? RERUN_HINT : "."}`,
-    };
+    return instanceRow(
+      "warn",
+      `${lead}; patch levels differ: source glide.war is "${src.war}" while target is "${tgt.war}". Confirm both instances are on the same release before promoting${buildTrimmed ? RERUN_HINT : "."}`,
+      "patch-mismatch",
+    );
   }
 
   return {
@@ -526,33 +595,58 @@ function appParityResults(
   const missingOnTarget: string[] = [];
   const downgraded: string[] = [];
   const advisories: string[] = [];
+  // One finding per app, keyed on `app:<scope>`, collected beside the labels
+  // so the aggregate messages stay byte-identical.
+  const downgradeFindings: Finding[] = [];
+  const advisoryFindings: Finding[] = [];
+  const appFinding = (
+    app: InstalledAppState,
+    kind: string,
+    message: string,
+    status: CheckStatus,
+  ): Finding =>
+    makeFinding(
+      APP_VERSION_CHECK,
+      kind,
+      message,
+      { logicalId: appId(app) },
+      status,
+    );
   for (const app of sourceApps) {
     const label = describeApp(app);
     const counterpart = targetById.get(app.id);
     if (!counterpart) {
       missingOnTarget.push(label);
+      advisoryFindings.push(
+        appFinding(
+          app,
+          "missing-on-target",
+          `App ${label} is recorded on source "${source.instance}" but not installed on target "${target.instance}".`,
+          "warn",
+        ),
+      );
       continue;
     }
     // No version recorded on the source → presence is the only expectation the
     // manifest carries for this app, and it is satisfied.
     if (app.version === undefined) continue;
     if (counterpart.version === undefined) {
-      advisories.push(
-        `${label}: source has ${app.version} but the target's installed version is unknown — unverified`,
-      );
+      const advisory = `${label}: source has ${app.version} but the target's installed version is unknown — unverified`;
+      advisories.push(advisory);
+      advisoryFindings.push(appFinding(app, "unverified", advisory, "warn"));
       continue;
     }
     const order = compareVersions(counterpart.version, app.version);
     if (order === null) {
-      advisories.push(
-        `${label}: versions "${app.version}" (source) and "${counterpart.version}" (target) cannot be compared (non-numeric segment) — unverified`,
-      );
+      const advisory = `${label}: versions "${app.version}" (source) and "${counterpart.version}" (target) cannot be compared (non-numeric segment) — unverified`;
+      advisories.push(advisory);
+      advisoryFindings.push(appFinding(app, "unverified", advisory, "warn"));
       continue;
     }
     if (order < 0) {
-      downgraded.push(
-        `${label}: target has ${counterpart.version}, below the source's ${app.version}`,
-      );
+      const downgrade = `${label}: target has ${counterpart.version}, below the source's ${app.version}`;
+      downgraded.push(downgrade);
+      downgradeFindings.push(appFinding(app, "downgraded", downgrade, "fail"));
     }
   }
 
@@ -568,6 +662,7 @@ function appParityResults(
       name: APP_VERSION_CHECK,
       status: "fail",
       message: `App version drift blocks the promote: ${downgraded.length} app(s) at a lower version on target "${target.instance}": ${nameList(downgraded)}.`,
+      ...cappedFindings(downgradeFindings),
     });
   }
   const advisoryParts: string[] = [];
@@ -584,6 +679,7 @@ function appParityResults(
       name: APP_VERSION_CHECK,
       status: "warn",
       message: `App version parity has advisories: ${advisoryParts.join("; ")}.`,
+      ...cappedFindings(advisoryFindings),
     });
   }
   if (out.length === 0) {

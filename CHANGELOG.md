@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Drift findings and fallback identity** — `test-drift` returns one finding
+  per test missing on (`fail`) or extra on (`warn`) the target, keyed on its
+  logical id; `app-version-parity` one per downgraded, missing or unverified
+  app (`logicalId: "app:<scope>"`); `instance-version-parity` and
+  `manifest-freshness` one `logicalId: "instance"` finding per non-pass row.
+  New `effectiveFindings(result)` (`servicenow-preflight/checks`) gives a
+  non-pass row without findings one implicit `kind: "row"` finding whose id
+  depends only on the check name. Row messages are unchanged.
 - **Script-scan findings** — `hardcoded-identifiers`, `client-script-safety`,
   `log-leftovers` and `deprecated-apis` return one `findings[]` entry per
   hit, with kind `pattern:<patternId>`, a location of table, sys_id, record

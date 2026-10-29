@@ -133,3 +133,68 @@ test("the runner clamps findings at 500 and records the overflow", async () => {
   assert.equal(row.findings.length, 500);
   assert.equal(row.findingsTruncated, 13);
 });
+
+// --- effectiveFindings (F-R-5) --------------------------------------------------
+
+test("effectiveFindings returns a row's own findings unchanged", async () => {
+  const { effectiveFindings } = await import("../build/api/checks.js");
+  const findings = [makeFinding("c", "k", "m", loc)];
+  const row = { name: "c", status: "fail", message: "x", findings };
+  assert.equal(effectiveFindings(row), findings);
+});
+
+test("effectiveFindings gives a non-pass row without findings one implicit finding", async () => {
+  const { effectiveFindings, ROW_FINDING_KIND } =
+    await import("../build/api/checks.js");
+  const row = { name: "connectivity-auth", status: "fail", message: "401" };
+  const [implicit, ...rest] = effectiveFindings(row);
+  assert.equal(rest.length, 0);
+  assert.equal(ROW_FINDING_KIND, "row");
+  assert.deepEqual(implicit, {
+    id: findingId("connectivity-auth", "row", { logicalId: "row" }),
+    kind: "row",
+    message: "401",
+  });
+  // Stable across a reworded message and a status change; empty findings
+  // count as none.
+  const reworded = effectiveFindings({
+    ...row,
+    status: "warn",
+    message: "timed out",
+    findings: [],
+  });
+  assert.equal(reworded[0].id, implicit.id);
+  assert.equal(reworded[0].message, "timed out");
+  // Keyed on the check name.
+  assert.notEqual(
+    effectiveFindings({ ...row, name: "other" })[0].id,
+    implicit.id,
+  );
+});
+
+test("effectiveFindings gives a passing row without findings none", async () => {
+  const { effectiveFindings } = await import("../build/api/checks.js");
+  assert.deepEqual(
+    effectiveFindings({ name: "c", status: "pass", message: "ok" }),
+    [],
+  );
+});
+
+test("a connectivity failure yields exactly one implicit finding", async () => {
+  const { effectiveFindings, connectivityAuth } =
+    await import("../build/api/checks.js");
+  const report = await runPreflight(
+    {
+      http: createFakeSnClient({ fail: { auth: true } }),
+      auth: { kind: "basic", user: "u", pass: "p" },
+    },
+    [connectivityAuth],
+  );
+  const [row] = report.results;
+  assert.equal(row.status, "fail");
+  assert.equal("findings" in row, false);
+  const findings = effectiveFindings(row);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "row");
+  assert.equal(findings[0].message, row.message);
+});

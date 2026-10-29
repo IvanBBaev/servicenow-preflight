@@ -121,6 +121,11 @@ test("drift --format json reports ok:false and a failing test-drift result", () 
     assert.match(report.results[0].message, /missing on "prod"/);
     assert.match(report.results[0].message, /\bB\b/);
     assert.equal(report.summary.fail, 1);
+    // One finding per missing test, keyed on its logical id (F-R-5).
+    assert.deepEqual(
+      report.results[0].findings.map((f) => [f.kind, f.location.logicalId]),
+      [["missing-on-target", "x/b"]],
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

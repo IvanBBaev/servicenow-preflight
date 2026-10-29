@@ -191,3 +191,99 @@ test("never throws — always returns a well-formed CheckResult", () => {
   assert.equal(typeof result.message, "string");
   assert.ok(result.message.length > 0);
 });
+
+// --- findings (F-R-5) ---------------------------------------------------------
+
+test("emits one finding per missing and extra test, keyed on the logical id", () => {
+  const result = testDrift.run({
+    manifest: manifest("staging", [
+      ["x/b", "B"],
+      ["x/a", "A"],
+    ]),
+    driftTarget: manifest("prod", [["x/z", "Z"]]),
+  });
+  assert.equal(result.status, "fail");
+  assert.deepEqual(
+    result.findings.map((f) => [f.kind, f.location.logicalId, f.status]),
+    [
+      ["missing-on-target", "x/a", "fail"],
+      ["missing-on-target", "x/b", "fail"],
+      ["extra-on-target", "x/z", "warn"],
+    ],
+  );
+  for (const f of result.findings) assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  assert.match(result.findings[0].message, /"A" is active on "staging"/);
+  assert.equal(new Set(result.findings.map((f) => f.id)).size, 3);
+});
+
+test("finding ids and order are stable across manifest reordering", () => {
+  const run = (src, dst) =>
+    testDrift.run({
+      manifest: manifest("staging", src),
+      driftTarget: manifest("prod", dst),
+    }).findings;
+  const a = run(
+    [
+      ["x/a", "A"],
+      ["x/b", "B"],
+      ["x/c", "C"],
+    ],
+    [
+      ["x/c", "C"],
+      ["x/y", "Y"],
+      ["x/x", "X"],
+    ],
+  );
+  const b = run(
+    [
+      ["x/c", "C"],
+      ["x/b", "B"],
+      ["x/a", "A"],
+    ],
+    [
+      ["x/x", "X"],
+      ["x/c", "C"],
+      ["x/y", "Y"],
+    ],
+  );
+  assert.deepEqual(a, b);
+});
+
+test("a renamed test keeps its finding id", () => {
+  const run = (name) =>
+    testDrift.run({
+      manifest: manifest("staging", [["x/a", name]]),
+      driftTarget: manifest("prod", []),
+    }).findings[0].id;
+  assert.equal(run("Old name"), run("New name"));
+});
+
+test("an extra-only drift warns with extra-on-target findings", () => {
+  const result = testDrift.run({
+    manifest: manifest("staging", []),
+    driftTarget: manifest("prod", [["x/z", ""]]),
+  });
+  assert.equal(result.status, "warn");
+  assert.equal(result.findings.length, 1);
+  assert.equal(result.findings[0].kind, "extra-on-target");
+  assert.match(result.findings[0].message, /"x\/z" exists on "prod"/);
+});
+
+test("no drift and no manifests carry no findings", () => {
+  const same = manifest("staging", [["x/a", "A"]]);
+  assert.equal(
+    "findings" in testDrift.run({ manifest: same, driftTarget: same }),
+    false,
+  );
+  assert.equal("findings" in testDrift.run({}), false);
+});
+
+test("more than 500 drifted tests are capped and counted", () => {
+  const tests = Array.from({ length: 503 }, (_, i) => [`x/t${i}`, `T${i}`]);
+  const result = testDrift.run({
+    manifest: manifest("staging", tests),
+    driftTarget: manifest("prod", []),
+  });
+  assert.equal(result.findings.length, 500);
+  assert.equal(result.findingsTruncated, 3);
+});

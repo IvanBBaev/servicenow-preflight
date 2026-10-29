@@ -57,7 +57,9 @@ export {
 } from "../checks/index.js";
 export {
   MAX_FINDINGS,
+  ROW_FINDING_KIND,
   capFindings,
+  effectiveFindings,
   findingId,
   makeFinding,
 } from "../findings.js";
