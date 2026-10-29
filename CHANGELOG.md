@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Config precedence warning and opt-in** (F-X-8) — when `instanceUrl`,
+  `updateSetId`, `proxy` or `noProxy` is set in both the config file and the
+  environment (`SNPF_INSTANCE`, `SNPF_UPDATE_SET`, `SNPF_PROXY`,
+  `SNPF_NO_PROXY`) with different values, the CLI prints one stderr warning
+  per key, naming keys only. The file still wins in 1.x; `SNPF_PRECEDENCE=env`
+  (or `loadConfig`'s `precedence: "env"`) makes the environment win now, as it
+  will by default in 2.0, and `SNPF_PRECEDENCE=file` keeps the file silently.
+  `loadConfig` gains `onWarning` and returns `sources` (`"file"` / `"env"` per
+  field); `doctor` uses it to report where the instance URL came from.
+
 - **`cors-rules` check** (rule 2.7, blocker) — reads every active in-scope
   `sys_cors_rule`. An empty domain, `*` or a bare-TLD wildcard (`*.com`)
   fails; a wildcard sub-domain (`*.example.com`) warns; a security-trimmed

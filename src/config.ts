@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { resolve, isAbsolute } from "node:path";
+import { basename, resolve, isAbsolute } from "node:path";
 import type { CheckSelection, PreflightAuth, SnTls } from "./types.js";
 import { isSafeIdentifier } from "./http/query.js";
 import { limitProblem } from "./http/limiter.js";
@@ -121,6 +121,99 @@ export interface LoadedConfig {
   concurrency?: number;
   /** `SNPF_FAIL_ON` (`fail` or `warn`), when set (F-X-17). */
   failOn?: FailOn;
+  /**
+   * Where each of `instanceUrl`, `updateSetId`, `proxy` and `noProxy` came
+   * from (F-X-8): `"file"` or `"env"`. A field with no value is absent. The CLI
+   * flag tier (`--instance`) sits above both and is applied by the CLI.
+   */
+  sources: Partial<Record<PrecedenceField, "env" | "file">>;
+}
+
+/** The config fields an env variable can also supply (F-X-8). */
+type PrecedenceField = "instanceUrl" | "updateSetId" | "proxy" | "noProxy";
+
+/** Each env-suppliable config field and the env variable that mirrors it. */
+const PRECEDENCE_FIELDS: ReadonlyArray<
+  readonly [PrecedenceField, keyof typeof ENV]
+> = [
+  ["instanceUrl", "instance"],
+  ["updateSetId", "updateSet"],
+  ["proxy", "proxy"],
+  ["noProxy", "noProxy"],
+];
+
+/**
+ * Parse `SNPF_PRECEDENCE` (`env` or `file`, case-insensitive). Blank yields
+ * `undefined`; anything else is a {@link UsageError}.
+ */
+function parsePrecedence(
+  value: string | undefined,
+  label: string,
+): "env" | "file" | undefined {
+  const v = value?.trim().toLowerCase();
+  if (!v) return undefined;
+  if (v === "env" || v === "file") return v;
+  throw new UsageError(`${label} must be "env" or "file".`);
+}
+
+/**
+ * The env variable that actually supplied `name` under `prefix`: the
+ * namespaced `SNPF_<PREFIX>_X` when it is set, else the plain `SNPF_X`.
+ */
+function suppliedEnvName(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  prefix: string | undefined,
+): string {
+  const p = prefix?.trim().toUpperCase();
+  if (!p) return name;
+  const prefixed = `SNPF_${p}_${name.slice("SNPF_".length)}`;
+  return env[prefixed] ? prefixed : name;
+}
+
+/**
+ * Apply the file-vs-env precedence (F-X-8) to the env-suppliable fields of
+ * `config`, in place, and report each field's source. With no explicit
+ * precedence the 1.x order holds (file wins) and a field set in both places
+ * with different values is reported through `warn` — key names only, never
+ * values, since a proxy URL may carry credentials.
+ */
+function applyEnvFields(
+  config: PreflightConfig,
+  env: NodeJS.ProcessEnv,
+  rawEnv: NodeJS.ProcessEnv,
+  prefix: string | undefined,
+  precedence: "env" | "file" | undefined,
+  configFile: string | undefined,
+  warn: (message: string) => void,
+): Partial<Record<PrecedenceField, "env" | "file">> {
+  const sources: Partial<Record<PrecedenceField, "env" | "file">> = {};
+  for (const [field, envKey] of PRECEDENCE_FIELDS) {
+    const fileValue: unknown = config[field];
+    const envValue = env[ENV[envKey]]?.trim() || undefined;
+    if (!fileValue) {
+      if (envValue) {
+        config[field] = envValue;
+        sources[field] = "env";
+      }
+      continue;
+    }
+    if (envValue && precedence === "env") {
+      config[field] = envValue;
+      sources[field] = "env";
+      continue;
+    }
+    sources[field] = "file";
+    const differs =
+      typeof fileValue === "string" ? fileValue.trim() !== envValue : true;
+    if (envValue && differs && precedence === undefined) {
+      const name = suppliedEnvName(rawEnv, ENV[envKey], prefix);
+      warn(
+        `${name} (env) differs from ${field} in ${configFile ?? "the config file"}; the file wins in 1.x, env will win in 2.0. Set ${ENV.precedence}=env to opt in now.`,
+      );
+    }
+  }
+  return sources;
 }
 
 /** The statuses a run can be told to fail on (`--fail-on`, F-X-17). */
@@ -265,6 +358,8 @@ const ENV = {
   concurrency: "SNPF_CONCURRENCY",
   /** Run-level exit threshold (F-X-17). */
   failOn: "SNPF_FAIL_ON",
+  /** Config file vs env precedence: `file` (1.x default) or `env` (F-X-8). */
+  precedence: "SNPF_PRECEDENCE",
 } as const;
 
 /**
@@ -867,6 +962,18 @@ export interface LoadConfigOptions {
    * replay mode (F-X-6) needs none.
    */
   credentials?: boolean;
+  /**
+   * Which wins when a field is set both in the config file and in the
+   * environment (F-X-8): `"file"` (the 1.x default) or `"env"` (the 2.0
+   * default). Overrides `SNPF_PRECEDENCE`. Leaving both unset keeps `"file"`
+   * and reports each differing field through {@link onWarning}.
+   */
+  precedence?: "env" | "file";
+  /**
+   * Receives load-time warnings, such as an env value that differs from the
+   * config file (F-X-8). Messages name keys, never values. Default: silent.
+   */
+  onWarning?: (message: string) => void;
 }
 
 /**
@@ -893,31 +1000,22 @@ export async function loadConfig(
 
   const env = namespacedEnv(fullEnv, opts.envPrefix);
 
-  // The instance URL may come from the config file or the environment.
-  if (!config.instanceUrl) {
-    const envInstance = env[ENV.instance]?.trim();
-    if (envInstance) config.instanceUrl = envInstance;
-  }
-
-  // The update set may likewise be supplied via the environment (the config
-  // file's `updateSetId` wins when both are present).
-  if (!config.updateSetId) {
-    const envUpdateSet = env[ENV.updateSet]?.trim();
-    if (envUpdateSet) config.updateSetId = envUpdateSet;
-  }
-
-  // The proxy settings may likewise come from the environment (SR-5); the
-  // config file wins when both are present. Within the client's proxy
-  // precedence these count as "explicit configuration" and outrank the
-  // standard HTTPS_PROXY/https_proxy variables (OPP-2).
-  if (!config.proxy) {
-    const envProxy = env[ENV.proxy]?.trim();
-    if (envProxy) config.proxy = envProxy;
-  }
-  if (!config.noProxy) {
-    const envNoProxy = env[ENV.noProxy]?.trim();
-    if (envNoProxy) config.noProxy = envNoProxy;
-  }
+  // F-X-8: instanceUrl, updateSetId, proxy and noProxy may come from the
+  // file or the environment. 1.x keeps the file on top (with a warning when
+  // the two differ) unless SNPF_PRECEDENCE / `precedence` opts into env-first.
+  // Within the client's proxy precedence these count as "explicit
+  // configuration" and outrank HTTPS_PROXY/https_proxy (OPP-2).
+  const precedence =
+    opts.precedence ?? parsePrecedence(env[ENV.precedence], ENV.precedence);
+  const sources = applyEnvFields(
+    config,
+    env,
+    fullEnv,
+    opts.envPrefix,
+    precedence,
+    configPath ? basename(configPath) : undefined,
+    opts.onWarning ?? (() => {}),
+  );
 
   // Fail closed at load time on a mistyped proxy/noProxy config value (SR-5)
   // before it can reach the client as a silent bypass or a mid-request crash.
@@ -961,6 +1059,7 @@ export async function loadConfig(
     configPath,
     env: fullEnv,
     limits,
+    sources,
     ...(cache !== undefined ? { cache } : {}),
     ...(concurrency !== undefined ? { concurrency } : {}),
     ...(failOn !== undefined ? { failOn } : {}),

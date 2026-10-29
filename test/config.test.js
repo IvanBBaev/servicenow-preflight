@@ -1277,3 +1277,199 @@ test("loadConfig refuses an MFA seed in the config file (credentials are env-onl
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- F-X-8: file vs env precedence -----------------------------------------
+
+/** A temp project whose preflight.config.json holds `config`. */
+function projectWith(config) {
+  const dir = tempDir();
+  writeFileSync(join(dir, "preflight.config.json"), JSON.stringify(config));
+  return dir;
+}
+
+const FILE_FIELDS = {
+  instanceUrl: "https://file.service-now.com",
+  updateSetId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  proxy: "http://user:secret@file-proxy:3128",
+  noProxy: "file.example.com",
+};
+const ENV_FIELDS = {
+  SNPF_INSTANCE: "https://env.service-now.com",
+  SNPF_UPDATE_SET: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  SNPF_PROXY: "http://user:hunter2@env-proxy:3128",
+  SNPF_NO_PROXY: "env.example.com",
+};
+
+test("F-X-8: env equal to the file warns about nothing", async () => {
+  const dir = projectWith(FILE_FIELDS);
+  const warnings = [];
+  try {
+    const loaded = await loadConfig(dir, {
+      dotenv: false,
+      env: {
+        SNPF_INSTANCE: ` ${FILE_FIELDS.instanceUrl} `,
+        SNPF_UPDATE_SET: FILE_FIELDS.updateSetId,
+        SNPF_PROXY: FILE_FIELDS.proxy,
+        SNPF_NO_PROXY: FILE_FIELDS.noProxy,
+      },
+      onWarning: (m) => warnings.push(m),
+    });
+    assert.deepEqual(warnings, []);
+    assert.equal(loaded.config.instanceUrl, FILE_FIELDS.instanceUrl);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F-X-8: env that differs keeps the file in 1.x and warns per key, without values", async () => {
+  const dir = projectWith(FILE_FIELDS);
+  const warnings = [];
+  try {
+    const loaded = await loadConfig(dir, {
+      dotenv: false,
+      env: ENV_FIELDS,
+      onWarning: (m) => warnings.push(m),
+    });
+    assert.deepEqual(
+      {
+        instanceUrl: loaded.config.instanceUrl,
+        updateSetId: loaded.config.updateSetId,
+        proxy: loaded.config.proxy,
+        noProxy: loaded.config.noProxy,
+      },
+      FILE_FIELDS,
+    );
+    assert.deepEqual(loaded.sources, {
+      instanceUrl: "file",
+      updateSetId: "file",
+      proxy: "file",
+      noProxy: "file",
+    });
+    assert.equal(warnings.length, 4);
+    assert.match(
+      warnings[0],
+      /^SNPF_INSTANCE \(env\) differs from instanceUrl in preflight\.config\.json; the file wins in 1\.x, env will win in 2\.0\. Set SNPF_PRECEDENCE=env to opt in now\.$/,
+    );
+    assert.match(
+      warnings[1],
+      /^SNPF_UPDATE_SET \(env\) differs from updateSetId/,
+    );
+    assert.match(warnings[2], /^SNPF_PROXY \(env\) differs from proxy/);
+    assert.match(warnings[3], /^SNPF_NO_PROXY \(env\) differs from noProxy/);
+    const all = warnings.join("\n");
+    for (const value of [
+      ...Object.values(FILE_FIELDS),
+      ...Object.values(ENV_FIELDS),
+    ]) {
+      assert.ok(!all.includes(value), `warning leaked ${value}`);
+    }
+    assert.doesNotMatch(all, /secret|hunter2/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F-X-8: precedence env (option or SNPF_PRECEDENCE) lets env win, silently", async () => {
+  const dir = projectWith(FILE_FIELDS);
+  try {
+    for (const opts of [
+      { precedence: "env", env: ENV_FIELDS },
+      { env: { ...ENV_FIELDS, SNPF_PRECEDENCE: " ENV " } },
+    ]) {
+      const warnings = [];
+      const loaded = await loadConfig(dir, {
+        dotenv: false,
+        ...opts,
+        onWarning: (m) => warnings.push(m),
+      });
+      assert.equal(loaded.config.instanceUrl, ENV_FIELDS.SNPF_INSTANCE);
+      assert.equal(loaded.config.updateSetId, ENV_FIELDS.SNPF_UPDATE_SET);
+      assert.equal(loaded.config.proxy, ENV_FIELDS.SNPF_PROXY);
+      assert.equal(loaded.config.noProxy, ENV_FIELDS.SNPF_NO_PROXY);
+      assert.deepEqual(loaded.sources, {
+        instanceUrl: "env",
+        updateSetId: "env",
+        proxy: "env",
+        noProxy: "env",
+      });
+      assert.deepEqual(warnings, []);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F-X-8: precedence file keeps the file and silences the warning; the option beats SNPF_PRECEDENCE", async () => {
+  const dir = projectWith(FILE_FIELDS);
+  try {
+    const warnings = [];
+    const loaded = await loadConfig(dir, {
+      dotenv: false,
+      precedence: "file",
+      env: { ...ENV_FIELDS, SNPF_PRECEDENCE: "env" },
+      onWarning: (m) => warnings.push(m),
+    });
+    assert.equal(loaded.config.instanceUrl, FILE_FIELDS.instanceUrl);
+    assert.equal(loaded.sources.instanceUrl, "file");
+    assert.deepEqual(warnings, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F-X-8: an invalid SNPF_PRECEDENCE is a UsageError", async () => {
+  const dir = tempDir();
+  try {
+    await assert.rejects(
+      loadConfig(dir, { dotenv: false, env: { SNPF_PRECEDENCE: "cli" } }),
+      (err) =>
+        err instanceof UsageError &&
+        /SNPF_PRECEDENCE must be "env" or "file"/.test(err.message),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F-X-8: a namespaced env var beats a plain one and is the one named", async () => {
+  const dir = projectWith({ instanceUrl: FILE_FIELDS.instanceUrl });
+  const env = {
+    SNPF_INSTANCE: "https://plain.service-now.com",
+    SNPF_DEV_INSTANCE: "https://dev.service-now.com",
+  };
+  try {
+    const warnings = [];
+    await loadConfig(dir, {
+      dotenv: false,
+      envPrefix: "dev",
+      env,
+      onWarning: (m) => warnings.push(m),
+    });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /^SNPF_DEV_INSTANCE \(env\) differs/);
+
+    const loaded = await loadConfig(dir, {
+      dotenv: false,
+      envPrefix: "dev",
+      precedence: "env",
+      env,
+    });
+    assert.equal(loaded.config.instanceUrl, "https://dev.service-now.com");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F-X-8: sources report env for env-only fields and omit unset ones", async () => {
+  const dir = projectWith({ proxy: "http://file-proxy:3128" });
+  try {
+    const loaded = await loadConfig(dir, {
+      dotenv: false,
+      env: { SNPF_INSTANCE: "https://env.service-now.com" },
+      onWarning: () => assert.fail("no warning expected"),
+    });
+    assert.deepEqual(loaded.sources, { instanceUrl: "env", proxy: "file" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -31,7 +31,6 @@ import { runPreflight, selectChecks } from "./index.js";
 import { doctorChecks, type InstanceSource } from "./doctor.js";
 import {
   loadConfig,
-  readConfigFile,
   parseConcurrency,
   parseFailOn,
   parseSwitch,
@@ -807,6 +806,7 @@ async function doctorRun(
   const loaded = await loadConfig(cwd, {
     configPath: args.configPath,
     envPrefix: target.envPrefix,
+    onWarning: warnConfigOnce,
   });
   const instanceUrl =
     args.instanceUrl ?? target.instanceUrl ?? loaded.config.instanceUrl;
@@ -814,12 +814,8 @@ async function doctorRun(
   if (args.instanceUrl) instanceSource = "flag";
   else if (target.instanceUrl) instanceSource = "registry";
   else if (loaded.config.instanceUrl) {
-    // loadConfig folds SNPF_INSTANCE into config.instanceUrl when the file
-    // has none; re-read the file to tell the two apart.
-    const fromFile = loaded.configPath
-      ? (await readConfigFile(loaded.configPath)).instanceUrl
-      : undefined;
-    instanceSource = fromFile ? "config" : "env";
+    // loadConfig reports whether the file or SNPF_INSTANCE supplied it (F-X-8).
+    instanceSource = loaded.sources.instanceUrl === "env" ? "env" : "config";
   }
   const selected = selectChecks(defaultChecks, {
     only: args.only ?? loaded.config.select?.only,
@@ -1549,6 +1545,13 @@ function instanceHost(url: string | undefined): string | undefined {
 /** Config warnings already printed (an `--all` run loads the file per instance). */
 const warnedConfigIssues = new Set<string>();
 
+/** Print a config warning once per run (an `--all` run loads per instance). */
+function warnConfigOnce(line: string): void {
+  if (warnedConfigIssues.has(line)) return;
+  warnedConfigIssues.add(line);
+  process.stderr.write(`servicenow-preflight: config warning: ${line}\n`);
+}
+
 /**
  * Print config-schema problems (unknown option keys, wrong types) as warnings.
  * In 1.x they never fail the run: checks keep their own warn rows for bad
@@ -1556,10 +1559,7 @@ const warnedConfigIssues = new Set<string>();
  */
 function warnConfigIssues(config: unknown): void {
   for (const issue of validateConfig(config, [...defaultChecks, testDrift])) {
-    const line = describeIssue(issue);
-    if (warnedConfigIssues.has(line)) continue;
-    warnedConfigIssues.add(line);
-    process.stderr.write(`servicenow-preflight: config warning: ${line}\n`);
+    warnConfigOnce(describeIssue(issue));
   }
 }
 
@@ -1577,6 +1577,7 @@ async function runOneInstance(
   const loaded = await loadConfig(cwd, {
     configPath: args.configPath,
     envPrefix: target.envPrefix,
+    onWarning: warnConfigOnce,
     ...(replay ? { credentials: false } : {}),
   });
 
@@ -1988,6 +1989,7 @@ async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
   const loaded = await loadConfig(cwd, {
     configPath: args.configPath,
     envPrefix: inst.envPrefix,
+    onWarning: warnConfigOnce,
   });
 
   const http = createSnClient({

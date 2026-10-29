@@ -403,14 +403,31 @@ config file is refused.
 > requires the OAuth registry record (`oauth_entity`) to be bound to an
 > integration user — without that binding the grant returns no token.
 
-Beyond the matrix inputs: `SNPF_INSTANCE` sets the URL when `--instance`/config
-is unset; `SNPF_UPDATE_SET` likewise supplies `updateSetId` when the config file
-does not (the file wins when both are present); `SNPF_AUTH` forces a method; JWT
+Beyond the matrix inputs: `SNPF_INSTANCE`, `SNPF_UPDATE_SET`, `SNPF_PROXY` and
+`SNPF_NO_PROXY` supply `instanceUrl`, `updateSetId`, `proxy` and `noProxy`
+(precedence below); `SNPF_AUTH` forces a method; JWT
 claims come from `SNPF_OAUTH_JWT_KID`
 / `_SUB` / `_AUD` / `_ISS` (or supply a pre-signed `_ASSERTION`). Any PEM / key /
 assertion variable accepts an **`@path` value** (read from that file, e.g.
 `SNPF_MTLS_KEY=@./certs/client.key`); a missing `@`-file is a hard error reported
 with the path only, never contents.
+
+**Config precedence** for `instanceUrl`, `updateSetId`, `proxy` and `noProxy`,
+highest first:
+
+| 1.x default (`SNPF_PRECEDENCE` unset or `file`) | Opt-in / 2.0 default (`SNPF_PRECEDENCE=env`) |
+| ----------------------------------------------- | -------------------------------------------- |
+| CLI flag (`--instance`) or registry instance    | CLI flag (`--instance`) or registry instance |
+| config file                                     | `SNPF_<PREFIX>_X` (registry `envPrefix`)     |
+| `SNPF_<PREFIX>_X` (registry `envPrefix`)        | `SNPF_X`                                     |
+| `SNPF_X`                                        | config file                                  |
+
+In 1.x, when a field is set in both the file and the environment with different
+values and `SNPF_PRECEDENCE` is unset, the CLI prints one stderr warning per key
+(`SNPF_INSTANCE (env) differs from instanceUrl in preflight.config.json; the file
+wins in 1.x, env will win in 2.0. …`). The warning names keys only, never values.
+Set `SNPF_PRECEDENCE=env` to adopt the 2.0 order now, or `SNPF_PRECEDENCE=file`
+to keep the file and silence the warning.
 
 ### Troubleshooting 401 / 403
 
@@ -1051,7 +1068,10 @@ maxInFlight?, rps?, cache? }`),
   either, so several instances can be loaded in one process. It returns the
   merged `env`; pass it to `createSnClient({ env })` so `HTTPS_PROXY` /
   `NO_PROXY` from `.env` apply. `skipDotEnv` is a deprecated alias of
-  `dotenv: false`.
+  `dotenv: false`. `precedence: "env" | "file"` overrides `SNPF_PRECEDENCE`,
+  `onWarning(message)` receives the file-vs-env warnings (silent by default),
+  and the returned `sources` names where each of those four fields came from
+  (`"file"` or `"env"`).
 - **`describeChecks(checks, defaults?)`** → `CheckDescriptor[]` (`name`,
   `description`, `meta`, `inDefaultSuite`), in the order given, and
   **`findCheck(name)`** (searches the default suite plus `test-drift`). Every

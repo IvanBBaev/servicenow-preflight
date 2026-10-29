@@ -2012,3 +2012,43 @@ test("CLI explains a basic-auth 401 in the row and on a sync error", async () =>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("F-X-8: an env value differing from the config file warns once on stderr; stdout JSON stays clean", () => {
+  const dir = mkdtempSync(join(tmpdir(), "snpf-fx8-"));
+  writeFileSync(
+    join(dir, "preflight.config.json"),
+    JSON.stringify({ instanceUrl: "https://file.service-now.com" }),
+  );
+  try {
+    const env = { SNPF_INSTANCE: "https://env.service-now.com" };
+    const res = runCli(["run", "--only", "instance-url-configured", "--json"], {
+      cwd: dir,
+      env,
+    });
+    assert.equal(res.status, 0, res.stderr);
+    const report = reportOf(res.stdout);
+    assert.equal(report.ok, true);
+    const lines = res.stderr
+      .split("\n")
+      .filter((l) => l.includes("SNPF_INSTANCE (env) differs"));
+    assert.equal(lines.length, 1, res.stderr);
+    assert.match(
+      lines[0],
+      /^servicenow-preflight: config warning: SNPF_INSTANCE \(env\) differs from instanceUrl in preflight\.config\.json;/,
+    );
+    assert.doesNotMatch(
+      res.stderr,
+      /env\.service-now\.com|file\.service-now\.com/,
+    );
+    assert.doesNotMatch(res.stdout, /differs/);
+
+    const optedIn = runCli(
+      ["run", "--only", "instance-url-configured", "--json"],
+      { cwd: dir, env: { ...env, SNPF_PRECEDENCE: "env" } },
+    );
+    assert.equal(optedIn.status, 0, optedIn.stderr);
+    assert.doesNotMatch(optedIn.stderr, /differs/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
