@@ -315,3 +315,27 @@ test("a clean scan carries no findings (F-R-2)", async () => {
   assert.equal(result.status, "pass");
   assert.equal(result.findings, undefined);
 });
+
+test("Packages. and getXMLWait( inside string literals are not findings (F-C-1)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: {
+        sys_script: [
+          {
+            sys_id: "b1",
+            name: "Doc",
+            script: "var note = 'Packages.java is gone';",
+          },
+        ],
+        sys_script_client: [
+          {
+            sys_id: "c1",
+            name: "Doc",
+            script: 'var hint = "avoid ga.getXMLWait()";',
+          },
+        ],
+      },
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
+});

@@ -16,13 +16,13 @@ const NAME = "log-leftovers";
 
 /** Debug output left in browser-side scripts. */
 export const CLIENT_LOG_PATTERNS: readonly ScanPattern[] = [
-  { id: "console", regex: /\bconsole\.(log|debug|dir)\s*\(/ },
-  { id: "alert", regex: /\balert\s*\(/ },
+  { id: "console", regex: /\bconsole\.(log|debug|dir)\s*\(/, view: "code" },
+  { id: "alert", regex: /\balert\s*\(/, view: "code" },
 ];
 
 /** Global-only logging left in server-side scripts (absent in scoped apps). */
 export const SERVER_LOG_PATTERNS: readonly ScanPattern[] = [
-  { id: "gs-log", regex: /\bgs\.(print|log)\s*\(/ },
+  { id: "gs-log", regex: /\bgs\.(print|log)\s*\(/, view: "code" },
 ];
 
 /** Build a well-formed result for this check. */

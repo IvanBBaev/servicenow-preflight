@@ -16,9 +16,13 @@ const NAME = "client-script-safety";
 
 /** Dynamic code and client-side GlideRecord in browser-side scripts. */
 export const CLIENT_UNSAFE_PATTERNS: readonly ScanPattern[] = [
-  { id: "eval", regex: /\beval\s*\(/ },
-  { id: "function-ctor", regex: /\bnew\s+Function\s*\(/ },
-  { id: "client-gliderecord", regex: /\bnew\s+GlideRecord\s*\(/ },
+  { id: "eval", regex: /\beval\s*\(/, view: "code" },
+  { id: "function-ctor", regex: /\bnew\s+Function\s*\(/, view: "code" },
+  {
+    id: "client-gliderecord",
+    regex: /\bnew\s+GlideRecord\s*\(/,
+    view: "code",
+  },
 ];
 
 /** `GlideScopedEvaluator` and `evaluateScript` on the same server-side line. */
@@ -27,6 +31,7 @@ export const SERVER_UNSAFE_PATTERNS: readonly ScanPattern[] = [
     id: "scoped-evaluator",
     regex:
       /\bGlideScopedEvaluator\b.*\bevaluateScript\b|\bevaluateScript\b.*\bGlideScopedEvaluator\b/,
+    view: "code",
   },
 ];
 

@@ -272,3 +272,21 @@ test("a clean scan carries no findings (F-R-2)", async () => {
   assert.equal(result.status, "pass");
   assert.equal(result.findings, undefined);
 });
+
+test("eval( inside a string or regex literal is not a finding (F-C-1)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: {
+        sys_script_client: [
+          {
+            sys_id: "c1",
+            name: "Lint",
+            script:
+              "var msg = 'never call eval(x)';\nvar re = /eval\\(/;\nvar t = `new Function(a)`;",
+          },
+        ],
+      },
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
+});

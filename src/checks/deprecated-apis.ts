@@ -16,18 +16,19 @@ const NAME = "deprecated-apis";
 
 /** Server-side APIs that do not exist in scoped apps — any hit fails. */
 export const SERVER_DEPRECATED_PATTERNS: readonly ScanPattern[] = [
-  { id: "packages", regex: /\bPackages\./ },
+  { id: "packages", regex: /\bPackages\./, view: "code" },
 ];
 
 /** Synchronous or server-only calls in browser-side scripts — hits warn. */
 export const CLIENT_DEPRECATED_PATTERNS: readonly ScanPattern[] = [
-  { id: "xml-wait", regex: /\.getXMLWait\s*\(/ },
+  { id: "xml-wait", regex: /\.getXMLWait\s*\(/, view: "code" },
   // A single argument (no callback) makes getReference synchronous.
   {
     id: "get-reference-sync",
     regex: /\bg_form\.getReference\s*\([^,)]*\)/,
+    view: "code",
   },
-  { id: "g-user-roles-sync", regex: /\bgs\.hasRole\b/ },
+  { id: "g-user-roles-sync", regex: /\bgs\.hasRole\b/, view: "code" },
 ];
 
 /** Build a well-formed result for this check. */

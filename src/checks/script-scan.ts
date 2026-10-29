@@ -3,7 +3,8 @@
  * (`hardcoded-identifiers`, `client-script-safety`, …). It reads the script
  * fields of in-scope artifacts through the Table API — the same egress
  * `script-hygiene` and `script-field-exposure` already perform — and tests a
- * list of line regexes against every non-comment line.
+ * list of line regexes against every line, in the view each pattern asks for
+ * (code, string literals, or raw — see {@link lexLines}).
  *
  * Output policy: a {@link ScanHit} carries the artifact, the field, the line
  * number and the pattern id — **never the matched text**. Callers must keep it
@@ -34,6 +35,13 @@ export interface ScriptSource {
 export interface ScanPattern {
   id: string;
   regex: RegExp;
+  /**
+   * The line view the regex is tested against (see {@link lexLines}):
+   * `"code"` (default) blanks comments and string, template and regex bodies;
+   * `"string"` keeps only string and template bodies; `"raw"` blanks only
+   * comments.
+   */
+  view?: ScanView;
 }
 
 /** One pattern match: where it is, never what it matched. */
@@ -59,6 +67,8 @@ export interface ScanResult {
   ambiguous: string[];
   /** Hits found beyond the cap and not kept in `hits`. */
   dropped: number;
+  /** `dropped > 0`: `hits` is not the full list. */
+  truncated: boolean;
   /** Distinct artifacts (`table:sys_id`) with at least one hit, cap ignored. */
   artifacts: string[];
 }
@@ -66,71 +76,234 @@ export interface ScanResult {
 /** Hits kept per scan; the rest are only counted (`dropped`). */
 export const MAX_SCAN_HITS = 500;
 
+/** What a {@link ScanPattern} is tested against (see {@link lexLines}). */
+export type ScanView = "code" | "string" | "raw";
+
+/** One script, split into lines, in each {@link ScanView}. */
+export interface LexedLines {
+  /** Comments blanked; string, template and regex bodies replaced by spaces. */
+  code: string[];
+  /** Only string and template literal bodies; everything else blanked. */
+  strings: string[];
+  /** Comments blanked; everything else as written (the pre-lexer behaviour). */
+  raw: string[];
+}
+
+/** Keywords after which a `/` starts a regex literal rather than a division. */
+const REGEX_AFTER_KEYWORDS = new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "case",
+  "do",
+  "else",
+]);
+
+/** How one source character shows up in each view. */
+type Role = "code" | "comment" | "body" | "delim" | "regex";
+
+function isIdentChar(ch: string): boolean {
+  return /[\w$]/.test(ch) || ch.charCodeAt(0) > 127;
+}
+
 /**
- * The code text of every line of `script`, with comments blanked out — line
- * `i` of the result is line `i + 1` of the source (so line numbers survive).
- * A small state machine: `//` comments end at the newline, block comments may
- * span lines, and comment markers inside '…', "…" or `…` literals are text, not
- * comments (so `"https://…"` is never mistaken for a comment). Quote strings
- * end at a newline even when unterminated; template literals may span lines.
- * A backslash outside a string escapes the next character, which keeps regex
- * literals like `/\/\//` from opening a comment. Regex literals are not
- * otherwise recognised — the scanner is a heuristic, not a parser.
+ * Lex `script` once into three line views — line `i` of every view is line
+ * `i + 1` of the source, and every source character keeps its column (blanked
+ * text becomes spaces; a CRLF line ending is dropped like LF). A heuristic
+ * lexer, not a parser:
+ * - `//` comments end at the newline; block comments may span lines;
+ * - '…' and "…" end at the newline when unterminated (a backslash-newline
+ *   continues them); template literals may span lines, and their `${…}`
+ *   parts are code (brace depth is tracked, so `}` inside a nested string or
+ *   object literal does not end them);
+ * - a `/` opens a regex literal when the previous significant token is a
+ *   punctuator other than `)` `]` `}`, one of `return typeof instanceof in of
+ *   new delete void throw case do else`, or the start of the script; `[…]`
+ *   classes are tracked so a `/` inside one does not close it. Otherwise it is
+ *   a division.
  */
-export function codeLines(script: string): string[] {
-  const lines: string[] = [];
-  let state: "code" | "line" | "block" | "'" | '"' | "`" = "code";
-  let current = "";
+export function lexLines(script: string): LexedLines {
+  const out: LexedLines = { code: [], strings: [], raw: [] };
+  let code = "";
+  let strings = "";
+  let raw = "";
+  let state: "code" | "line" | "block" | "'" | '"' | "`" | "regex" = "code";
+  // Open `${…}` expressions, innermost last: the `{` depth inside each.
+  const templates: number[] = [];
+  let inClass = false;
+  // The previous significant code token, for the regex-or-division decision.
+  let prev: "start" | "punct" | "close" | "word" | "literal" = "start";
+  let word = "";
+  let inWord = false;
+  // The last character was a backslash-newline inside a quote string.
+  let continued = false;
+
+  const emit = (ch: string, role: Role): void => {
+    raw += role === "comment" ? " " : ch;
+    code += role === "code" || role === "delim" ? ch : " ";
+    strings += role === "body" ? ch : " ";
+  };
+  const endLine = (): void => {
+    out.code.push(code);
+    out.strings.push(strings);
+    out.raw.push(raw);
+    code = strings = raw = "";
+  };
+
   for (let i = 0; i < script.length; i++) {
     const ch = script[i]!;
     const next = script[i + 1];
+    if (ch === "\r" && next === "\n") continue;
     if (ch === "\n") {
-      lines.push(current.replace(/\r$/, ""));
-      current = "";
-      if (state === "line" || state === "'" || state === '"') state = "code";
+      endLine();
+      inWord = false;
+      if (state === "line") state = "code";
+      else if (continued) continued = false;
+      else if (state === "'" || state === '"' || state === "regex") {
+        state = "code";
+        prev = "literal";
+      }
       continue;
     }
     switch (state) {
       case "line":
-        break;
       case "block":
-        if (ch === "*" && next === "/") {
-          state = "code";
+        if (state === "block" && ch === "*" && next === "/") {
+          emit(ch, "comment");
+          emit(next, "comment");
           i++;
+          state = "code";
+        } else {
+          emit(ch, "comment");
         }
         break;
       case "'":
       case '"':
       case "`":
-        current += ch;
-        if (ch === "\\" && next !== undefined && next !== "\n") {
-          current += next;
-          i++;
+        if (ch === "\\" && next !== undefined) {
+          emit(ch, "body");
+          // A backslash-newline continues the literal on the next line.
+          if (next !== "\n" && !(next === "\r" && script[i + 2] === "\n")) {
+            emit(next, "body");
+            i++;
+          } else if (state !== "`") {
+            continued = true;
+          }
         } else if (ch === state) {
+          emit(ch, "delim");
           state = "code";
+          prev = "literal";
+        } else if (state === "`" && ch === "$" && next === "{") {
+          emit(ch, "code");
+          emit(next, "code");
+          i++;
+          templates.push(0);
+          state = "code";
+          prev = "punct";
+        } else {
+          emit(ch, "body");
         }
         break;
-      default:
-        if (ch === "/" && next === "/") {
-          state = "line";
+      case "regex":
+        if (
+          ch === "\\" &&
+          next !== undefined &&
+          next !== "\n" &&
+          next !== "\r"
+        ) {
+          emit(ch, "regex");
+          emit(next, "regex");
           i++;
-        } else if (ch === "/" && next === "*") {
-          state = "block";
-          i++;
-          current += " ";
+        } else if (ch === "/" && !inClass) {
+          emit(ch, "delim");
+          state = "code";
+          prev = "literal";
         } else {
-          current += ch;
-          if (ch === "\\" && next !== undefined && next !== "\n") {
-            current += next;
-            i++;
-          } else if (ch === "'" || ch === '"' || ch === "`") {
-            state = ch;
+          if (ch === "[") inClass = true;
+          else if (ch === "]") inClass = false;
+          emit(ch, "regex");
+        }
+        break;
+      default: {
+        if (ch === "/" && next === "/") {
+          emit(ch, "comment");
+          emit(next, "comment");
+          i++;
+          state = "line";
+          inWord = false;
+          break;
+        }
+        if (ch === "/" && next === "*") {
+          emit(ch, "comment");
+          emit(next, "comment");
+          i++;
+          state = "block";
+          inWord = false;
+          break;
+        }
+        if (isIdentChar(ch)) {
+          word = inWord ? word + ch : ch;
+          inWord = true;
+          prev = "word";
+          emit(ch, "code");
+          break;
+        }
+        inWord = false;
+        if (/\s/.test(ch)) {
+          emit(ch, "code");
+          break;
+        }
+        if (ch === "'" || ch === '"' || ch === "`") {
+          emit(ch, "delim");
+          state = ch;
+          break;
+        }
+        if (ch === "/") {
+          const regexAllowed =
+            prev === "start" ||
+            prev === "punct" ||
+            (prev === "word" && REGEX_AFTER_KEYWORDS.has(word));
+          if (regexAllowed) {
+            emit(ch, "delim");
+            state = "regex";
+            inClass = false;
+            break;
           }
         }
+        if (templates.length > 0 && (ch === "{" || ch === "}")) {
+          const depth = templates[templates.length - 1]!;
+          if (ch === "{") templates[templates.length - 1] = depth + 1;
+          else if (depth > 0) templates[templates.length - 1] = depth - 1;
+          else {
+            // The `}` that closes a `${…}`: back inside the template literal.
+            templates.pop();
+            emit(ch, "code");
+            state = "`";
+            break;
+          }
+        }
+        prev = ch === ")" || ch === "]" || ch === "}" ? "close" : "punct";
+        emit(ch, "code");
+      }
     }
   }
-  lines.push(current.replace(/\r$/, ""));
-  return lines;
+  endLine();
+  return out;
+}
+
+/**
+ * The text of every line of `script` with comments blanked out — the `raw`
+ * view of {@link lexLines} (strings, templates and regex literals are kept as
+ * written). Line `i` of the result is line `i + 1` of the source.
+ */
+export function codeLines(script: string): string[] {
+  return lexLines(script).raw;
 }
 
 /** A script field's raw text — NOT trimmed, so line numbers stay exact. */
@@ -156,6 +329,7 @@ export async function scanScripts(
     trimmed: [],
     ambiguous: [],
     dropped: 0,
+    truncated: false,
     artifacts: [],
   };
   const artifacts = new Set<string>();
@@ -182,8 +356,15 @@ export async function scanScripts(
       for (const field of source.scriptFields) {
         const script = rawScript(row, field);
         if (script.trim() === "") continue;
-        codeLines(script).forEach((text, index) => {
+        const lexed = lexLines(script);
+        const views: Record<ScanView, string[]> = {
+          code: lexed.code,
+          string: lexed.strings,
+          raw: lexed.raw,
+        };
+        lexed.raw.forEach((_, index) => {
           for (const pattern of patterns) {
+            const text = views[pattern.view ?? "code"][index]!;
             pattern.regex.lastIndex = 0; // harmless guard against a stray g/y flag
             if (!pattern.regex.test(text)) continue;
             artifacts.add(`${source.table}:${sysId || name}`);
@@ -205,6 +386,7 @@ export async function scanScripts(
     }
   }
   out.artifacts = [...artifacts];
+  out.truncated = out.dropped > 0;
   return out;
 }
 

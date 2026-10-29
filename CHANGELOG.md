@@ -400,6 +400,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Script scanner lexer** (behaviour narrowing) — the pattern checks now
+  lex each script field into a code view (comments blanked, string, template
+  and regex bodies replaced by spaces), a string view (only string and
+  template bodies) and a raw view (comments blanked only), with line and
+  column positions kept. Regex literals and template `${…}` expressions are
+  recognised. `client-script-safety`, `log-leftovers` and `deprecated-apis`
+  match the code view, so text inside a string or regex literal (for example
+  `"console.log("`) is no longer a hit; `hardcoded-identifiers` matches
+  sys_ids and URLs only inside string and template literals. Verdicts can
+  only move toward fewer false positives. Internal: `ScanPattern.view`,
+  `ScanResult.truncated` and `lexLines`; `codeLines` returns the raw view.
 - **Tiered library exports** (breaking, pre-1.0) — the package root shrinks
   from ≈210 symbols to a curated core of 37 (`runPreflight`, `selectChecks`,
   `defaultChecks`, `createSnClient`, `withSignal`, the `SnError` family,

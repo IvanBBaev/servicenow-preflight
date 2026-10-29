@@ -288,3 +288,20 @@ test("a clean scan carries no findings (F-R-2)", async () => {
   assert.equal(result.status, "pass");
   assert.equal(result.findings, undefined);
 });
+
+test("console.log( inside a string literal is not a finding (F-C-1)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: {
+        sys_script_client: [
+          {
+            sys_id: "c1",
+            name: "Help",
+            script: 'var tip = "Remove console.log( calls";',
+          },
+        ],
+      },
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
+});

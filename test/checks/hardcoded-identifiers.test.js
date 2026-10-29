@@ -271,3 +271,21 @@ test("a clean scan carries no findings (F-R-2)", async () => {
   assert.equal(result.status, "pass");
   assert.equal(result.findings, undefined);
 });
+
+test("a sys_id is only matched inside a string literal (F-C-1)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: {
+        sys_script: [
+          {
+            sys_id: "b1",
+            name: "Rule",
+            // A 32-hex run outside a string literal is not a hard-coded sys_id.
+            script: `var x = ${SYS_ID};`,
+          },
+        ],
+      },
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
+});

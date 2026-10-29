@@ -20,13 +20,16 @@ const HOST_END = String.raw`(?:[\/:?#"'\s]|$)`;
  * (`*.service-now.com`) or `localhost` is not a finding.
  */
 export const HARDCODED_PATTERNS: readonly ScanPattern[] = [
-  { id: "sys-id", regex: /\b[0-9a-f]{32}\b/ },
+  // sys_ids and URLs live in string literals: scan only those, so a 32-hex
+  // run in code or a regex literal is not a finding.
+  { id: "sys-id", regex: /\b[0-9a-f]{32}\b/, view: "string" },
   {
     id: "url",
     regex: new RegExp(
       String.raw`https?:\/\/(?![^\s"'\/?#:]*\.service-now\.com${HOST_END}|localhost${HOST_END})[^\s"']+`,
       "i",
     ),
+    view: "string",
   },
 ];
 
@@ -45,7 +48,8 @@ function result(status: CheckStatus, message: string): CheckResult {
  * Script Includes, UI Actions, scheduled jobs, scripted REST operations,
  * transform maps and scripts, client scripts, UI Scripts, UI Policies) for a
  * 32-hex sys_id or an `http(s)://` URL that is not an instance or localhost
- * URL. Comment lines are ignored. Messages name the artifact, field and line,
+ * URL inside a string or template literal (comments and code are not
+ * scanned). Messages name the artifact, field and line,
  * never the matched text.
  *
  * - **fail** — any script table read was security-trimmed (the scripts the
