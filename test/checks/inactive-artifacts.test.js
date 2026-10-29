@@ -77,6 +77,7 @@ test("warns when no scope is set", async () => {
 test("passes when every table reports zero inactive artifacts", async () => {
   const result = await run(makeHttp());
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /No inactive artifacts/);
   assert.match(result.message, /7 artifact tables/);
 });
@@ -194,4 +195,31 @@ test("warns on an HTTP error reading one of the tables", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /403/);
+});
+
+test("emits one finding per inactive record on its own table (F-R-3)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: {
+        sys_script: [
+          { sys_id: sid(1), name: "Old BR" },
+          { sys_id: sid(2), name: "Older BR" },
+        ],
+        sys_ui_policy: [{ sys_id: sid(3), short_description: "Hide field" }],
+      },
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assert.deepEqual(
+    result.findings.map((f) => [
+      f.kind,
+      f.location.table,
+      f.location.recordName,
+    ]),
+    [
+      ["inactive", "sys_script", "Old BR"],
+      ["inactive", "sys_script", "Older BR"],
+      ["inactive", "sys_ui_policy", "Hide field"],
+    ],
+  );
 });

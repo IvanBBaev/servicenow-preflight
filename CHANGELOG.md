@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   New `effectiveFindings(result)` (`servicenow-preflight/checks`) gives a
   non-pass row without findings one implicit `kind: "row"` finding whose id
   depends only on the check name. Row messages are unchanged.
+- **Certification-check findings** — the 17 `cert-common` checks (ACL,
+  role, namespace, hygiene and privacy rules) return one `findings[]` entry
+  per offending record, with a check-local kind (e.g. `no-role`,
+  `acl-missing:<op>`, `foreign-table`, `not-private`) and a location of
+  table, sys_id and record name. Table-level gaps use a `table:<name>`
+  logical id; advisory sub-findings carry `status: "warn"`. Error results
+  and passing runs carry no findings. Row messages are unchanged.
 - **Script-scan findings** — `hardcoded-identifiers`, `client-script-safety`,
   `log-leftovers` and `deprecated-apis` return one `findings[]` entry per
   hit, with kind `pattern:<patternId>`, a location of table, sys_id, record

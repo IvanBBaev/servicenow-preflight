@@ -1,6 +1,12 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { and, eq, resolveScope } from "../http/query.js";
-import { errorResult, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "inactive-artifacts";
 
@@ -92,7 +98,8 @@ export const inactiveArtifacts: Check = {
 
     try {
       const { clause } = await resolveScope(ctx, scope);
-      const findings: string[] = [];
+      const summaries: string[] = [];
+      const findings: Finding[] = [];
       let found = 0;
       const trimmed: string[] = [];
       const ambiguous: string[] = [];
@@ -118,20 +125,25 @@ export const inactiveArtifacts: Check = {
           meta.rows.length > names.length
             ? `, … ${meta.rows.length - names.length} more`
             : "";
-        findings.push(
+        summaries.push(
           `${meta.rows.length} ${label} (${table}): ${names.join(", ")}${more}`,
         );
+        for (const row of meta.rows) {
+          findings.push(rowFinding(NAME, table, row, "inactive", nameField));
+        }
       }
 
+      const done = (status: CheckStatus, message: string): CheckResult =>
+        withFindings(result(status, message), findings);
       const trimmedNote =
         trimmed.length > 0
           ? ` The read of ${trimmed.join(", ")} was security-trimmed, so these counts may be incomplete.`
           : "";
 
       if (found > 0) {
-        return result(
+        return done(
           "warn",
-          `${found} inactive artifact(s) ship in scope "${scope}" — dead code that still lands on every install and shows in the Store review: ${findings.join("; ")}. Delete what the app no longer needs.${trimmedNote}`,
+          `${found} inactive artifact(s) ship in scope "${scope}" — dead code that still lands on every install and shows in the Store review: ${summaries.join("; ")}. Delete what the app no longer needs.${trimmedNote}`,
         );
       }
       if (trimmed.length > 0) {

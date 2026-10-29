@@ -220,6 +220,7 @@ test("skips the menu lookup when every module has roles", async () => {
 test("passes when the instance reports the scope ships no active modules", async () => {
   const result = await run(makeHttp({ totalCounts: { sys_app_module: 0 } }));
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /No active navigator modules/);
 });
 
@@ -279,4 +280,27 @@ test("warns (degraded) on an HTTP error reading the menus", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /HTTP 403/);
+});
+
+function assertRowFindings(result, table, kinds) {
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    kinds,
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.table, table);
+    assert.ok(f.location.sysId || f.location.logicalId);
+    assert.ok(f.location.recordName);
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  }
+}
+
+test("emits one finding per role-less module (F-R-3)", async () => {
+  const result = await run(
+    makeHttp({
+      modules: [mod("Assets"), mod("Orders"), mod("Gated", { roles: "itil" })],
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assertRowFindings(result, "sys_app_module", ["no-role", "no-role"]);
 });

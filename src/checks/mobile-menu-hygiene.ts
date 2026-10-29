@@ -1,7 +1,13 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { and, eq, resolveScope } from "../http/query.js";
 import type { TableQueryResult } from "../http/client.js";
-import { errorResult, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "mobile-menu-hygiene";
 
@@ -81,16 +87,27 @@ export const mobileMenuHygiene: Check = {
       const offenders: string[] = [];
       for (const row of menus.rows) offenders.push(`menu "${label(row)}"`);
       for (const row of modules.rows) offenders.push(`module "${label(row)}"`);
+      const findings: Finding[] = [
+        ...menus.rows.map((row) =>
+          rowFinding(NAME, "sys_app_application", row, "mobile-menu", label),
+        ),
+        ...modules.rows.map((row) =>
+          rowFinding(NAME, "sys_app_module", row, "mobile-module", label),
+        ),
+      ];
 
       if (offenders.length > 0) {
         const trimmedNote =
           menus.securityTrimmed || modules.securityTrimmed
             ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
             : "";
-        return result(
-          "warn",
-          `${offenders.length} mobile Application Menu/Module record(s) ship in scope "${scope}" — remove or deactivate them unless the app intentionally targets mobile: ${offenders.join(", ")}.` +
-            trimmedNote,
+        return withFindings(
+          result(
+            "warn",
+            `${offenders.length} mobile Application Menu/Module record(s) ship in scope "${scope}" — remove or deactivate them unless the app intentionally targets mobile: ${offenders.join(", ")}.` +
+              trimmedNote,
+          ),
+          findings,
         );
       }
 

@@ -1,6 +1,13 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { and, eq, inClause, resolveScope } from "../http/query.js";
-import { errorResult, isTruthy, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  isTruthy,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "script-field-exposure";
 
@@ -125,6 +132,7 @@ export const scriptFieldExposure: Check = {
       const missing: string[] = [];
       const inactiveOnly: string[] = [];
       const unverifiable: string[] = [];
+      const findings: Finding[] = [];
       for (const row of meta.rows) {
         const label =
           `${str(row, "name")}.${str(row, "element")}`.replace(
@@ -134,14 +142,22 @@ export const scriptFieldExposure: Check = {
           str(row, "sys_id") ||
           "(unnamed)";
         const candidates = aclNamesFor(row);
+        const flag = (kind: string): void => {
+          findings.push(
+            rowFinding(NAME, "sys_dictionary", row, kind, () => label),
+          );
+        };
         if (candidates.length === 0) {
           unverifiable.push(label);
+          flag("unverifiable");
         } else if (candidates.some((n) => activeAcls.has(n))) {
           continue;
         } else if (candidates.some((n) => inactiveAcls.has(n))) {
           inactiveOnly.push(label);
+          flag("acl-inactive:write");
         } else {
           missing.push(label);
+          flag("acl-missing:write");
         }
       }
 
@@ -172,7 +188,10 @@ export const scriptFieldExposure: Check = {
           meta.securityTrimmed || aclMeta.securityTrimmed
             ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
             : "";
-        return result("fail", parts.join("; ") + "." + trimmedNote);
+        return withFindings(
+          result("fail", parts.join("; ") + "." + trimmedNote),
+          findings,
+        );
       }
 
       // The columns this account cannot see are exactly the ones this gate

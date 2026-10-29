@@ -252,6 +252,7 @@ test("ignores ACLs of other types (ui_page, rest_endpoint, …)", async () => {
 test("passes when the instance reports the scope ships no record ACLs", async () => {
   const result = await run(makeHttp({ totalCounts: { sys_security_acl: 0 } }));
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /No record ACLs in scope/);
 });
 
@@ -318,4 +319,28 @@ test("warns (degraded) on an HTTP error reading the table list", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /HTTP 403/);
+});
+
+function assertRowFindings(result, table, kinds) {
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    kinds,
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.table, table);
+    assert.ok(f.location.sysId || f.location.logicalId);
+    assert.ok(f.location.recordName);
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  }
+}
+
+test("emits one finding per ACL on a foreign table (F-R-3)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: [table("x_acme_app_asset")],
+      acls: [acl("x_acme_app_asset"), acl("incident", { operation: "write" })],
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assertRowFindings(result, "sys_security_acl", ["foreign-table"]);
 });

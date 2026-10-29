@@ -113,6 +113,7 @@ test("passes when the instance proves the scope ships no REST resources", async 
     makeHttp({ ops: [], totalCounts: { sys_ws_operation: 0 } }),
   );
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /nothing to secure/i);
 });
 
@@ -242,4 +243,43 @@ test("warns on an HTTP error from the table read", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /502/);
+});
+
+function assertRowFindings(result, table, kinds) {
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    kinds,
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.table, table);
+    assert.ok(f.location.sysId || f.location.logicalId);
+    assert.ok(f.location.recordName);
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  }
+}
+
+test("emits one finding per anonymous resource (F-R-3)", async () => {
+  const ops = [
+    securedOp(),
+    securedOp({
+      sys_id: "op2",
+      name: "openDoor",
+      http_method: "POST",
+      requires_authentication: "false",
+    }),
+  ];
+  const result = await run(makeHttp({ ops, acls: [ENDPOINT_ACL] }));
+  assert.equal(result.status, "fail");
+  assertRowFindings(result, "sys_ws_operation", ["anonymous"]);
+  assert.equal(result.findings[0].location.sysId, "op2");
+});
+
+test("a missing REST_Endpoint ACL is a scope-level warn finding (F-R-3)", async () => {
+  const acls = [{ ...ENDPOINT_ACL, type: "record" }];
+  const result = await run(makeHttp({ ops: [securedOp()], acls }));
+  assert.equal(result.status, "warn");
+  assert.equal(result.findings.length, 1);
+  assert.equal(result.findings[0].kind, "no-rest-endpoint-acl");
+  assert.equal(result.findings[0].status, "warn");
+  assert.match(result.findings[0].location.logicalId, /^scope:/);
 });

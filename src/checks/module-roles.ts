@@ -1,4 +1,4 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import type { SnClient } from "../http/client.js";
 import {
   and,
@@ -8,7 +8,14 @@ import {
   isSysId,
   resolveScope,
 } from "../http/query.js";
-import { errorResult, isTruthy, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  isTruthy,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "module-roles";
 
@@ -144,7 +151,15 @@ export const moduleRoles: Check = {
       const overrides: string[] = [];
       const noMenu: string[] = [];
       const unreadableMenu: string[] = [];
-      const pending: { label: string; menuId: string }[] = [];
+      const pending: {
+        label: string;
+        menuId: string;
+        row: Record<string, unknown>;
+      }[] = [];
+      const findings: Finding[] = [];
+      const flag = (row: Record<string, unknown>, kind: string): void => {
+        findings.push(rowFinding(NAME, "sys_app_module", row, kind, labelOf));
+      };
       let inspected = 0;
       for (const row of meta.rows) {
         if (str(row, "link_type").toUpperCase() === "SEPARATOR") continue;
@@ -153,12 +168,17 @@ export const moduleRoles: Check = {
         const label = labelOf(row);
         if (isTruthy(row, "override_menu_roles")) {
           overrides.push(label);
+          flag(row, "override-no-role");
           continue;
         }
         const menuId = str(row, "application");
-        if (menuId === "") noMenu.push(label);
-        else if (!isSysId(menuId)) unreadableMenu.push(label);
-        else pending.push({ label, menuId });
+        if (menuId === "") {
+          noMenu.push(label);
+          flag(row, "no-menu");
+        } else if (!isSysId(menuId)) {
+          unreadableMenu.push(label);
+          flag(row, "unverifiable");
+        } else pending.push({ label, menuId, row });
       }
 
       const { menus, trimmed: menusTrimmed } = await fetchMenus(ctx.http, [
@@ -167,13 +187,15 @@ export const moduleRoles: Check = {
       // Group role-less modules under role-less menus by menu, for a
       // message that points at the one place a single fix would cover.
       const byOpenMenu = new Map<string, string[]>();
-      for (const { label, menuId } of pending) {
+      for (const { label, menuId, row } of pending) {
         const menu = menus.get(menuId);
         if (!menu) {
           unreadableMenu.push(label);
+          flag(row, "unverifiable");
           continue;
         }
         if (menu.gated) continue;
+        flag(row, "no-role");
         const list = byOpenMenu.get(menu.title) ?? [];
         list.push(label);
         byOpenMenu.set(menu.title, list);
@@ -210,10 +232,13 @@ export const moduleRoles: Check = {
           : "";
 
       if (parts.length > 0) {
-        return result(
-          "warn",
-          `${parts.join("; ")}. Add roles to the modules or their menu.` +
-            blindNote,
+        return withFindings(
+          result(
+            "warn",
+            `${parts.join("; ")}. Add roles to the modules or their menu.` +
+              blindNote,
+          ),
+          findings,
         );
       }
       if (blind.length > 0) {

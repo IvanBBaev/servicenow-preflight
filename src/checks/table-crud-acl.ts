@@ -1,4 +1,4 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import type { SnClient } from "../http/client.js";
 import {
   and,
@@ -8,7 +8,15 @@ import {
   isSafeIdentifier,
   resolveScope,
 } from "../http/query.js";
-import { errorResult, isTruthy, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  isTruthy,
+  rowFinding,
+  str,
+  subjectFinding,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "table-crud-acl";
 
@@ -188,10 +196,12 @@ export const tableCrudAcl: Check = {
       // unverifiable — reported, not skipped.
       const tables: ScopedTable[] = [];
       const unverifiable: string[] = [];
+      const findings: Finding[] = [];
       for (const row of meta.rows) {
         const name = str(row, "name");
         if (!isSafeIdentifier(name)) {
           unverifiable.push(name || str(row, "sys_id") || "(unnamed)");
+          findings.push(rowFinding(NAME, "sys_db_object", row, "unverifiable"));
           continue;
         }
         tables.push({
@@ -213,6 +223,18 @@ export const tableCrudAcl: Check = {
         const missing = CRUD_OPERATIONS.filter((op) => !covered?.has(op));
         if (missing.length === 0) continue;
         const gap = describeGap(table, missing, acls.inactive.get(key));
+        for (const op of missing) {
+          const finding = subjectFinding(
+            NAME,
+            `table:${table.name}`,
+            table.name,
+            `acl-missing:${op}`,
+          );
+          // An extended table inherits its parent's ACLs: advisory even when
+          // the row fails on a base table.
+          if (table.extended) finding.status = "warn";
+          findings.push(finding);
+        }
         if (table.extended) {
           inheritedGaps.push(
             `${gap} — inherits from ${table.parent ? `"${table.parent}"` : "its parent table"}`,
@@ -222,6 +244,8 @@ export const tableCrudAcl: Check = {
         }
       }
 
+      const done = (status: CheckStatus, message: string): CheckResult =>
+        withFindings(result(status, message), findings);
       const trimmedNote =
         meta.securityTrimmed || acls.trimmed
           ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
@@ -246,13 +270,13 @@ export const tableCrudAcl: Check = {
             `${inheritedGaps.length} extended table(s) also rely on inherited ACLs: ${inheritedGaps.join(", ")}`,
           );
         }
-        return result("fail", parts.join("; ") + "." + trimmedNote);
+        return done("fail", parts.join("; ") + "." + trimmedNote);
       }
 
       // The tables or ACLs this account cannot see are exactly the ones this
       // gate cannot clear — a partially trimmed read never passes.
       if (meta.securityTrimmed || acls.trimmed) {
-        return result(
+        return done(
           "fail",
           `Cannot fully inspect the table CRUD ACL gate in scope "${scope}" — the ${
             meta.securityTrimmed ? "sys_db_object" : "sys_security_acl"
@@ -264,13 +288,13 @@ export const tableCrudAcl: Check = {
       }
 
       if (inheritedGaps.length > 0) {
-        return result(
+        return done(
           "warn",
           `${inheritedGaps.length} extended table(s) in scope "${scope}" have no app-specific ACL for some CRUD operations and rely on their parent's ACLs at runtime; certification expects app-specific ACLs: ${inheritedGaps.join(", ")}.`,
         );
       }
 
-      return result(
+      return done(
         "pass",
         `All ${tables.length} table(s) in scope "${scope}" have active create, read, write and delete ACLs.`,
       );

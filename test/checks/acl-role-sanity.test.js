@@ -298,6 +298,7 @@ test("passes when every ACL is role-gated and roles exist", async () => {
   const roles = [{ sys_id: "role_sysid_1", name: "itil" }];
   const result = await run(makeHttp({ acls, links, roles }));
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /gated/i);
 });
 
@@ -542,4 +543,60 @@ test("never throws — always returns a well-formed CheckResult", async () => {
   assert.ok(["pass", "warn", "fail"].includes(result.status));
   assert.equal(typeof result.message, "string");
   assert.ok(result.message.length > 0);
+});
+
+function assertRowFindings(result, table, kinds) {
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    kinds,
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.table, table);
+    assert.ok(f.location.sysId || f.location.logicalId);
+    assert.ok(f.location.recordName);
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  }
+}
+
+test("emits a public-access finding per wide-open mutating ACL (F-R-3)", async () => {
+  const acls = [
+    {
+      sys_id: "acl1",
+      name: "incident",
+      operation: "write",
+      active: "true",
+      script: "",
+      condition: "",
+    },
+  ];
+  const result = await run(makeHttp({ acls, links: [], roles: [] }));
+  assert.equal(result.status, "fail");
+  assertRowFindings(result, "sys_security_acl", ["public-access:write"]);
+  assert.equal(result.findings[0].location.sysId, "acl1");
+});
+
+test("emits one missing-role finding per dangling role reference (F-R-3)", async () => {
+  const acls = [
+    {
+      sys_id: "acl1",
+      name: "incident",
+      operation: "write",
+      active: "true",
+      script: "",
+      condition: "",
+    },
+  ];
+  const links = [
+    {
+      sys_security_acl: "acl1",
+      sys_user_role: "ghost_sysid",
+      "sys_user_role.name": "nonexistent_role",
+    },
+  ];
+  const result = await run(makeHttp({ acls, links, roles: [] }));
+  assert.equal(result.status, "fail");
+  const missing = result.findings.filter((f) => f.kind === "missing-role");
+  assert.equal(missing.length, 1);
+  assert.equal(missing[0].location.table, "sys_security_acl");
+  assert.match(missing[0].message, /nonexistent_role/);
 });

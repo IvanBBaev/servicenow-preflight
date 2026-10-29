@@ -1,6 +1,12 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { isSysId, resolveScope } from "../http/query.js";
-import { errorResult, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "table-namespace";
 
@@ -98,15 +104,23 @@ export const tableNamespace: Check = {
       }
 
       const prefix = `${namespace.toLowerCase()}_`;
-      const offending = meta.rows
-        .filter((row) => !str(row, "name").toLowerCase().startsWith(prefix))
-        .map((row) => str(row, "name") || `(unnamed ${str(row, "sys_id")})`);
+      const offendingRows = meta.rows.filter(
+        (row) => !str(row, "name").toLowerCase().startsWith(prefix),
+      );
+      const offending = offendingRows.map(
+        (row) => str(row, "name") || `(unnamed ${str(row, "sys_id")})`,
+      );
+      const findings: Finding[] = offendingRows.map((row) =>
+        rowFinding(NAME, "sys_db_object", row, "no-namespace-prefix"),
+      );
 
+      const done = (status: CheckStatus, message: string): CheckResult =>
+        withFindings(result(status, message), findings);
       if (offending.length > 0) {
         const note = meta.securityTrimmed
           ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
           : "";
-        return result(
+        return done(
           "fail",
           `${offending.length} table(s) in scope "${scope}" are not prefixed with the app namespace "${prefix}" — uninstall and upgrade can break on them: ${offending.join(", ")}.${note}`,
         );

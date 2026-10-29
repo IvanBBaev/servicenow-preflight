@@ -2,11 +2,19 @@ import type {
   Check,
   CheckResult,
   CheckStatus,
+  Finding,
   PreflightContext,
 } from "../types.js";
 import type { TableQueryResult } from "../http/client.js";
 import { resolveScope } from "../http/query.js";
-import { errorResult, isTruthy, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  isTruthy,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "portal-roles";
 
@@ -60,6 +68,8 @@ interface KindFindings {
   blindSpot?: string;
   /** Rows inspected. */
   count: number;
+  /** One finding per role-less row. */
+  findings: Finding[];
 }
 
 /** Read one portal table in scope and classify its rows. */
@@ -78,6 +88,7 @@ async function inspect(
     noRole: [],
     publicNoRole: [],
     count: meta.rows.length,
+    findings: [],
   };
   if (meta.rows.length === 0) {
     const triage = triageZeroRead(meta);
@@ -92,8 +103,16 @@ async function inspect(
   }
   for (const row of meta.rows) {
     if (hasRoles(row)) continue;
-    (isTruthy(row, "public") ? findings.publicNoRole : findings.noRole).push(
-      kind.label(row),
+    const open = isTruthy(row, "public");
+    (open ? findings.publicNoRole : findings.noRole).push(kind.label(row));
+    findings.findings.push(
+      rowFinding(
+        NAME,
+        kind.table,
+        row,
+        open ? "public-no-role" : "no-role",
+        (r) => kind.label(r),
+      ),
     );
   }
   if (meta.securityTrimmed) {
@@ -168,12 +187,15 @@ export const portalRoles: Check = {
       const blind = all.flatMap((f) => (f.blindSpot ? [f.blindSpot] : []));
 
       if (parts.length > 0) {
-        return result(
-          "warn",
-          `${parts.join("; ")}. Add roles, or record why each is deliberately open.` +
-            (blind.length > 0
-              ? ` (Not fully inspected: ${blind.join("; ")}.)`
-              : ""),
+        return withFindings(
+          result(
+            "warn",
+            `${parts.join("; ")}. Add roles, or record why each is deliberately open.` +
+              (blind.length > 0
+                ? ` (Not fully inspected: ${blind.join("; ")}.)`
+                : ""),
+          ),
+          all.flatMap((f) => f.findings),
         );
       }
       if (blind.length > 0) {

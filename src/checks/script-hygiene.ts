@@ -1,4 +1,4 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import type { SnClient, TableQueryResult } from "../http/client.js";
 import {
   chunk,
@@ -6,7 +6,13 @@ import {
   isSafeIdentifier,
   resolveScope,
 } from "../http/query.js";
-import { errorResult, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "script-hygiene";
 
@@ -158,19 +164,35 @@ export const scriptHygiene: Check = {
           sysparm_fields: "sys_id,name,api_name",
         });
 
-      const emptyFixes = fixes.rows
-        .filter((row) => isEmptyScript(str(row, "script")))
-        .map((row) => str(row, "name") || str(row, "sys_id") || "(unnamed)");
+      const emptyFixRows = fixes.rows.filter((row) =>
+        isEmptyScript(str(row, "script")),
+      );
+      const emptyFixes = emptyFixRows.map(
+        (row) => str(row, "name") || str(row, "sys_id") || "(unnamed)",
+      );
+      const findings: Finding[] = emptyFixRows.map((row) =>
+        rowFinding(NAME, "sys_script_fix", row, "empty-fix-script"),
+      );
 
       const byName = new Map<string, string[]>();
+      const rowsByName = new Map<string, Record<string, unknown>[]>();
       for (const row of includes.rows) {
         const key = str(row, "name").toLowerCase();
         if (key === "") continue;
         const list = byName.get(key) ?? [];
         list.push(siLabel(row));
         byName.set(key, list);
+        rowsByName.set(key, [...(rowsByName.get(key) ?? []), row]);
       }
       const inScopeDupes = [...byName.values()].filter((l) => l.length > 1);
+      const siFindings = (key: string, kind: string): Finding[] =>
+        (rowsByName.get(key) ?? []).map((row) =>
+          rowFinding(NAME, "sys_script_include", row, kind, siLabel),
+        );
+      for (const [key, rows] of rowsByName) {
+        if (rows.length > 1)
+          findings.push(...siFindings(key, "duplicate-name"));
+      }
 
       const ownIds = new Set(includes.rows.map((row) => str(row, "sys_id")));
       const names = [
@@ -189,6 +211,7 @@ export const scriptHygiene: Check = {
       for (const [key, others] of clashes) {
         const mine = byName.get(key) ?? [];
         crossScope.push(`${mine.join("/")} ↔ ${others.join(", ")}`);
+        findings.push(...siFindings(key, "cross-scope-name-clash"));
       }
 
       const parts: string[] = [];
@@ -219,12 +242,15 @@ export const scriptHygiene: Check = {
       ].filter((b): b is string => b !== undefined);
 
       if (parts.length > 0) {
-        return result(
-          "warn",
-          `${parts.join(". ")}.` +
-            (blind.length > 0
-              ? ` (Not fully inspected: ${blind.join("; ")}.)`
-              : ""),
+        return withFindings(
+          result(
+            "warn",
+            `${parts.join(". ")}.` +
+              (blind.length > 0
+                ? ` (Not fully inspected: ${blind.join("; ")}.)`
+                : ""),
+          ),
+          findings,
         );
       }
       if (blind.length > 0) {

@@ -1,6 +1,13 @@
 import type { Check, CheckResult, CheckStatus } from "../types.js";
 import { and, eq, resolveScope } from "../http/query.js";
-import { errorResult, isTruthy, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  isTruthy,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "notification-conditions";
 
@@ -87,28 +94,39 @@ export const notificationConditions: Check = {
         }
       }
 
-      const unconditional = meta.rows
-        .filter(
-          (row) =>
-            isTruthy(row, "action_update") &&
-            str(row, "event_name") === "" &&
-            str(row, "condition") === "" &&
-            str(row, "advanced_condition") === "",
-        )
-        .map((row) => {
-          const name = str(row, "name") || str(row, "sys_id") || "(unnamed)";
-          const table = str(row, "collection");
-          return table ? `${name} (${table})` : name;
-        });
+      const labelOf = (row: Record<string, unknown>): string => {
+        const name = str(row, "name") || str(row, "sys_id") || "(unnamed)";
+        const table = str(row, "collection");
+        return table ? `${name} (${table})` : name;
+      };
+      const unconditionalRows = meta.rows.filter(
+        (row) =>
+          isTruthy(row, "action_update") &&
+          str(row, "event_name") === "" &&
+          str(row, "condition") === "" &&
+          str(row, "advanced_condition") === "",
+      );
+      const unconditional = unconditionalRows.map(labelOf);
 
       if (unconditional.length > 0) {
         const trimmedNote = meta.securityTrimmed
           ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
           : "";
-        return result(
-          "warn",
-          `${unconditional.length} Notification(s) fire on every update of their table — no event, no condition and no advanced condition: ${unconditional.join(", ")}. Add a condition or trigger them from a specific event.` +
-            trimmedNote,
+        return withFindings(
+          result(
+            "warn",
+            `${unconditional.length} Notification(s) fire on every update of their table — no event, no condition and no advanced condition: ${unconditional.join(", ")}. Add a condition or trigger them from a specific event.` +
+              trimmedNote,
+          ),
+          unconditionalRows.map((row) =>
+            rowFinding(
+              NAME,
+              "sysevent_email_action",
+              row,
+              "fires-on-every-update",
+              labelOf,
+            ),
+          ),
         );
       }
 

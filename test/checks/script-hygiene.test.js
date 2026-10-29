@@ -198,6 +198,7 @@ test("passes when the instance reports the scope ships neither", async () => {
     makeHttp({ totalCounts: { sys_script_fix: 0, sys_script_include: 0 } }),
   );
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /No Fix Scripts or Script Includes/);
 });
 
@@ -265,4 +266,29 @@ test("warns (degraded) on an HTTP error reading Fix Scripts", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /HTTP 403/);
+});
+
+test("emits one finding per empty Fix Script and duplicated name (F-R-3)", async () => {
+  const result = await run(
+    makeHttp({
+      fixes: [
+        fix("Old cleanup", "// already run in 2024"),
+        fix("Real", "gs.info(1);"),
+      ],
+      includes: [
+        si("AcmeUtil"),
+        si("acmeutil", "x_acme_app.acmeutil"),
+        si("Other"),
+      ],
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assert.deepEqual(
+    result.findings.map((f) => [f.kind, f.location.table]),
+    [
+      ["empty-fix-script", "sys_script_fix"],
+      ["duplicate-name", "sys_script_include"],
+      ["duplicate-name", "sys_script_include"],
+    ],
+  );
 });

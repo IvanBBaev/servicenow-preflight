@@ -176,6 +176,7 @@ test("passes when the instance reports the scope ships no widgets or pages", asy
     makeHttp({ totalCounts: { sp_widget: 0, sp_page: 0 } }),
   );
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /No Service Portal widgets or pages/);
 });
 
@@ -250,4 +251,21 @@ test("warns (degraded) on an HTTP error reading sp_page", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /HTTP 403/);
+});
+
+test("emits one finding per role-less widget and page (F-R-3)", async () => {
+  const result = await run(
+    makeHttp({
+      widgets: [widget("Asset List"), widget("Gated", { roles: "itil" })],
+      pages: [page("acme_home")],
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assert.deepEqual(
+    result.findings.map((f) => [f.kind, f.location.table]),
+    [
+      ["no-role", "sp_widget"],
+      ["no-role", "sp_page"],
+    ],
+  );
 });

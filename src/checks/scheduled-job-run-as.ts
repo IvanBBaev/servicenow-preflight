@@ -1,6 +1,12 @@
 import type { Check, CheckResult, CheckStatus } from "../types.js";
 import { resolveScope } from "../http/query.js";
-import { errorResult, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "scheduled-job-run-as";
 
@@ -83,18 +89,24 @@ export const scheduledJobRunAs: Check = {
         }
       }
 
-      const pinned = meta.rows
-        .filter((row) => str(row, "run_as") !== "")
-        .map((row) => str(row, "name") || str(row, "sys_id") || "(unnamed)");
+      const pinnedRows = meta.rows.filter((row) => str(row, "run_as") !== "");
+      const pinned = pinnedRows.map(
+        (row) => str(row, "name") || str(row, "sys_id") || "(unnamed)",
+      );
 
       if (pinned.length > 0) {
         const trimmedNote = meta.securityTrimmed
           ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
           : "";
-        return result(
-          "warn",
-          `${pinned.length} Scheduled Job(s) have a non-empty 'Run as' — the pinned user may not exist on the customer instance and the job would silently stop: ${pinned.join(", ")}. Leave 'Run as' empty to run as system.` +
-            trimmedNote,
+        return withFindings(
+          result(
+            "warn",
+            `${pinned.length} Scheduled Job(s) have a non-empty 'Run as' — the pinned user may not exist on the customer instance and the job would silently stop: ${pinned.join(", ")}. Leave 'Run as' empty to run as system.` +
+              trimmedNote,
+          ),
+          pinnedRows.map((row) =>
+            rowFinding(NAME, "sysauto_script", row, "runs-as-user"),
+          ),
         );
       }
 

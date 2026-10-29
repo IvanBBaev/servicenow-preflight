@@ -1,10 +1,12 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { and, eq, isSafeIdentifier, resolveScope } from "../http/query.js";
 import {
   errorResult,
   fetchNamedAcls,
+  rowFinding,
   str,
   triageZeroRead,
+  withFindings,
 } from "./cert-common.js";
 
 const NAME = "client-callable-acl";
@@ -23,6 +25,8 @@ interface ClientCallableSi {
    * Empty when neither survives validation — that SI cannot be verified.
    */
   candidates: string[];
+  /** The `sys_script_include` record, for its finding. */
+  row: Record<string, unknown>;
 }
 
 /**
@@ -117,7 +121,7 @@ export const clientCallableAcl: Check = {
         const candidates = [...new Set([name, apiName])].filter((n) =>
           isSafeIdentifier(n),
         );
-        return { label, candidates };
+        return { label, candidates, row };
       });
 
       const unverifiable = sis.filter((si) => si.candidates.length === 0);
@@ -136,10 +140,19 @@ export const clientCallableAcl: Check = {
 
       const missing: string[] = [];
       const inactive: string[] = [];
+      const finding = (si: ClientCallableSi, kind: string): Finding =>
+        rowFinding(NAME, "sys_script_include", si.row, kind, () => si.label);
+      const findings: Finding[] = unverifiable.map((si) =>
+        finding(si, "unverifiable"),
+      );
       for (const si of sis) {
         if (si.candidates.length === 0 || covered(si)) continue;
-        if (inactiveOnly(si)) inactive.push(si.label);
+        const off = inactiveOnly(si);
+        if (off) inactive.push(si.label);
         else missing.push(si.label);
+        findings.push(
+          finding(si, off ? "acl-inactive:execute" : "acl-missing:execute"),
+        );
       }
 
       // Concrete findings outrank the trimmed-read verdict: they are already
@@ -171,7 +184,10 @@ export const clientCallableAcl: Check = {
           meta.securityTrimmed || acls.trimmed
             ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
             : "";
-        return result("fail", parts.join("; ") + "." + trimmedNote);
+        return withFindings(
+          result("fail", parts.join("; ") + "." + trimmedNote),
+          findings,
+        );
       }
 
       // The SIs this account cannot see are exactly the ones this gate cannot

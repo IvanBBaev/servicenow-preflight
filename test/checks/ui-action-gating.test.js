@@ -159,6 +159,7 @@ test("skips the role lookup entirely when every action has a condition", async (
   );
   const result = await run(http);
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.equal(calls.filter((c) => c.table === "sys_ui_action_role").length, 0);
 });
 
@@ -286,4 +287,30 @@ test("warns (degraded) on an HTTP error reading the role table", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /HTTP 403/);
+});
+
+function assertRowFindings(result, table, kinds) {
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    kinds,
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.table, table);
+    assert.ok(f.location.sysId || f.location.logicalId);
+    assert.ok(f.location.recordName);
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  }
+}
+
+test("emits one finding per ungated action (F-R-3)", async () => {
+  const result = await run(
+    makeHttp({
+      actions: [
+        action(1, { name: "Approve", table: "x_acme_request" }),
+        action(2, { condition: "gs.hasRole('x_acme_app.user')" }),
+      ],
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assertRowFindings(result, "sys_ui_action", ["no-role"]);
 });

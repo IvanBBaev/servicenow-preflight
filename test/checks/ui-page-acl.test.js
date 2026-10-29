@@ -189,6 +189,7 @@ test("passes when the instance reports the scope ships no pages", async () => {
     makeHttp({ pages: [], totalCounts: { sys_ui_page: 0 } }),
   );
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /No UI Pages in scope/);
 });
 
@@ -291,4 +292,35 @@ test("warns (degraded) on an HTTP error reading the ACL table", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /HTTP 403/);
+});
+
+function assertRowFindings(result, table, kinds) {
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    kinds,
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.table, table);
+    assert.ok(f.location.sysId || f.location.logicalId);
+    assert.ok(f.location.recordName);
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  }
+}
+
+test("emits one finding per page without a read ACL (F-R-3)", async () => {
+  const result = await run(
+    makeHttp({
+      pages: [page("dashboard"), page("report"), page("admin")],
+      acls: [acl("x_acme_app_dashboard")],
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assertRowFindings(result, "sys_ui_page", [
+    "acl-missing:read",
+    "acl-missing:read",
+  ]);
+  assert.deepEqual(result.findings.map((f) => f.location.recordName).sort(), [
+    "admin",
+    "report",
+  ]);
 });

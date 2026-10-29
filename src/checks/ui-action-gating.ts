@@ -1,4 +1,4 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import type { SnClient } from "../http/client.js";
 import {
   and,
@@ -8,7 +8,13 @@ import {
   isSysId,
   resolveScope,
 } from "../http/query.js";
-import { errorResult, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "ui-action-gating";
 
@@ -157,9 +163,20 @@ export const uiActionGating: Check = {
         ctx.http,
         queryable.map((row) => str(row, "sys_id")),
       );
-      const ungated = queryable
-        .filter((row) => !roles.gated.has(str(row, "sys_id")))
-        .map(labelOf);
+      const ungatedRows = queryable.filter(
+        (row) => !roles.gated.has(str(row, "sys_id")),
+      );
+      const ungated = ungatedRows.map(labelOf);
+      const findings: Finding[] = [
+        ...ungatedRows.map((row) =>
+          rowFinding(NAME, "sys_ui_action", row, "no-role", labelOf),
+        ),
+        ...noCondition
+          .filter((row) => !isSysId(str(row, "sys_id")))
+          .map((row) =>
+            rowFinding(NAME, "sys_ui_action", row, "unverifiable", labelOf),
+          ),
+      ];
 
       if (ungated.length > 0 || unverifiable.length > 0) {
         const parts: string[] = [];
@@ -178,7 +195,10 @@ export const uiActionGating: Check = {
           : meta.securityTrimmed
             ? " (Note: the sys_ui_action read was security-trimmed, so this list may be incomplete.)"
             : "";
-        return result("fail", parts.join("; ") + "." + note);
+        return withFindings(
+          result("fail", parts.join("; ") + "." + note),
+          findings,
+        );
       }
 
       // The rows this account cannot see are exactly the ones this gate

@@ -110,6 +110,7 @@ test("passes when the instance proves the scope ships no client-callable SIs", a
     makeHttp({ sis: [], totalCounts: { sys_script_include: 0 } }),
   );
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /nothing to gate/i);
 });
 
@@ -244,4 +245,23 @@ test("warns on an HTTP error from the table read", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /503/);
+});
+
+function assertRowFindings(result, table, kinds) {
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    kinds,
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.table, table);
+    assert.ok(f.location.sysId || f.location.logicalId);
+    assert.ok(f.location.recordName);
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  }
+}
+
+test("emits one finding per unguarded client-callable SI (F-R-3)", async () => {
+  const result = await run(makeHttp({ sis: [COVERED_SI], acls: [] }));
+  assert.equal(result.status, "fail");
+  assertRowFindings(result, "sys_script_include", ["acl-missing:execute"]);
 });

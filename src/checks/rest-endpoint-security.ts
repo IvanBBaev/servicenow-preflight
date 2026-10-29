@@ -1,6 +1,14 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { and, eq, resolveScope } from "../http/query.js";
-import { errorResult, isTruthy, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  isTruthy,
+  rowFinding,
+  str,
+  subjectFinding,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "rest-endpoint-security";
 
@@ -99,11 +107,25 @@ export const restEndpointSecurity: Check = {
 
       const anonymous: string[] = [];
       const noAclAuth: string[] = [];
+      const findings: Finding[] = [];
       for (const row of meta.rows) {
         if (!isTruthy(row, "requires_authentication")) {
           anonymous.push(opLabel(row));
+          findings.push(
+            rowFinding(NAME, "sys_ws_operation", row, "anonymous", opLabel),
+          );
         } else if (!isTruthy(row, "requires_acl_authorization")) {
           noAclAuth.push(opLabel(row));
+          const finding = rowFinding(
+            NAME,
+            "sys_ws_operation",
+            row,
+            "no-acl-authorization",
+            opLabel,
+          );
+          // Advisory even when an anonymous resource fails the row.
+          finding.status = "warn";
+          findings.push(finding);
         }
       }
 
@@ -126,6 +148,18 @@ export const restEndpointSecurity: Check = {
         aclReadTrimmed = aclMeta.securityTrimmed;
         missingEndpointAcl = !aclReadTrimmed && aclMeta.rows.length === 0;
       }
+      if (missingEndpointAcl) {
+        const finding = subjectFinding(
+          NAME,
+          `scope:${scope}`,
+          scope,
+          "no-rest-endpoint-acl",
+        );
+        finding.status = "warn";
+        findings.push(finding);
+      }
+      const done = (status: CheckStatus, message: string): CheckResult =>
+        withFindings(result(status, message), findings);
 
       // Anonymous endpoints are the hard failure; the message still flags an
       // incomplete (trimmed) view so a clean-looking list is not over-trusted.
@@ -133,7 +167,7 @@ export const restEndpointSecurity: Check = {
         const trimmedNote = meta.securityTrimmed
           ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
           : "";
-        return result(
+        return done(
           "fail",
           `${anonymous.length} scripted REST resource(s) do not require authentication — they are anonymously reachable: ${anonymous.join(", ")}.` +
             trimmedNote,
@@ -143,7 +177,7 @@ export const restEndpointSecurity: Check = {
       // The resources this account cannot see are exactly the ones this gate
       // cannot clear — a partially trimmed read never passes.
       if (meta.securityTrimmed || aclReadTrimmed) {
-        return result(
+        return done(
           "fail",
           `Cannot fully inspect scripted REST security in scope "${scope}" — the ${
             meta.securityTrimmed ? "sys_ws_operation" : "sys_security_acl"
@@ -163,10 +197,10 @@ export const restEndpointSecurity: Check = {
             `${enforcing} resource(s) enforce ACL authorization but the scope ships no active REST_Endpoint ACL to back them`,
           );
         }
-        return result("warn", parts.join("; ") + ".");
+        return done("warn", parts.join("; ") + ".");
       }
 
-      return result(
+      return done(
         "pass",
         `All ${meta.rows.length} active scripted REST resource(s) in scope "${scope}" require authentication and enforce ACL authorization.`,
       );

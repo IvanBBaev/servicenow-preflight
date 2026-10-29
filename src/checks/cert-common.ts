@@ -7,7 +7,13 @@
  * rather than re-deriving them per file.
  */
 
-import type { CheckResult, CheckStatus } from "../types.js";
+import type {
+  CheckResult,
+  CheckStatus,
+  Finding,
+  FindingLocation,
+} from "../types.js";
+import { makeFinding } from "../findings.js";
 import {
   SnAuthError,
   SnHttpError,
@@ -58,6 +64,67 @@ export function triageZeroRead(meta: TableQueryResult): ZeroReadTriage {
   if (meta.securityTrimmed) return "trimmed";
   if (meta.totalCount === 0) return "empty";
   return "ambiguous";
+}
+
+/**
+ * One finding for one offending record: location `{table, sysId, recordName}`
+ * and a check-local `kind` (`"no-role"`, `"acl-missing:create"`, …). The label
+ * is `str(row, labelField) || str(row, "sys_id")` — the same string the row
+ * message lists; pass a function when the check builds its label from several
+ * fields — and `message` defaults to `"<label> (<table>): <kind>"`. The
+ * id rests on the sys_id, so a rename keeps it; a row without a sys_id falls
+ * back to `logicalId: "name:<label>"`.
+ */
+export function rowFinding(
+  check: string,
+  table: string,
+  row: Record<string, unknown>,
+  kind: string,
+  labelField: string | ((row: Record<string, unknown>) => string) = "name",
+  message?: string,
+): Finding {
+  const sysId = str(row, "sys_id");
+  const label =
+    (typeof labelField === "function"
+      ? labelField(row)
+      : str(row, labelField)) ||
+    sysId ||
+    "(unnamed)";
+  const location: FindingLocation = { table };
+  if (sysId !== "") location.sysId = sysId;
+  else location.logicalId = `name:${label}`;
+  location.recordName = label;
+  return makeFinding(
+    check,
+    kind,
+    message ?? `${label} (${table}): ${kind}`,
+    location,
+  );
+}
+
+/**
+ * One finding for a subject that is not one record (a table, a property name):
+ * location `{logicalId, recordName}`, message `"<label>: <kind>"` by default.
+ */
+export function subjectFinding(
+  check: string,
+  logicalId: string,
+  label: string,
+  kind: string,
+  message?: string,
+): Finding {
+  return makeFinding(check, kind, message ?? `${label}: ${kind}`, {
+    logicalId,
+    recordName: label,
+  });
+}
+
+/** `result` with `findings` attached when there are any (a pass carries none). */
+export function withFindings(
+  result: CheckResult,
+  findings: readonly Finding[],
+): CheckResult {
+  return findings.length > 0 ? { ...result, findings: [...findings] } : result;
 }
 
 /**

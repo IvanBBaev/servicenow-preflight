@@ -1,4 +1,4 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import {
   SnAuthError,
   SnHttpError,
@@ -6,36 +6,15 @@ import {
   type SnClient,
   type TableQueryResult,
 } from "../http/client.js";
+import { findingId } from "../findings.js";
 import { chunk, inClause, resolveScope } from "../http/query.js";
+import { isTruthy, rowFinding, str, withFindings } from "./cert-common.js";
 
 const NAME = "acl-role-sanity";
 
 /** Build a well-formed result for this check. */
 function result(status: CheckStatus, message: string): CheckResult {
   return { name: NAME, status, message };
-}
-
-/** Read a string-ish field from an arbitrary record, trimmed; "" when absent. */
-function str(row: Record<string, unknown>, field: string): string {
-  const value = row[field];
-  if (typeof value === "string") return value.trim();
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  // ServiceNow reference fields may arrive as { value, link, display_value }.
-  if (value && typeof value === "object" && "value" in value) {
-    const inner = (value as { value?: unknown }).value;
-    if (typeof inner === "string") return inner.trim();
-  }
-  return "";
-}
-
-/** ServiceNow encodes booleans as "true"/"false" strings or real booleans. */
-function isTruthy(row: Record<string, unknown>, field: string): boolean {
-  const value = row[field];
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") return value.trim().toLowerCase() === "true";
-  return false;
 }
 
 /** An operation ACL — write/create/delete — with no gate is the dangerous case. */
@@ -198,6 +177,18 @@ export const aclRoleSanity: Check = {
       const openRead: string[] = [];
       const missingRoles: string[] = [];
       const inactive: string[] = [];
+      const findings: Finding[] = [];
+      const flag = (
+        acl: Record<string, unknown>,
+        kind: string,
+        advisory: boolean,
+      ): Finding => {
+        const finding = rowFinding(NAME, "sys_security_acl", acl, kind);
+        // Advisory findings stay warn even when a hard failure fails the row.
+        if (advisory) finding.status = "warn";
+        findings.push(finding);
+        return finding;
+      };
 
       for (const acl of acls) {
         const aclName = str(acl, "name") || str(acl, "sys_id") || "(unnamed)";
@@ -207,6 +198,7 @@ export const aclRoleSanity: Check = {
 
         if (!isTruthy(acl, "active")) {
           inactive.push(`${aclName} (${operation || "?"})`);
+          flag(acl, "inactive", true);
         }
 
         const roleLinks = linksByAcl.get(str(acl, "sys_id")) ?? [];
@@ -220,6 +212,14 @@ export const aclRoleSanity: Check = {
           if (!knownById && !knownByName) {
             const label = name || id || "(unknown)";
             missingRoles.push(`${aclName} → ${label}`);
+            // One finding per dangling role: the role joins the identity.
+            const finding = flag(acl, "missing-role", false);
+            finding.message = `${aclName} (sys_security_acl): missing-role ${label}`;
+            finding.location = {
+              ...finding.location,
+              logicalId: `role:${label}`,
+            };
+            finding.id = findingId(NAME, "missing-role", finding.location);
           }
         }
 
@@ -228,11 +228,16 @@ export const aclRoleSanity: Check = {
         if (wideOpen) {
           if (MUTATING_OPERATIONS.has(operation)) {
             openMutating.push(`${aclName} (${operation})`);
+            flag(acl, `public-access:${operation}`, false);
           } else {
             openRead.push(`${aclName} (${operation || "read"})`);
+            flag(acl, `public-access:${operation || "read"}`, true);
           }
         }
       }
+
+      const done = (status: CheckStatus, message: string): CheckResult =>
+        withFindings(result(status, message), findings);
 
       // Hard failures: open write access or dangling role references.
       if (openMutating.length > 0 || missingRoles.length > 0) {
@@ -247,7 +252,7 @@ export const aclRoleSanity: Check = {
             `${missingRoles.length} ACL(s) reference a role that does not exist on the instance: ${missingRoles.join(", ")}`,
           );
         }
-        return result("fail", parts.join("; ") + ".");
+        return done("fail", parts.join("; ") + ".");
       }
 
       // A partially trimmed read is no more proof of safety than a zero-row one:
@@ -268,7 +273,7 @@ export const aclRoleSanity: Check = {
             `${inactive.length} inactive ACL(s): ${inactive.join(", ")}`,
           );
         }
-        return result(
+        return done(
           "fail",
           `Cannot fully inspect ACLs in scope "${scope}": ${
             totalCount ?? "more"
@@ -290,10 +295,10 @@ export const aclRoleSanity: Check = {
             `${inactive.length} shipped ACL(s) are inactive: ${inactive.join(", ")}`,
           );
         }
-        return result("warn", parts.join("; ") + ".");
+        return done("warn", parts.join("; ") + ".");
       }
 
-      return result(
+      return done(
         "pass",
         `All ${acls.length} ACL(s) in scope "${scope}" are gated and reference existing roles.`,
       );

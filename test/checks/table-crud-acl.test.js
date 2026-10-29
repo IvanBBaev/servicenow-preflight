@@ -261,6 +261,7 @@ test("passes when the instance reports the scope ships no tables", async () => {
     makeHttp({ tables: [], totalCounts: { sys_db_object: 0 } }),
   );
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /No tables in scope/);
 });
 
@@ -389,4 +390,26 @@ test("warns (degraded) on an HTTP error reading the ACL table", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /HTTP 403/);
+});
+
+test("emits one finding per missing operation on a table subject (F-R-3)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: [baseTable("x_acme_asset"), baseTable("x_acme_order")],
+      acls: [
+        ...aclsFor("x_acme_asset", ["create", "read"]),
+        ...aclsFor("x_acme_order"),
+      ],
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    ["acl-missing:write", "acl-missing:delete"],
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.logicalId, "table:x_acme_asset");
+    assert.equal(f.location.recordName, "x_acme_asset");
+  }
+  assert.notEqual(result.findings[0].id, result.findings[1].id);
 });

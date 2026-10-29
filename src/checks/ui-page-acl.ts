@@ -1,10 +1,12 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { isSafeIdentifier, resolveScope } from "../http/query.js";
 import {
   errorResult,
   fetchNamedAcls,
+  rowFinding,
   str,
   triageZeroRead,
+  withFindings,
 } from "./cert-common.js";
 
 const NAME = "ui-page-acl";
@@ -25,6 +27,8 @@ interface UiPage {
    * queryable — the page cannot be verified.
    */
   aclName: string | undefined;
+  /** The `sys_ui_page` record, for its finding. */
+  row: Record<string, unknown>;
 }
 
 /**
@@ -123,6 +127,7 @@ export const uiPageAcl: Check = {
         return {
           label: str(row, "name") || str(row, "sys_id") || "(unnamed)",
           aclName: isSafeIdentifier(aclName) ? aclName : undefined,
+          row,
         };
       });
 
@@ -141,6 +146,9 @@ export const uiPageAcl: Check = {
 
       const missing: string[] = [];
       const inactive: string[] = [];
+      const findings: Finding[] = unverifiable.map((p) =>
+        rowFinding(NAME, "sys_ui_page", p.row, "unverifiable"),
+      );
       for (const page of pages) {
         if (page.aclName === undefined) continue;
         const key = page.aclName.toLowerCase();
@@ -149,8 +157,17 @@ export const uiPageAcl: Check = {
           page.label.toLowerCase() === key
             ? page.label
             : `${page.label} (${page.aclName})`;
-        if (acls.inactiveNames.has(key)) inactive.push(label);
+        const off = acls.inactiveNames.has(key);
+        if (off) inactive.push(label);
         else missing.push(label);
+        findings.push(
+          rowFinding(
+            NAME,
+            "sys_ui_page",
+            page.row,
+            off ? "acl-inactive:read" : "acl-missing:read",
+          ),
+        );
       }
 
       // Concrete findings outrank the trimmed-read verdict: they are already
@@ -182,7 +199,10 @@ export const uiPageAcl: Check = {
           meta.securityTrimmed || acls.trimmed
             ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
             : "";
-        return result("fail", parts.join("; ") + "." + trimmedNote);
+        return withFindings(
+          result("fail", parts.join("; ") + "." + trimmedNote),
+          findings,
+        );
       }
 
       // The pages or ACLs this account cannot see are exactly the ones this

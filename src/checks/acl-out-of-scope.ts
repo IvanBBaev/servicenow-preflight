@@ -1,6 +1,13 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { and, eq, isSysId, resolveScope } from "../http/query.js";
-import { errorResult, isTruthy, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  isTruthy,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "acl-out-of-scope";
 
@@ -119,6 +126,7 @@ export const aclOutOfScope: Check = {
 
       const blocking: string[] = [];
       const ownFieldOnForeign: string[] = [];
+      const findings: Finding[] = [];
       for (const row of acls.rows) {
         const name = str(row, "name");
         const { table, field } = splitAclName(name.toLowerCase());
@@ -130,15 +138,26 @@ export const aclOutOfScope: Check = {
         // `*` and "" can never start with the namespace prefix.
         const ownField = prefix !== "" && field.startsWith(prefix);
         (ownField ? ownFieldOnForeign : blocking).push(label);
+        const finding = rowFinding(
+          NAME,
+          "sys_security_acl",
+          row,
+          ownField ? "own-field-on-foreign-table" : "foreign-table",
+        );
+        // A field ACL for the app's own field is advisory even on a failing row.
+        if (ownField) finding.status = "warn";
+        findings.push(finding);
       }
 
+      const done = (status: CheckStatus, message: string): CheckResult =>
+        withFindings(result(status, message), findings);
       const note =
         tables.securityTrimmed || acls.securityTrimmed
           ? ` (Note: a read was security-trimmed, so this list may be incomplete.)`
           : "";
 
       if (blocking.length > 0) {
-        return result(
+        return done(
           "fail",
           `${blocking.length} ACL(s) in scope "${scope}" target tables outside the app — they apply to every user of those tables on the customer instance and can widen access there: ${blocking.join(", ")}.` +
             (ownFieldOnForeign.length > 0
@@ -151,21 +170,21 @@ export const aclOutOfScope: Check = {
       // The ACLs this account cannot see are exactly the ones this gate cannot
       // clear — a partially trimmed ACL read never passes.
       if (acls.securityTrimmed) {
-        return result(
+        return done(
           "fail",
           `Cannot fully inspect the ACLs in scope "${scope}" — the sys_security_acl read was security-trimmed. Grant the account read access; the ACLs it cannot see are the ones this gate cannot clear.`,
         );
       }
 
       if (ownFieldOnForeign.length > 0) {
-        return result(
+        return done(
           "warn",
           `${ownFieldOnForeign.length} field ACL(s) in scope "${scope}" guard the app's own fields on tables outside the app — narrow, but adding fields to out-of-box tables is itself a certification finding: ${ownFieldOnForeign.join(", ")}.` +
             note,
         );
       }
 
-      return result(
+      return done(
         "pass",
         `All ${acls.rows.length} record ACL(s) in scope "${scope}" target the app's own tables.`,
       );

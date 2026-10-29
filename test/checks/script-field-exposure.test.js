@@ -91,6 +91,7 @@ test("passes when the instance proves the scope ships no script columns", async 
     makeHttp({ columns: [], totalCounts: { sys_dictionary: 0 } }),
   );
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /nothing to lock down/i);
 });
 
@@ -222,4 +223,27 @@ test("warns on an HTTP error from the table read", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /500/);
+});
+
+function assertRowFindings(result, table, kinds) {
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    kinds,
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.table, table);
+    assert.ok(f.location.sysId || f.location.logicalId);
+    assert.ok(f.location.recordName);
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  }
+}
+
+test("emits one finding per unguarded script column (F-R-3)", async () => {
+  const result = await run(makeHttp({ columns: [SCRIPT_COLUMN] }));
+  assert.equal(result.status, "fail");
+  assertRowFindings(result, "sys_dictionary", ["acl-missing:write"]);
+  assert.equal(
+    result.findings[0].location.recordName,
+    "x_acme_app_task.run_script",
+  );
 });

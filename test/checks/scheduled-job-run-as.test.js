@@ -51,6 +51,7 @@ test("passes when the instance proves the scope ships no Scheduled Jobs", async 
     makeHttp({ jobs: [], totalCounts: { sysauto_script: 0 } }),
   );
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /nothing to check/i);
 });
 
@@ -137,4 +138,33 @@ test("warns on an HTTP error from the table read", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /403/);
+});
+
+function assertRowFindings(result, table, kinds) {
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    kinds,
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.table, table);
+    assert.ok(f.location.sysId || f.location.logicalId);
+    assert.ok(f.location.recordName);
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  }
+}
+
+test("emits one finding per job pinned to a user (F-R-3)", async () => {
+  const jobs = [
+    { sys_id: "job1", name: "Nightly Cleanup", run_as: "" },
+    {
+      sys_id: "job2",
+      name: "Data Sync",
+      run_as: "6816f79cc0a8016401c5a33be04be441",
+    },
+  ];
+  const result = await run(makeHttp({ jobs }));
+  assert.equal(result.status, "warn");
+  assertRowFindings(result, "sysauto_script", ["runs-as-user"]);
+  assert.equal(result.findings[0].location.sysId, "job2");
+  assert.equal(result.findings[0].location.recordName, "Data Sync");
 });

@@ -1,6 +1,13 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { and, eq, resolveScope } from "../http/query.js";
-import { errorResult, isTruthy, str, triageZeroRead } from "./cert-common.js";
+import {
+  errorResult,
+  isTruthy,
+  rowFinding,
+  str,
+  triageZeroRead,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "property-privacy";
 
@@ -100,16 +107,33 @@ export const propertyPrivacy: Check = {
 
       const exposed: string[] = [];
       const plainSecrets: string[] = [];
+      const findings: Finding[] = [];
       for (const row of meta.rows) {
         const name = str(row, "name") || str(row, "sys_id") || "(unnamed)";
         const type = str(row, "type").toLowerCase();
         if (PASSWORD_TYPES.has(type)) {
-          if (!isTruthy(row, "is_private")) exposed.push(name);
+          if (!isTruthy(row, "is_private")) {
+            exposed.push(name);
+            findings.push(
+              rowFinding(NAME, "sys_properties", row, "not-private"),
+            );
+          }
         } else if (SECRET_LIKE_NAME.test(name)) {
           plainSecrets.push(name);
+          const finding = rowFinding(
+            NAME,
+            "sys_properties",
+            row,
+            "plain-type-secret",
+          );
+          // Advisory even when an exposed password property fails the row.
+          finding.status = "warn";
+          findings.push(finding);
         }
       }
 
+      const done = (status: CheckStatus, message: string): CheckResult =>
+        withFindings(result(status, message), findings);
       const trimmedNote = meta.securityTrimmed
         ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
         : "";
@@ -121,7 +145,7 @@ export const propertyPrivacy: Check = {
                 plainSecrets.length === 1 ? "y" : "ies"
               } use a non-password type: ${plainSecrets.join(", ")}.`
             : "";
-        return result(
+        return done(
           "fail",
           `${exposed.length} password-typed system propert${
             exposed.length === 1 ? "y is" : "ies are"
@@ -132,7 +156,7 @@ export const propertyPrivacy: Check = {
       }
 
       if (plainSecrets.length > 0) {
-        return result(
+        return done(
           "warn",
           `${plainSecrets.length} system propert${
             plainSecrets.length === 1 ? "y has" : "ies have"
@@ -142,13 +166,13 @@ export const propertyPrivacy: Check = {
       }
 
       if (meta.securityTrimmed) {
-        return result(
+        return done(
           "fail",
           `Cannot fully inspect system properties in scope "${scope}" — the sys_properties read was security-trimmed. The properties this account cannot see are the ones this gate cannot clear.`,
         );
       }
 
-      return result(
+      return done(
         "pass",
         `All ${meta.rows.length} active system propert${
           meta.rows.length === 1 ? "y" : "ies"

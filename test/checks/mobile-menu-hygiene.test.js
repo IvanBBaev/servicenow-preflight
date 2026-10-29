@@ -65,6 +65,7 @@ test("passes when the instance proves the scope ships no mobile records", async 
   ];
   const result = await run(makeHttp({ menus, totalCounts: PROVEN_EMPTY }));
   assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined); // F-R-3
   assert.match(result.message, /No mobile Application Menus/);
 });
 
@@ -162,4 +163,20 @@ test("warns on an HTTP error from the table read", async () => {
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /500/);
+});
+
+test("emits one finding per mobile menu and module (F-R-3)", async () => {
+  const menus = [{ sys_id: "m1", title: "Acme Mobile", device_type: "mobile" }];
+  const modules = [
+    { sys_id: "mod1", title: "Acme Mobile List", device_type: "mobile" },
+  ];
+  const result = await run(makeHttp({ menus, modules }));
+  assert.equal(result.status, "warn");
+  assert.deepEqual(
+    result.findings.map((f) => [f.kind, f.location.table, f.location.sysId]),
+    [
+      ["mobile-menu", "sys_app_application", "m1"],
+      ["mobile-module", "sys_app_module", "mod1"],
+    ],
+  );
 });
