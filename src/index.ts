@@ -214,6 +214,20 @@ export {
   type InstanceSource,
 } from "./doctor.js";
 export {
+  changedTables,
+  declaredTables,
+  planIncremental,
+  selectByTables,
+  tableOfUpdateName,
+  INCREMENTAL_ROW,
+  STATE_TABLES,
+  type ChangeSet,
+  type ChangeSource,
+  type IncrementalPlan,
+  type IncrementalSelection,
+  type SelectReason,
+} from "./incremental.js";
+export {
   applyBaseline,
   baselineFromReport,
   baselinePath,

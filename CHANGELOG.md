@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--changed-since <dur|date>`** — incremental runs: only the checks whose
+  `meta.tables` include a table changed since then (a duration such as `24h`
+  or an ISO date). Changes come from the update set's `sys_update_xml` rows
+  (batched child sets included; composite names such as
+  `sys_dictionary_<table>_<column>` map by the longest known table prefix),
+  else from the scope's `sys_metadata`. Checks that always run, declare no
+  tables or read instance state (update sets, ATF results) are always kept; a
+  change read over the row cap runs everything; no changes adds a
+  `preflight:incremental` warn row.
+  A stderr preamble lists the kept count and the changed tables. Refused with
+  `--write-baseline` (exit 2). Library: `changedTables`, `selectByTables`,
+  `planIncremental`, `tableOfUpdateName`, `declaredTables`. Watch mode and
+  git-ref input are not included.
 - **`doctor`** — `servicenow-preflight doctor [env] [-i <url>]` is a read-only
   readiness report: config sources, DNS / proxy, authentication, the
   basic-auth API restriction properties, the account's

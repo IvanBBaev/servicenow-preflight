@@ -93,6 +93,11 @@ import {
 } from "./state/drift.js";
 import { defaultChecks, testDrift } from "./checks/index.js";
 import {
+  declaredTables,
+  planIncremental,
+  type IncrementalPlan,
+} from "./incremental.js";
+import {
   closestNames,
   describeChecks,
   findCheck,
@@ -112,6 +117,7 @@ import {
   baselineFromReport,
   baselinePath,
   readBaseline,
+  summarize,
   writeBaseline,
   type Baseline,
 } from "./baseline.js";
@@ -214,6 +220,8 @@ interface ParsedArgs {
   baseline?: string | true;
   /** `run`: write a baseline from the run's non-pass results (path or default). */
   writeBaseline?: string | true;
+  /** `run`: `--changed-since` — run only the checks whose tables changed since then (F-X-14). */
+  changedSince?: Date;
   /** `run`: `--severity <check>=<level>` overrides (repeatable). */
   severity?: SeverityPolicy;
   /** Allow `--write-baseline` (or `init`) to overwrite an existing file. */
@@ -316,6 +324,34 @@ function parseDuration(value: string, flag = "--max-age"): number {
     );
   }
   return Number.parseFloat(amount) * unitMs;
+}
+
+/**
+ * Parse `--changed-since`: a {@link parseDuration} value counted back from
+ * `now`, or an ISO date (`2026-10-01`, `2026-10-01T12:00:00Z`) not in the
+ * future. Git refs need the offline source tree (ADD-3) and are rejected.
+ */
+function parseChangedSince(value: string, now = Date.now()): Date {
+  const text = value.trim();
+  if (/^\d+(?:\.\d+)?(ms|s|m|h|d|w)$/.test(text)) {
+    return new Date(now - parseDuration(text, "--changed-since"));
+  }
+  const at = /^\d{4}-\d{2}-\d{2}(?:T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(
+    text,
+  )
+    ? Date.parse(text)
+    : Number.NaN;
+  if (Number.isNaN(at)) {
+    throw new UsageError(
+      `Invalid --changed-since "${value}". Use a duration (7d, 24h) or an ISO date (2026-10-01, 2026-10-01T12:00:00Z); git refs are not supported.`,
+    );
+  }
+  if (at > now) {
+    throw new UsageError(
+      `Invalid --changed-since "${value}": the date lies in the future.`,
+    );
+  }
+  return new Date(at);
 }
 
 /** Parse a time budget: a {@link parseDuration} value that must not be zero. */
@@ -515,6 +551,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--max-age":
         args.maxAgeMs = parseDuration(takeValue(arg));
         break;
+      case "--changed-since":
+        args.changedSince = parseChangedSince(takeValue(arg));
+        break;
       case "--timeout":
         args.timeoutMs = parseBudget(takeValue(arg), arg);
         break;
@@ -578,6 +617,10 @@ function parseArgs(argv: string[]): ParsedArgs {
           args.format = parseFormat(arg.slice("--format=".length));
         } else if (arg?.startsWith("--max-age=")) {
           args.maxAgeMs = parseDuration(arg.slice("--max-age=".length));
+        } else if (arg?.startsWith("--changed-since=")) {
+          args.changedSince = parseChangedSince(
+            arg.slice("--changed-since=".length),
+          );
         } else if (arg?.startsWith("--timeout=")) {
           args.timeoutMs = parseBudget(
             arg.slice("--timeout=".length),
@@ -653,6 +696,11 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (args.baseline !== undefined && args.writeBaseline !== undefined) {
     throw new UsageError(
       "--baseline and --write-baseline cannot be combined; choose one (apply an existing baseline, or record a new one).",
+    );
+  }
+  if (args.changedSince !== undefined && args.writeBaseline !== undefined) {
+    throw new UsageError(
+      "--changed-since and --write-baseline cannot be combined: an incremental run would record a partial baseline.",
     );
   }
   return args;
@@ -909,6 +957,13 @@ Options:
       --config <path>    Path to a preflight config file
       --only <csv>       Run only these checks (comma-separated names)
       --skip <csv>       Skip these checks (comma-separated names)
+      --changed-since <dur|date>
+                         run: only the checks whose tables changed since then
+                         (a duration such as 24h or 7d, or an ISO date), read
+                         from the update set's changes, else the scope's
+                         application files. Checks without tables, that
+                         always run, or that read update sets or ATF results
+                         are kept. Not with --write-baseline
       --format <fmt>     Output: pretty (default), json, junit, sarif,
                          markdown (a PR-comment table), github (Actions
                          ::error/::warning annotations; GitHub jobs only)
@@ -1634,6 +1689,29 @@ async function runOneInstance(
     ...(checkOptions ? { checkOptions } : {}),
   };
 
+  // F-X-14: narrow the selection to the checks whose tables changed.
+  let incremental: IncrementalPlan | undefined;
+  if (args.changedSince !== undefined) {
+    if (!ctx.updateSetId?.trim() && !ctx.scope?.trim()) {
+      throw new UsageError(
+        "--changed-since needs an update set (updateSetId / SNPF_UPDATE_SET) or a scope (the config file's scope) to read changes from.",
+      );
+    }
+    incremental = await planIncremental(
+      ctx,
+      selectChecks(defaultChecks, select),
+      args.changedSince,
+      {
+        known: declaredTables(defaultChecks),
+        ...(target.name ? { label: target.name } : {}),
+      },
+    );
+    process.stderr.write(`${incremental.preamble}\n`);
+    if (incremental.skip.length > 0) {
+      select.skip = [...(select.skip ?? []), ...incremental.skip];
+    }
+  }
+
   // Post-processing order: runPreflight → policy → baseline. Policy expresses
   // intent; the baseline accepts the resulting state.
   const envTimeout = loaded.env.SNPF_CHECK_TIMEOUT;
@@ -1655,18 +1733,21 @@ async function runOneInstance(
   let timings: RunTimings | undefined;
   let raw: PreflightReport;
   try {
-    raw = await runPreflight(ctx, defaultChecks, {
-      signal: interrupt.signal,
-      concurrency:
-        args.concurrency ?? loaded.concurrency ?? DEFAULT_CONCURRENCY,
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      ...(args.runTimeoutMs !== undefined
-        ? { runTimeoutMs: args.runTimeoutMs }
-        : {}),
-    });
+    raw = incremental?.empty
+      ? summarize([])
+      : await runPreflight(ctx, defaultChecks, {
+          signal: interrupt.signal,
+          concurrency:
+            args.concurrency ?? loaded.concurrency ?? DEFAULT_CONCURRENCY,
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          ...(args.runTimeoutMs !== undefined
+            ? { runTimeoutMs: args.runTimeoutMs }
+            : {}),
+        });
   } finally {
     timings = collector?.stop(defaultChecks.map((c) => c.name));
   }
+  if (incremental?.row) raw = summarize([...raw.results, incremental.row]);
   recorder?.finish({
     version: readVersion(),
     checks: raw.results.map((r) => r.name),

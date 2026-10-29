@@ -201,38 +201,39 @@ network either.
 
 Both `--flag value` and `--flag=value` forms are accepted.
 
-| Flag                         | Description                                                                                                                   |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--instance <url>`     | Target instance URL (single-instance, no registry).                                                                           |
-| `-e`, `--env <name>`         | Select a registry instance (same as positional).                                                                              |
-| `--all`                      | `run`: sweep every instance in the registry.                                                                                  |
-| `--registry <path>`          | Registry file (default `.preflight/instances.json`); see below.                                                               |
-| `--config <path>`            | Config file (default: auto-discovered).                                                                                       |
-| `--only` / `--skip <csv>`    | Run only / skip these checks (comma-separated names).                                                                         |
-| `--with-last-run`            | `sync`: also pull each test's most recent result.                                                                             |
-| `--allow-empty`              | `sync`: commit an empty snapshot over a non-empty manifest.                                                                   |
-| `--max-age <dur>`            | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                                |
-| `--allow-stage-skip`         | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                                   |
-| `--format <fmt>`             | `pretty` (default), `json`, `junit`, `sarif`, `markdown`, `github` (`list`/`explain`: `pretty` or `json`).                    |
-| `--json` / `-h`              | Shorthand for `--format json` / show help.                                                                                    |
-| `--baseline [path]`          | `run`: demote findings recorded in a baseline file to warnings (see [Baseline](#baseline-accepted-findings)).                 |
-| `--write-baseline [path]`    | `run`: record every non-pass result as a new baseline file.                                                                   |
-| `--force`                    | `--write-baseline`: overwrite an existing baseline file.                                                                      |
-| `--severity <check>=<level>` | `run`: report a check's non-pass result as `fail` or `warn`, or skip it (`off`). Repeatable; wins over the config `severity`. |
-| `--timeout <dur>`            | `run`: fail any check still running after `<dur>` (e.g. `30s`, `500ms`) and move on. Default: none; `SNPF_CHECK_TIMEOUT`.     |
-| `--run-timeout <dur>`        | `run`: stop the run (per instance) after `<dur>`; unfinished checks become `fail` rows.                                       |
-| `--fail-on <level>`          | `run`: `fail` (default) exits `1` on a `fail` row only; `warn` also on a `warn` row no baseline accepted. `SNPF_FAIL_ON`.     |
-| `--output <format>=<path>`   | `run`: also write the report as `<format>` to `<path>` (atomic; folders created). Repeatable.                                 |
-| `--no-summary`               | `run`: inside GitHub Actions, skip the step summary. `SNPF_SUMMARY=0`.                                                        |
-| `--concurrency <n>`          | `run`: most checks running at once, 1–32. Default `4`; `SNPF_CONCURRENCY`.                                                    |
-| `--max-inflight <n>`         | Most requests in flight at once, 1–64. Default `4`; `SNPF_MAX_INFLIGHT`.                                                      |
-| `--rps <n>`                  | Requests started per second, 0.5–100. Default: unlimited; `SNPF_RPS`.                                                         |
-| `--no-cache`                 | `run`: fetch every read, instead of sharing identical reads between checks. Also `SNPF_CACHE=0`.                              |
-| `--timings`                  | `run`: print per-check time, requests, retries and cache hits to stderr; with `--format json`, a `timings` object per run.    |
-| `--trace <path>`             | `run`: write a local NDJSON trace of the run (mode `0600`). Also `SNPF_TRACE`. See [Diagnostics](#diagnostics).               |
-| `--record <dir>`             | `run`: also save every response, redacted, to `<dir>` for a later `--replay`. See [Record and replay](#record-and-replay).    |
-| `--record-raw`               | `run`: with `--record`, keep user and group names and emails (secrets are still redacted).                                    |
-| `--replay <dir>`             | `run`: answer every request from a recording — no network, no credentials.                                                    |
+| Flag                          | Description                                                                                                                   |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--instance <url>`      | Target instance URL (single-instance, no registry).                                                                           |
+| `-e`, `--env <name>`          | Select a registry instance (same as positional).                                                                              |
+| `--all`                       | `run`: sweep every instance in the registry.                                                                                  |
+| `--registry <path>`           | Registry file (default `.preflight/instances.json`); see below.                                                               |
+| `--config <path>`             | Config file (default: auto-discovered).                                                                                       |
+| `--only` / `--skip <csv>`     | Run only / skip these checks (comma-separated names).                                                                         |
+| `--changed-since <dur\|date>` | `run`: only the checks whose tables changed since `<dur>` ago (`24h`, `7d`) or an ISO date; see below.                        |
+| `--with-last-run`             | `sync`: also pull each test's most recent result.                                                                             |
+| `--allow-empty`               | `sync`: commit an empty snapshot over a non-empty manifest.                                                                   |
+| `--max-age <dur>`             | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                                |
+| `--allow-stage-skip`          | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                                   |
+| `--format <fmt>`              | `pretty` (default), `json`, `junit`, `sarif`, `markdown`, `github` (`list`/`explain`: `pretty` or `json`).                    |
+| `--json` / `-h`               | Shorthand for `--format json` / show help.                                                                                    |
+| `--baseline [path]`           | `run`: demote findings recorded in a baseline file to warnings (see [Baseline](#baseline-accepted-findings)).                 |
+| `--write-baseline [path]`     | `run`: record every non-pass result as a new baseline file.                                                                   |
+| `--force`                     | `--write-baseline`: overwrite an existing baseline file.                                                                      |
+| `--severity <check>=<level>`  | `run`: report a check's non-pass result as `fail` or `warn`, or skip it (`off`). Repeatable; wins over the config `severity`. |
+| `--timeout <dur>`             | `run`: fail any check still running after `<dur>` (e.g. `30s`, `500ms`) and move on. Default: none; `SNPF_CHECK_TIMEOUT`.     |
+| `--run-timeout <dur>`         | `run`: stop the run (per instance) after `<dur>`; unfinished checks become `fail` rows.                                       |
+| `--fail-on <level>`           | `run`: `fail` (default) exits `1` on a `fail` row only; `warn` also on a `warn` row no baseline accepted. `SNPF_FAIL_ON`.     |
+| `--output <format>=<path>`    | `run`: also write the report as `<format>` to `<path>` (atomic; folders created). Repeatable.                                 |
+| `--no-summary`                | `run`: inside GitHub Actions, skip the step summary. `SNPF_SUMMARY=0`.                                                        |
+| `--concurrency <n>`           | `run`: most checks running at once, 1–32. Default `4`; `SNPF_CONCURRENCY`.                                                    |
+| `--max-inflight <n>`          | Most requests in flight at once, 1–64. Default `4`; `SNPF_MAX_INFLIGHT`.                                                      |
+| `--rps <n>`                   | Requests started per second, 0.5–100. Default: unlimited; `SNPF_RPS`.                                                         |
+| `--no-cache`                  | `run`: fetch every read, instead of sharing identical reads between checks. Also `SNPF_CACHE=0`.                              |
+| `--timings`                   | `run`: print per-check time, requests, retries and cache hits to stderr; with `--format json`, a `timings` object per run.    |
+| `--trace <path>`              | `run`: write a local NDJSON trace of the run (mode `0600`). Also `SNPF_TRACE`. See [Diagnostics](#diagnostics).               |
+| `--record <dir>`              | `run`: also save every response, redacted, to `<dir>` for a later `--replay`. See [Record and replay](#record-and-replay).    |
+| `--record-raw`                | `run`: with `--record`, keep user and group names and emails (secrets are still redacted).                                    |
+| `--replay <dir>`              | `run`: answer every request from a recording — no network, no credentials.                                                    |
 
 Durations take a unit: `ms`, `s`, `m`, `h`, `d` or `w`. A timed-out check is
 cancelled — its in-flight requests are aborted — and reported as
@@ -257,6 +258,20 @@ A run shares identical Table API reads between its checks: the first check to
 ask fetches, and the others reuse the result. The cache lives in memory for
 one run only, failed reads are never cached, and the report is the same with
 or without it. `--no-cache` (or `SNPF_CACHE=0`) turns it off.
+
+`--changed-since` makes an incremental run. It reads the tables changed since
+then from the target update set's `sys_update_xml` rows (child sets included),
+or, without an update set, from the scope's `sys_metadata` rows, and runs only
+the checks whose `tables` (see `explain`) include one of them. A check that
+always runs, declares no tables or reads instance state (update sets,
+retrieved-set previews, ATF results: `update-set-state`, `default-set-leakage`,
+`atf-run`) is always kept, so a check is never dropped for lack of metadata.
+Skipped checks are not rows (as with `--skip`); a stderr line names the kept
+count and the changed tables. With no changes, a
+`preflight:incremental` warn row says so. A change read over the row cap runs
+every check. It composes with `--only` / `--skip` and is refused with
+`--write-baseline` (exit 2), since the baseline would be partial. Git refs are
+not supported.
 
 `--instance`, `--only` and `--skip` override the matching config-file values. The
 `scope` and `updateSetId` a run targets come from the config file (or the
