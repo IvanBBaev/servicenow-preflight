@@ -6,8 +6,12 @@
  * {@link PreflightReport}. Call it with no explicit list to run
  * {@link defaultChecks}, or pass your own {@link CheckSelection}. The bundled
  * CLI (`servicenow-preflight` / `snpf`) is a thin wrapper over this same
- * function. Every symbol needed to build and run checks, or to drive a
- * {@link SnClient} directly, is re-exported here.
+ * function.
+ *
+ * The package root is a curated core: running checks, building a client,
+ * loading config and writing a check. Everything else lives on a subpath —
+ * `servicenow-preflight/checks`, `/http`, `/report`, `/state`, `/testing`, and
+ * `/internal` (no semver promise).
  *
  * @packageDocumentation
  */
@@ -40,22 +44,8 @@ export type {
   PreflightAuth,
   PreflightContext,
   PreflightReport,
-  ReplayInfo,
 } from "./types.js";
-export type {
-  SnClient,
-  SnTable,
-  SnCicd,
-  SnAuth,
-  SnMfa,
-  SnTls,
-  SnRawResponse,
-  SnRequestOptions,
-  SnCallOptions,
-  SnClientConfig,
-  CicdTestSuiteResult,
-  TableQueryResult,
-} from "./http/client.js";
+export type { SnClient, SnAuth, SnClientConfig } from "./http/client.js";
 export {
   createSnClient,
   withSignal,
@@ -66,219 +56,20 @@ export {
   SnTruncationError,
   SnResponseError,
 } from "./http/client.js";
-export {
-  MAX_FINDINGS,
-  capFindings,
-  findingId,
-  makeFinding,
-} from "./findings.js";
-export { createFakeSnClient } from "./http/fake.js";
-export type { FakeFixtures, ForcedFailure } from "./http/fake.js";
-export {
-  EncodedQueryError,
-  IN_CHUNK_SIZE,
-  isSafeIdentifier,
-  isSysId,
-  assertIdentifier,
-  assertSysId,
-  eq,
-  inClause,
-  and,
-  or,
-  chunk,
-  scopeFilterClause,
-  resolveScope,
-} from "./http/query.js";
-export type { ResolvedScope } from "./http/query.js";
+export { findingId, makeFinding } from "./findings.js";
 export {
   loadConfig,
-  resolveAuthFromEnv,
-  resolveTlsFromEnv,
-  namespacedEnv,
   UsageError,
   type PreflightConfig,
   type LoadedConfig,
   type LoadConfigOptions,
 } from "./config.js";
 export {
-  loadRegistry,
-  resolveInstance,
-  instanceNames,
-  registryPath,
-  promotionChain,
-  RegistryNotFoundError,
-  PREFLIGHT_DIR,
-  REGISTRY_BASENAME,
-  type InstanceDef,
-  type InstanceRegistry,
-  type ResolvedInstance,
-} from "./registry.js";
-export {
-  loadManifest,
-  writeManifest,
-  mergeManifest,
-  emptyManifest,
-  manifestPath,
-  logicalId,
-  slugify,
-  STATE_DIR,
-  MANIFEST_VERSION,
-  type StateManifest,
-  type AtfTestState,
-  type AtfSuiteState,
-  type AtfCoverage,
-  type AtfRunRef,
-  type InstanceIdentity,
-  type InstalledAppState,
-} from "./state/manifest.js";
-export {
-  pullManifest,
-  syncManifest,
-  EmptySnapshotError,
-  type SyncOptions,
-} from "./state/sync.js";
-export {
-  computeDrift,
-  stalenessResults,
-  versionParityResults,
-  promotionOrderResult,
-  FRESHNESS_CHECK,
-  INSTANCE_VERSION_CHECK,
-  APP_VERSION_CHECK,
-  PROMOTION_ORDER_CHECK,
-  DEFAULT_STALE_WARN_MS,
-  type DriftReport,
-  type DriftEntry,
-  type DriftManifestRef,
-  type StalenessOptions,
-  type PromotionOrderOptions,
-} from "./state/drift.js";
-export {
-  formatJUnit,
-  formatJUnitSuites,
-  type NamedReport,
-} from "./report/junit.js";
-export { formatSarif } from "./report/sarif.js";
-export {
-  createReplayClient,
-  type ReplayClientOptions,
-} from "./fixtures/replay.js";
-export {
-  readRecording,
-  RecordingError,
-  type RecordingIndex,
-} from "./fixtures/recording.js";
-export {
-  collectTimings,
-  createTracer,
-  formatTimings,
-  TRACE_CHANNELS,
-  type CheckTiming,
-  type RunTimings,
-  type TimingsCollector,
-  type Tracer,
-  type TraceRunFields,
-} from "./trace.js";
-export {
-  REPORT_SCHEMA_VERSION,
-  toEnvelope,
-  formatJson,
-} from "./report/json.js";
-export type {
-  EnvelopeOptions,
-  ReportEnvelope,
-  ReportRun,
-} from "./report/json.js";
-export {
-  formatMarkdown,
-  formatMarkdownAll,
-  type MarkdownOptions,
-} from "./report/markdown.js";
-export {
-  formatGitHubAnnotations,
-  formatGitHubAnnotationsAll,
-} from "./report/github.js";
-export {
-  closestNames,
   describeChecks,
   findCheck,
-  RULE_TITLES,
   type CheckDescriptor,
 } from "./catalogue.js";
-export {
-  BASIC_AUTH_PROPERTIES,
-  BASIC_AUTH_ROLE,
-  doctorChecks,
-  tablesOf,
-  type DoctorOptions,
-  type InstanceSource,
-} from "./doctor.js";
-export {
-  changedTables,
-  declaredTables,
-  planIncremental,
-  selectByTables,
-  tableOfUpdateName,
-  INCREMENTAL_ROW,
-  STATE_TABLES,
-  type ChangeSet,
-  type ChangeSource,
-  type IncrementalPlan,
-  type IncrementalSelection,
-  type SelectReason,
-} from "./incremental.js";
-export {
-  applyBaseline,
-  baselineFromReport,
-  baselinePath,
-  readBaseline,
-  writeBaseline,
-  BASELINE_ROW,
-  type Baseline,
-  type BaselineEntry,
-} from "./baseline.js";
-export {
-  applyPolicy,
-  parseSeverityFlag,
-  policySkips,
-  validatePolicy,
-  type SeverityOverride,
-  type SeverityPolicy,
-} from "./policy.js";
-export {
-  defaultChecks,
-  instanceUrlConfigured,
-  connectivityAuth,
-  updateSetState,
-  defaultSetLeakage,
-  remoteSetPreview,
-  atfEnablement,
-  atfRun,
-  scopedAppDeps,
-  i18nCompleteness,
-  aclRoleSanity,
-  clientCallableAcl,
-  restEndpointSecurity,
-  scriptFieldExposure,
-  scheduledJobRunAs,
-  mobileMenuHygiene,
-  tableCrudAcl,
-  uiPageAcl,
-  uiActionGating,
-  tableNamespace,
-  portalRoles,
-  aclOutOfScope,
-  moduleRoles,
-  scriptHygiene,
-  hardcodedIdentifiers,
-  clientScriptSafety,
-  propertyPrivacy,
-  inactiveArtifacts,
-  notificationConditions,
-  logLeftovers,
-  deprecatedApis,
-  testDrift,
-} from "./checks/index.js";
+export { defaultChecks } from "./checks/index.js";
 
 /**
  * Apply a {@link CheckSelection} to a list of checks: keep only those named in
@@ -646,6 +437,3 @@ export async function runPreflight(
   });
   return report;
 }
-
-// Re-exported for consumers that only need the auth type name.
-export type { PreflightAuth as Auth } from "./types.js";

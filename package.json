@@ -21,6 +21,36 @@
       "import": "./build/index.js",
       "default": "./build/index.js"
     },
+    "./checks": {
+      "types": "./build/api/checks.d.ts",
+      "import": "./build/api/checks.js",
+      "default": "./build/api/checks.js"
+    },
+    "./http": {
+      "types": "./build/api/http.d.ts",
+      "import": "./build/api/http.js",
+      "default": "./build/api/http.js"
+    },
+    "./report": {
+      "types": "./build/api/report.d.ts",
+      "import": "./build/api/report.js",
+      "default": "./build/api/report.js"
+    },
+    "./state": {
+      "types": "./build/api/state.d.ts",
+      "import": "./build/api/state.js",
+      "default": "./build/api/state.js"
+    },
+    "./testing": {
+      "types": "./build/api/testing.d.ts",
+      "import": "./build/api/testing.js",
+      "default": "./build/api/testing.js"
+    },
+    "./internal": {
+      "types": "./build/api/internal.d.ts",
+      "import": "./build/api/internal.js",
+      "default": "./build/api/internal.js"
+    },
     "./schemas/report.v1.json": "./schemas/report.v1.json",
     "./schemas/finding.v1.json": "./schemas/finding.v1.json",
     "./schemas/preflight.config.v1.json": "./schemas/preflight.config.v1.json",

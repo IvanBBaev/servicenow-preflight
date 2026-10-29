@@ -15,10 +15,9 @@ import { fileURLToPath } from "node:url";
 import {
   REPORT_SCHEMA_VERSION,
   formatJson,
-  makeFinding,
-  runPreflight,
   toEnvelope,
-} from "../../build/index.js";
+} from "../../build/api/report.js";
+import { makeFinding, runPreflight } from "../../build/index.js";
 import { reportUrl } from "../../build/report/json.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
 import {

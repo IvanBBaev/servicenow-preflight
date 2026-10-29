@@ -385,6 +385,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Tiered library exports** (breaking, pre-1.0) — the package root shrinks
+  from ≈210 symbols to a curated core of 37 (`runPreflight`, `selectChecks`,
+  `defaultChecks`, `createSnClient`, `withSignal`, the `SnError` family,
+  `makeFinding`, `findingId`, `loadConfig`, `UsageError`, `describeChecks`,
+  `findCheck` and the core types). Everything else moves to subpaths:
+  `servicenow-preflight/checks` (bundled checks, findings helpers, `doctorChecks`,
+  policy, incremental selection), `/http` (client, query helpers, env auth/TLS
+  resolution), `/report` (envelope, formatters, baseline, tracing), `/state`
+  (registry, manifests, sync, drift), `/testing` (fake and replay clients,
+  recordings) and `/internal` (`closestNames`, `RULE_TITLES`,
+  `parseSeverityFlag`, `slugify`, `tablesOf`, `tableOfUpdateName`,
+  `namespacedEnv`; no semver promise). The deprecated `Auth` type alias is
+  removed; use `PreflightAuth`. A snapshot test
+  (`test/fixtures/public-api.txt`) pins every export per entry point.
+
 - **Exit code `3` for runtime errors** (breaking, pre-1.0) — an error that
   escapes a command without being a usage or config error (a network or HTTP
   failure outside the checks, e.g. during `sync`; an unreadable or unwritable

@@ -303,6 +303,7 @@ never leaves the machine. With several instances, one file holds every run.
 
 Library callers get the same events from `node:diagnostics_channel`
 (`TRACE_CHANNELS`), or use `createTracer(write)` and `collectTimings()`
+(all from `servicenow-preflight/report`)
 around `runPreflight`. With no subscriber, nothing is built.
 
 ### Record and replay
@@ -349,7 +350,8 @@ report notes where it came from — a first line in `pretty` and `markdown`, a
 `--replay` take one instance, so they cannot be combined with each other or
 with `--all`.
 
-Library callers use `createReplayClient(dir)` as `ctx.http`, with
+Library callers use `createReplayClient(dir)` (from
+`servicenow-preflight/testing`) as `ctx.http`, with
 `ctx.replay` from `readRecording(dir)` so the credential-gated checks run.
 
 ## Credentials & auth
@@ -962,8 +964,24 @@ credentials when the instance or the checks change.
 
 ## Library API
 
-The public surface is [src/index.ts](src/index.ts); everything below is exported
-from the package root.
+The package root ([src/index.ts](src/index.ts)) is a curated core: `runPreflight`,
+`selectChecks`, `defaultChecks`, `createSnClient` / `withSignal` and the
+`SnError` family, `makeFinding` / `findingId`, `loadConfig` / `UsageError`,
+`describeChecks` / `findCheck`, and the types a check or a caller needs
+(`Check`, `CheckResult`, `PreflightContext`, `PreflightReport`, `SnClient`, …).
+Everything else is on a subpath ([src/api/](src/api/)):
+
+| Import from                     | What                                                                                                                                                                               |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `servicenow-preflight/checks`   | Every bundled check, the registry, findings helpers (`MAX_FINDINGS`, `capFindings`), the catalogue, `doctorChecks`, severity policy, incremental selection (`planIncremental`, …). |
+| `servicenow-preflight/http`     | The client, its errors and types, encoded-query helpers (`eq`, `inClause`, `resolveScope`, …), `resolveAuthFromEnv` / `resolveTlsFromEnv`.                                         |
+| `servicenow-preflight/report`   | `toEnvelope` / `formatJson`, JUnit, SARIF, Markdown, GitHub annotations, the baseline, tracing and timings.                                                                        |
+| `servicenow-preflight/state`    | Instance registry, state manifests, `syncManifest`, drift and promotion checks.                                                                                                    |
+| `servicenow-preflight/testing`  | `createFakeSnClient`, `createReplayClient`, `readRecording`.                                                                                                                       |
+| `servicenow-preflight/internal` | Helpers shared by the CLI and the checks. **No semver promise.**                                                                                                                   |
+
+The list of every export per entry point is pinned in
+[test/fixtures/public-api.txt](test/fixtures/public-api.txt).
 
 ```ts
 import { runPreflight, createSnClient } from "servicenow-preflight";
@@ -1041,7 +1059,7 @@ maxInFlight?, rps?, cache? }`),
   `properties`; a check without `meta` keeps working everywhere.
 
 Checks _always_ call `ctx.http`, never `fetch` directly, so `createFakeSnClient`
-(an in-memory `SnClient`) unit-tests them with no network — seed table rows and
+(an in-memory `SnClient`, from `servicenow-preflight/testing`) unit-tests them with no network — seed table rows and
 CI/CD responses, or force error surfaces with the `fail` fixture. Client helpers
 throw a small typed hierarchy (all extend `SnError`) that checks map to results;
 secrets never appear in the messages:

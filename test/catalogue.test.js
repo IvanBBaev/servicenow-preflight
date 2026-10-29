@@ -6,7 +6,7 @@ import {
   describeChecks,
   findCheck,
   testDrift,
-} from "../build/index.js";
+} from "../build/api/checks.js";
 
 const NO_TABLES = new Set(["instance-url-configured", "connectivity-auth"]);
 
@@ -101,7 +101,7 @@ test("findCheck finds test-drift though it is not in the default suite", () => {
 });
 
 test("closestNames suggests by prefix or small edit distance, capped at three", async () => {
-  const { closestNames } = await import("../build/index.js");
+  const { closestNames } = await import("../build/api/internal.js");
   const names = ["atf-run", "atf-enablement", "table-crud-acl", "ui-page-acl"];
   assert.deepEqual(closestNames("atf-runn", names), ["atf-run"]);
   assert.deepEqual(closestNames("table-crud", names), ["table-crud-acl"]);
@@ -112,8 +112,7 @@ test("closestNames suggests by prefix or small edit distance, capped at three", 
 });
 
 test("RULE_TITLES covers every rule a check declares", async () => {
-  const { RULE_TITLES, describeChecks, defaultChecks } =
-    await import("../build/index.js");
+  const { RULE_TITLES } = await import("../build/api/internal.js");
   for (const d of describeChecks(defaultChecks)) {
     if (d.meta.rule !== undefined) {
       assert.equal(typeof RULE_TITLES[d.meta.rule], "string", d.name);

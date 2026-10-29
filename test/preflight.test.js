@@ -4,12 +4,12 @@ import assert from "node:assert/strict";
 import {
   runPreflight,
   selectChecks,
-  instanceUrlConfigured,
   defaultChecks,
   SnError,
   SnTruncationError,
-  resolveScope,
 } from "../build/index.js";
+import { instanceUrlConfigured } from "../build/api/checks.js";
+import { resolveScope } from "../build/api/http.js";
 import { createFakeSnClient } from "../build/http/fake.js";
 
 /** A minimal context with the injected (fake) client every run requires. */

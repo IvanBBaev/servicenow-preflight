@@ -1,13 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  MAX_FINDINGS,
-  capFindings,
-  findingId,
-  makeFinding,
-  runPreflight,
-} from "../build/index.js";
+import { MAX_FINDINGS, capFindings } from "../build/api/checks.js";
+import { findingId, makeFinding, runPreflight } from "../build/index.js";
 import { createFakeSnClient } from "../build/http/fake.js";
 
 const loc = {

@@ -20,7 +20,7 @@ import {
   readBaseline,
   writeBaseline,
   BASELINE_ROW,
-} from "../build/index.js";
+} from "../build/api/report.js";
 import { UsageError } from "../build/config.js";
 import { applyFailOn } from "../build/baseline.js";
 import { reportOf } from "./helpers/json-report.js";

@@ -11,8 +11,8 @@ import {
   createReplayClient,
   readRecording,
   RecordingError,
-  runPreflight,
-} from "../build/index.js";
+} from "../build/api/testing.js";
+import { runPreflight } from "../build/index.js";
 import { createRecorder } from "../build/fixtures/record.js";
 import { replayTransport } from "../build/fixtures/replay.js";
 import { looksSecret, createRedactor } from "../build/fixtures/redact.js";

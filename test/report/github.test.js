@@ -5,7 +5,7 @@ import {
   formatGitHubAnnotations,
   formatGitHubAnnotationsAll,
 } from "../../build/report/github.js";
-import * as api from "../../build/index.js";
+import * as api from "../../build/api/report.js";
 
 function summarize(results) {
   const summary = { pass: 0, warn: 0, fail: 0 };

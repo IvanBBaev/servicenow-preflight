@@ -8,11 +8,11 @@ import { fileURLToPath } from "node:url";
 
 import {
   applyPolicy,
-  parseSeverityFlag,
   policySkips,
   validatePolicy,
-  readBaseline,
-} from "../build/index.js";
+} from "../build/api/checks.js";
+import { parseSeverityFlag } from "../build/api/internal.js";
+import { readBaseline } from "../build/api/report.js";
 import { UsageError } from "../build/config.js";
 import { reportOf } from "./helpers/json-report.js";
 
