@@ -118,7 +118,7 @@ environment; it exits `1` when a doctor row fails.
 ## What it checks
 
 `runPreflight(ctx, checks?)` runs each check against the target instance and
-aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Thirty-four
+aggregates a single `PreflightReport` (`ok`, `results`, `summary`). Thirty-five
 checks ship in the default suite; the CLI is a thin wrapper over that function.
 
 | Check                     | Needs                        | Verifies                                                                                                                                                                                                                                                                                                                                                                              |
@@ -157,6 +157,7 @@ checks ship in the default suite; the CLI is a thin wrapper over that function.
 | `cors-rules`              | `scope`                      | Every active in-scope CORS rule (`sys_cors_rule`) names an exact origin: an empty domain, `*` or a bare-TLD wildcard (`*.com`) fails, a wildcard sub-domain (`*.example.com`) warns. Messages name rules only, never the domain (rule 2.7; blocker — a security-trimmed read fails).                                                                                                  |
 | `table-access-settings`   | `scope`                      | Application Access on every in-scope table: a table accessible from all application scopes that also grants create, update or delete to them fails; public read-only access and web-service access without a user role warn (blocker — a security-trimmed read fails).                                                                                                                |
 | `cross-scope-privileges`  | `scope`                      | No cross-scope privilege the scope holds as a source (`sys_scope_privilege`, keyed on `source_scope`) is denied — those fail; privileges still only requested, or with an unknown status, warn. Messages name the target record and operation only (blocker — a security-trimmed read fails).                                                                                         |
+| `update-set-collisions`   | `updateSetId` or `scope`     | Records in the target update set (or, by scope, every in-progress set of the app) that another update set also captures: a collision with another open set fails, one with completed sets only warns; Default sets are ignored and counted. Messages give set names and counts, never record XML (blocker — a security-trimmed read fails).                                           |
 
 Checks whose only need is credentials always run once credentials are present;
 the rest `warn` (and explain what's missing) until you supply their inputs —

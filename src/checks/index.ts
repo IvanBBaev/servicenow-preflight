@@ -32,6 +32,7 @@ import { platformRelease } from "./platform-release.js";
 import { corsRules } from "./cors-rules.js";
 import { tableAccessSettings } from "./table-access-settings.js";
 import { crossScopePrivileges } from "./cross-scope-privileges.js";
+import { updateSetCollisions } from "./update-set-collisions.js";
 
 export { connectivityAuth } from "./connectivity-auth.js";
 export { updateSetState } from "./update-set-state.js";
@@ -66,6 +67,7 @@ export { platformRelease } from "./platform-release.js";
 export { corsRules } from "./cors-rules.js";
 export { tableAccessSettings } from "./table-access-settings.js";
 export { crossScopePrivileges } from "./cross-scope-privileges.js";
+export { updateSetCollisions } from "./update-set-collisions.js";
 export { testDrift } from "./test-drift.js";
 
 /**
@@ -182,4 +184,5 @@ export const defaultChecks: Check[] = [
   corsRules,
   tableAccessSettings,
   crossScopePrivileges,
+  updateSetCollisions,
 ];

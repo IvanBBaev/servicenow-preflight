@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scoped-app-deps` one per unsatisfied dependency (`logicalId: "app:<id>"`);
   `i18n-completeness` one `missing-translation` finding per missing key
   (`logicalId: "lang:<code>/<key>"`). Row messages are unchanged.
+- **`update-set-collisions` check** — finds records in the target update set
+  (`updateSetId`, or every in-progress set of the scope's application) that
+  another update set also captures, by record key (`sys_update_xml.name`,
+  chunked). A collision with another in-progress set fails; collisions with
+  completed sets only warn; Default sets are ignored and counted; record keys
+  outside the safe charset are skipped and warned. One finding per colliding
+  record (`open-collision`, `closed-collision`). Record XML is never requested.
+  Blocker; a security-trimmed read fails. Registry grows to 35 checks.
 - **`table-access-settings` check** — reads the Application Access fields of
   every in-scope `sys_db_object` row. A table accessible from all application
   scopes that also grants create, update or delete fails; a public read-only

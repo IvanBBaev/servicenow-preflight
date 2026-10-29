@@ -306,5 +306,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "A cross-scope privilege is denied, or the read was security-trimmed.",
     "warn": "A privilege is only requested or has an unknown status, the scope is unset or did not resolve, or a zero-row read was ambiguous.",
     "pass": "Every cross-scope privilege is allowed, or the scope holds none."
+  },
+  {
+    "code": "35",
+    "name": "update-set-collisions",
+    "tag": "updateSetId or scope",
+    "desc": "Records in the target update set(s) are not also captured in other open or completed update sets.",
+    "fail": "A target record is also captured in another in-progress update set, or a read was security-trimmed.",
+    "warn": "Collisions only with completed sets, no scope or update set id, no target sets, an ambiguous read, or record keys that could not be queried safely.",
+    "pass": "No target record is captured in any other update set."
   }
 ];

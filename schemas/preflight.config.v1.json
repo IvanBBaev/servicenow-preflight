@@ -323,6 +323,11 @@
           "type": "object",
           "additionalProperties": {}
         },
+        "update-set-collisions": {
+          "description": "No record in the target update set(s) is also captured in another update set.",
+          "type": "object",
+          "additionalProperties": {}
+        },
         "test-drift": {
           "description": "Every test on the current instance also exists on the promote target.",
           "type": "object",
@@ -712,6 +717,14 @@
           ]
         },
         "cross-scope-privileges": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "update-set-collisions": {
           "type": "string",
           "enum": [
             "fail",

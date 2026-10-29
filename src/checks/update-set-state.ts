@@ -17,10 +17,13 @@ const NAME = "update-set-state";
  * *retrieved* side; `building`/`saved`/`merged`/`collision` are not real
  * `sys_update_set` states at all.)
  */
-const SHIPPABLE_STATE = "complete";
+export const SHIPPABLE_STATE = "complete";
 
 /** Local states meaning the set is still being worked on. */
-const IN_PROGRESS_STATES = new Set(["in progress", "in_progress"]);
+export const IN_PROGRESS_STATES: ReadonlySet<string> = new Set([
+  "in progress",
+  "in_progress",
+]);
 
 /**
  * `ignore` is a deliberate "do not migrate this set" marker. It is neither

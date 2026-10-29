@@ -57,6 +57,7 @@ export {
   corsRules,
   tableAccessSettings,
   crossScopePrivileges,
+  updateSetCollisions,
   testDrift,
 } from "../checks/index.js";
 export {

@@ -116,6 +116,7 @@
 ./checks value testDrift
 ./checks value uiActionGating
 ./checks value uiPageAcl
+./checks value updateSetCollisions
 ./checks value updateSetState
 ./checks value validatePolicy
 ./http type CicdTestSuiteResult
