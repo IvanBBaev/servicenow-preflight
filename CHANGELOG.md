@@ -577,6 +577,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Auto-pagination no longer stops on a security-trimmed short page**
+  (RR-1) — ServiceNow cuts the offset window before it drops ACL-denied rows,
+  so a page can come back short while later windows still hold readable rows.
+  When `X-Total-Count` is present the client now walks every window up to that
+  count instead of breaking on the first short page; `query()` callers no
+  longer silently lose the rows after it. Without the header a short page still
+  ends the walk, and the row cap still fails closed.
 - **`drift` verdict is fail-closed** — results folded into a `drift` report
   (promotion order, manifest staleness, version parity) are now summarised by
   the same rule as `runPreflight`: an unrecognised status counts as a failure

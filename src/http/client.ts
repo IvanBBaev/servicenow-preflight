@@ -1832,19 +1832,26 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           }
           const rows = asRows(unwrapResult(res.body));
           all.push(...rows);
-          // A short page means the result set is exhausted.
-          if (rows.length < pageSize) break;
-          // The pre-trim match count (X-Total-Count) is authoritative: once we
-          // have collected at least that many rows the set is exhausted even if
-          // the final page came back full. Without this, a result set whose
-          // size is an exact multiple of the page size AND equals `maxRows`
-          // (e.g. exactly 100_000 rows) would trip the cap below and throw a
-          // false truncation error despite nothing having been dropped.
-          if (totalCount !== undefined && all.length >= totalCount) break;
-          // A full page at the cap means more rows remain: fail closed rather
-          // than silently drop them (the old behaviour), so the caller learns
-          // to narrow the query instead of trusting a truncated result.
-          if (all.length >= maxRows) {
+          const nextOffset = offset + pageSize;
+          if (totalCount !== undefined) {
+            // RR-1: X-Total-Count is the pre-trim match count, and ServiceNow
+            // cuts the offset window *before* it drops ACL-denied rows, so a
+            // page can come back short (or even empty) while later windows
+            // still hold readable rows. With a count, the windows — not the
+            // page length — decide: walk every window up to the count. This
+            // also ends a set whose size is an exact multiple of the page size
+            // and equals `maxRows` without a false truncation error.
+            if (nextOffset >= totalCount) break;
+          } else if (rows.length < pageSize) {
+            // No count arrived: a short page is the only end signal there is.
+            break;
+          }
+          // More windows remain but the cap is reached: fail closed rather
+          // than silently drop them, so the caller learns to narrow the query
+          // instead of trusting a truncated result. The cap counts walked
+          // windows (equal to rows when nothing is trimmed), so a heavily
+          // trimmed set cannot walk past it either.
+          if (nextOffset >= maxRows) {
             throw new SnTruncationError(
               `Table API query on "${name}" exceeded the ${maxRows}-row ` +
                 `pagination cap without reaching the end of the result set; ` +

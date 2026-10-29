@@ -1387,13 +1387,101 @@ test("SN-1: auto-pagination captures X-Total-Count from the first page", async (
         ? Array.from({ length: 1000 }, (_, i) => ({ sys_id: `r${i}` }))
         : [{ sys_id: "last" }];
     // Only the first page carries the (pre-trim) count header.
-    const headers = offset === 0 ? { "x-total-count": "9999" } : undefined;
+    const headers = offset === 0 ? { "x-total-count": "1500" } : undefined;
     return fakeResponse({ body: { result: rows }, headers });
   };
   const res = await client().table("sys_user_role").queryWithMeta();
   assert.equal(res.rows.length, 1001);
-  assert.equal(res.totalCount, 9999);
+  assert.equal(res.totalCount, 1500);
   assert.equal(res.securityTrimmed, true);
+});
+
+// --- RR-1: a security-trimmed short page does not end pagination -------------
+
+function offsetsOf(list) {
+  return list.map((c) =>
+    Number(new URL(c.url).searchParams.get("sysparm_offset")),
+  );
+}
+
+function pagedHandler(total, sizes) {
+  return (url) => {
+    const offset = Number(new URL(url).searchParams.get("sysparm_offset"));
+    const size = sizes[offset / 1000] ?? 0;
+    return fakeResponse({
+      headers: { "X-Total-Count": String(total) },
+      body: {
+        result: Array.from({ length: size }, (_, i) => ({
+          sys_id: `r${offset + i}`,
+        })),
+      },
+    });
+  };
+}
+
+test("RR-1: a short trimmed page mid-set keeps paging up to X-Total-Count", async () => {
+  // 2500 pre-trim matches; ACLs hide 10 rows of the first window.
+  handler = pagedHandler(2500, [990, 1000, 500]);
+  const res = await client().table("sys_user_role").queryWithMeta();
+  assert.deepEqual(offsetsOf(calls), [0, 1000, 2000]);
+  assert.equal(res.rows.length, 2490);
+  assert.equal(res.totalCount, 2500);
+  assert.equal(res.securityTrimmed, true);
+});
+
+test("RR-1: query() also returns the rows after a short trimmed page", async () => {
+  handler = pagedHandler(2500, [990, 1000, 500]);
+  const rows = await client().table("sys_user_role").query();
+  assert.equal(rows.length, 2490);
+  assert.equal(calls.length, 3);
+});
+
+test("RR-1: a fully trimmed (empty) window does not end pagination", async () => {
+  handler = pagedHandler(2500, [1000, 0, 500]);
+  const res = await client().table("sys_user_role").queryWithMeta();
+  assert.deepEqual(offsetsOf(calls), [0, 1000, 2000]);
+  assert.equal(res.rows.length, 1500);
+  assert.equal(res.securityTrimmed, true);
+});
+
+test("RR-1: an untrimmed set stops at X-Total-Count without an extra request", async () => {
+  handler = pagedHandler(1500, [1000, 500]);
+  const res = await client().table("sys_user_role").queryWithMeta();
+  assert.deepEqual(offsetsOf(calls), [0, 1000]);
+  assert.equal(res.rows.length, 1500);
+  assert.equal(res.securityTrimmed, false);
+});
+
+test("RR-1: without X-Total-Count a short page still ends pagination", async () => {
+  handler = (url) => {
+    const offset = Number(new URL(url).searchParams.get("sysparm_offset"));
+    const size = offset === 0 ? 990 : 1000;
+    return fakeResponse({
+      body: {
+        result: Array.from({ length: size }, (_, i) => ({ sys_id: `r${i}` })),
+      },
+    });
+  };
+  const res = await client().table("sys_user_role").queryWithMeta();
+  assert.deepEqual(offsetsOf(calls), [0]);
+  assert.equal(res.rows.length, 990);
+  assert.equal(res.totalCount, undefined);
+  assert.equal(res.securityTrimmed, false);
+});
+
+test("RR-1: trimmed windows still stop at the row cap (fail closed)", async () => {
+  // Every window is short, so the rows never reach the cap; the walked
+  // windows do, and the count says more remain.
+  handler = pagedHandler(5000, [10, 10, 10, 10, 10]);
+  await assert.rejects(
+    () => client({ maxRows: 2000 }).table("sys_user_role").query(),
+    (err) => {
+      assert.ok(err instanceof SnTruncationError);
+      assert.equal(err.cap, 2000);
+      return true;
+    },
+  );
+  assert.deepEqual(offsetsOf(calls), [0, 1000]);
 });
 
 test("SN-1: query() still resolves to a bare array (unchanged surface)", async () => {
