@@ -10,7 +10,13 @@
  * that way in their messages.
  */
 
-import type { PreflightContext } from "../types.js";
+import type {
+  CheckResult,
+  Finding,
+  FindingLocation,
+  PreflightContext,
+} from "../types.js";
+import { findingId, makeFinding } from "../findings.js";
 import { and, eq } from "../http/query.js";
 import { str, triageZeroRead } from "./cert-common.js";
 
@@ -211,6 +217,51 @@ export function describeHits(hits: readonly ScanHit[], dropped = 0): string {
     .map((h) => `${h.name} (${h.field}:${h.line}, ${h.patternId})`)
     .join(", ");
   return dropped > 0 ? `${list}, … and ${dropped} more` : list;
+}
+
+/** The `findings` / `findingsTruncated` pair a scan-based check attaches. */
+export type ScanFindings = Pick<CheckResult, "findings" | "findingsTruncated">;
+
+/**
+ * One finding per hit: kind `pattern:<patternId>`, location
+ * `{table, sysId, recordName, field, line}` and the message
+ * `"<patternId> in <table>.<field> of <name> (line N)"` — never the matched
+ * text. The id leaves the line out (so an edit above a hit keeps it); when the
+ * same pattern hits the same field again, the second and later occurrences get
+ * an ordinal-salted id so every finding of a result stays distinct.
+ * `dropped` (hits beyond the cap) becomes `findingsTruncated`. Returns `{}`
+ * when there is nothing to report.
+ */
+export function hitsToFindings(
+  check: string,
+  hits: readonly ScanHit[],
+  dropped = 0,
+): ScanFindings {
+  const seen = new Map<string, number>();
+  const findings: Finding[] = hits.map((h) => {
+    const kind = `pattern:${h.patternId}`;
+    const identity: FindingLocation = { table: h.table, field: h.field };
+    if (h.sysId !== "") identity.sysId = h.sysId;
+    const finding = makeFinding(
+      check,
+      kind,
+      `${h.patternId} in ${h.table}.${h.field} of ${h.name} (line ${h.line})`,
+      { ...identity, recordName: h.name, line: h.line },
+    );
+    const occurrence = (seen.get(finding.id) ?? 0) + 1;
+    seen.set(finding.id, occurrence);
+    if (occurrence > 1) {
+      finding.id = findingId(check, kind, {
+        ...identity,
+        logicalId: `occurrence:${occurrence}`,
+      });
+    }
+    return finding;
+  });
+  const out: ScanFindings = {};
+  if (findings.length > 0) out.findings = findings;
+  if (dropped > 0) out.findingsTruncated = dropped;
+  return out;
 }
 
 /*

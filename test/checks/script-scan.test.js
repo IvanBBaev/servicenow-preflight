@@ -4,10 +4,12 @@ import assert from "node:assert/strict";
 import {
   codeLines,
   describeHits,
+  hitsToFindings,
   scanScripts,
   MAX_SCAN_HITS,
 } from "../../build/checks/script-scan.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { findingId } from "../../build/findings.js";
 
 const CLAUSE = "sys_scope=0123456789abcdef0123456789abcdef";
 const EVAL = { id: "eval", regex: /\beval\s*\(/ };
@@ -200,4 +202,102 @@ test("scanScripts unwraps non-string field values and labels by sys_id", async (
     ["s9", "(unnamed)"],
   );
   assert.deepEqual(res.artifacts, ["sys_script:s9", "sys_script:(unnamed)"]);
+});
+
+test("hitsToFindings maps a hit to a finding with kind, location, line and id", async () => {
+  const scan = await scanScripts(
+    ctxFor({
+      tables: {
+        sys_script: [
+          { sys_id: "s1", name: "Rule", script: "a();\nb();\neval(x);" },
+        ],
+      },
+    }),
+    CLAUSE,
+    [SOURCE],
+    [EVAL],
+  );
+  const out = hitsToFindings("my-check", scan.hits, scan.dropped);
+  assert.equal(out.findingsTruncated, undefined);
+  assert.equal(out.findings.length, 1);
+  const [f] = out.findings;
+  assert.equal(f.kind, "pattern:eval");
+  assert.equal(f.message, "eval in sys_script.script of Rule (line 3)");
+  assert.deepEqual(f.location, {
+    table: "sys_script",
+    sysId: "s1",
+    field: "script",
+    recordName: "Rule",
+    line: 3,
+  });
+  assert.equal(f.status, undefined);
+  assert.equal(
+    f.id,
+    findingId("my-check", "pattern:eval", {
+      table: "sys_script",
+      sysId: "s1",
+      field: "script",
+    }),
+  );
+  assert.deepEqual(hitsToFindings("my-check", []), {});
+});
+
+test("hitsToFindings ids ignore the line but stay distinct for repeats in one field", () => {
+  const hit = {
+    table: "sys_script",
+    sysId: "s1",
+    name: "Rule",
+    field: "script",
+    line: 2,
+    patternId: "eval",
+  };
+  const moved = hitsToFindings("c", [{ ...hit, line: 9 }]).findings[0];
+  const first = hitsToFindings("c", [hit]).findings[0];
+  assert.equal(moved.id, first.id);
+  const both = hitsToFindings("c", [hit, { ...hit, line: 5 }]).findings;
+  assert.equal(both.length, 2);
+  assert.equal(both[0].id, first.id);
+  assert.notEqual(both[0].id, both[1].id);
+  assert.match(both[1].id, /^f1:[0-9a-f]{16}$/);
+  assert.equal(both[1].location.line, 5);
+  assert.equal(both[1].location.logicalId, undefined);
+  // An empty sys_id is left out of the location.
+  const anon = hitsToFindings("c", [{ ...hit, sysId: "" }]).findings[0];
+  assert.equal(anon.location.sysId, undefined);
+});
+
+test("hitsToFindings never carries the matched source text", async () => {
+  const secret = "eval(superSecretToken42)";
+  const scan = await scanScripts(
+    ctxFor({
+      tables: {
+        sys_script: [
+          { sys_id: "s1", name: "Rule", script: `x();\n${secret};` },
+        ],
+      },
+    }),
+    CLAUSE,
+    [SOURCE],
+    [EVAL],
+  );
+  const { findings } = hitsToFindings("c", scan.hits, scan.dropped);
+  assert.equal(findings.length, 1);
+  const text = JSON.stringify(findings);
+  assert.doesNotMatch(text, /superSecretToken42/);
+  assert.doesNotMatch(text, /eval\(/);
+});
+
+test("hitsToFindings reports the dropped count as findingsTruncated", () => {
+  const hit = {
+    table: "sys_script",
+    sysId: "s1",
+    name: "Rule",
+    field: "script",
+    line: 1,
+    patternId: "eval",
+  };
+  const out = hitsToFindings("c", [hit], 7);
+  assert.equal(out.findings.length, 1);
+  assert.equal(out.findingsTruncated, 7);
+  assert.deepEqual(hitsToFindings("c", [], 3), { findingsTruncated: 3 });
 });

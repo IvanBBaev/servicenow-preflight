@@ -4,6 +4,7 @@ import { errorResult } from "./cert-common.js";
 import {
   ALL_SCRIPT_SOURCES,
   describeHits,
+  hitsToFindings,
   scanScripts,
   sourceTables,
   type ScanPattern,
@@ -88,13 +89,21 @@ export const hardcodedIdentifiers: Check = {
         HARDCODED_PATTERNS,
       );
       const total = scan.hits.length + scan.dropped;
+      const findings = hitsToFindings(NAME, scan.hits, scan.dropped);
+      const scanResult = (
+        status: CheckStatus,
+        message: string,
+      ): CheckResult => ({
+        ...result(status, message),
+        ...findings,
+      });
       const found =
         total > 0
           ? `${total} hard-coded identifier(s) in ${scan.artifacts.length} artifact(s): ${describeHits(scan.hits, scan.dropped)}`
           : "";
 
       if (scan.trimmed.length > 0) {
-        return result(
+        return scanResult(
           "fail",
           `Cannot fully scan scripts in scope "${scope}" for hard-coded identifiers — the read of ${scan.trimmed.join(", ")} was security-trimmed. Grant the account read access; the scripts it cannot see are the ones this check cannot clear.` +
             (found ? ` (Found so far: ${found}.)` : ""),
@@ -106,24 +115,24 @@ export const hardcodedIdentifiers: Check = {
           ? ` (Not confirmed: no rows and no pre-trim count for ${scan.ambiguous.join(", ")}.)`
           : "";
       if (total > 0) {
-        return result(
+        return scanResult(
           "warn",
           `${found}. Use system properties or lookups by name instead.${blind}`,
         );
       }
       if (blind) {
-        return result(
+        return scanResult(
           "warn",
           `No hard-coded identifiers in ${scan.scanned} script artifact(s) in scope "${scope}", but some tables could not be confirmed.${blind}`,
         );
       }
       if (scan.scanned === 0) {
-        return result(
+        return scanResult(
           "pass",
           `No active scripts in scope "${scope}" — nothing to scan.`,
         );
       }
-      return result(
+      return scanResult(
         "pass",
         `No hard-coded sys_ids or URLs in ${scan.scanned} script artifact(s) in scope "${scope}".`,
       );

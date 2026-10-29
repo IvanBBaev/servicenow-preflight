@@ -6,6 +6,7 @@ import {
   MAX_SCAN_HITS,
   SERVER_SCRIPT_SOURCES,
   describeHits,
+  hitsToFindings,
   scanScripts,
   sourceTables,
   type ScanPattern,
@@ -101,6 +102,14 @@ export const deprecatedApis: Check = {
       const dropped =
         server.dropped + client.dropped + (merged.length - hits.length);
       const total = hits.length + dropped;
+      const findings = hitsToFindings(NAME, hits, dropped);
+      const scanResult = (
+        status: CheckStatus,
+        message: string,
+      ): CheckResult => ({
+        ...result(status, message),
+        ...findings,
+      });
       const artifacts = new Set([...server.artifacts, ...client.artifacts]);
       const trimmed = [...server.trimmed, ...client.trimmed];
       const ambiguous = [...server.ambiguous, ...client.ambiguous];
@@ -117,7 +126,7 @@ export const deprecatedApis: Check = {
         "Use the scoped Glide APIs instead of Packages.*, asynchronous GlideAjax and a getReference callback on the client, and g_user.hasRole instead of gs.hasRole.";
 
       if (trimmed.length > 0) {
-        return result(
+        return scanResult(
           "fail",
           `Cannot fully scan scripts in scope "${scope}" for deprecated APIs — the read of ${trimmed.join(", ")} was security-trimmed. Grant the account read access; the scripts it cannot see are the ones this check cannot clear.` +
             (found ? ` (Found so far: ${found}.)` : ""),
@@ -129,24 +138,24 @@ export const deprecatedApis: Check = {
           ? ` (Not confirmed: no rows and no pre-trim count for ${ambiguous.join(", ")}.)`
           : "";
       if (total > 0) {
-        return result(
+        return scanResult(
           blocking > 0 ? "fail" : "warn",
           `${found}. ${advice}${blind}`,
         );
       }
       if (blind) {
-        return result(
+        return scanResult(
           "warn",
           `No deprecated API calls in ${scanned} script artifact(s) in scope "${scope}", but some tables could not be confirmed.${blind}`,
         );
       }
       if (scanned === 0) {
-        return result(
+        return scanResult(
           "pass",
           `No active scripts in scope "${scope}" — nothing to scan.`,
         );
       }
-      return result(
+      return scanResult(
         "pass",
         `No Packages.* calls in server scripts and no getXMLWait, callback-less g_form.getReference or gs.hasRole in client scripts across ${scanned} script artifact(s) in scope "${scope}".`,
       );

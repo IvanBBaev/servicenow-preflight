@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Script-scan findings** — `hardcoded-identifiers`, `client-script-safety`,
+  `log-leftovers` and `deprecated-apis` return one `findings[]` entry per
+  hit, with kind `pattern:<patternId>`, a location of table, sys_id, record
+  name, field and line, and a message naming the pattern, field, record and
+  line — never the matched text. Ids leave the line out; a repeat of the same
+  pattern in the same field gets an ordinal-salted id. Hits over the 500 cap
+  set `findingsTruncated`. Row messages are unchanged.
 - **`--changed-since <dur|date>`** — incremental runs: only the checks whose
   `meta.tables` include a table changed since then (a duration such as `24h`
   or an ISO date). Changes come from the update set's `sys_update_xml` rows

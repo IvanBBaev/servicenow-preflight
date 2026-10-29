@@ -6,6 +6,7 @@ import {
   MAX_SCAN_HITS,
   SERVER_SCRIPT_SOURCES,
   describeHits,
+  hitsToFindings,
   scanScripts,
   sourceTables,
   type ScanPattern,
@@ -94,6 +95,14 @@ export const logLeftovers: Check = {
       const dropped =
         client.dropped + server.dropped + (merged.length - hits.length);
       const total = hits.length + dropped;
+      const findings = hitsToFindings(NAME, hits, dropped);
+      const scanResult = (
+        status: CheckStatus,
+        message: string,
+      ): CheckResult => ({
+        ...result(status, message),
+        ...findings,
+      });
       const artifacts = new Set([...client.artifacts, ...server.artifacts]);
       const trimmed = [...client.trimmed, ...server.trimmed];
       const ambiguous = [...client.ambiguous, ...server.ambiguous];
@@ -104,7 +113,7 @@ export const logLeftovers: Check = {
           : "";
 
       if (trimmed.length > 0) {
-        return result(
+        return scanResult(
           "fail",
           `Cannot fully scan scripts in scope "${scope}" for log leftovers — the read of ${trimmed.join(", ")} was security-trimmed. Grant the account read access; the scripts it cannot see are the ones this check cannot clear.` +
             (found ? ` (Found so far: ${found}.)` : ""),
@@ -116,24 +125,24 @@ export const logLeftovers: Check = {
           ? ` (Not confirmed: no rows and no pre-trim count for ${ambiguous.join(", ")}.)`
           : "";
       if (total > 0) {
-        return result(
+        return scanResult(
           "warn",
           `${found}. Use jslog() on the client, gs.info/gs.warn on the server, and remove debug alert() calls.${blind}`,
         );
       }
       if (blind) {
-        return result(
+        return scanResult(
           "warn",
           `No log leftovers in ${scanned} script artifact(s) in scope "${scope}", but some tables could not be confirmed.${blind}`,
         );
       }
       if (scanned === 0) {
-        return result(
+        return scanResult(
           "pass",
           `No active scripts in scope "${scope}" — nothing to scan.`,
         );
       }
-      return result(
+      return scanResult(
         "pass",
         `No console/alert calls in client scripts and no gs.print/gs.log in server scripts across ${scanned} script artifact(s) in scope "${scope}".`,
       );

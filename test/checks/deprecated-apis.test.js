@@ -273,3 +273,45 @@ test("maps auth, network and HTTP errors", async () => {
   assert.equal(http.status, "warn");
   assert.match(http.message, /HTTP 500/);
 });
+
+test("emits one finding per hit with distinct ids and lines (F-R-2)", async () => {
+  const http = makeHttp({
+    tables: {
+      sys_script: [
+        {
+          sys_id: "r1",
+          name: "Two Hits",
+          script:
+            "var x = Packages.java.lang.String;\nvar y = Packages.java.io.File;",
+        },
+      ],
+    },
+  });
+  const result = await run(http);
+  assert.equal(result.status, "fail", result.message);
+  assert.equal(result.findings.length, 2);
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    ["pattern:packages", "pattern:packages"],
+  );
+  assert.deepEqual(
+    result.findings.map((f) => f.location.line),
+    [1, 2],
+  );
+  for (const f of result.findings) {
+    assert.equal(f.location.table, "sys_script");
+    assert.equal(f.location.sysId, "r1");
+    assert.equal(f.location.recordName, "Two Hits");
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  }
+  assert.notEqual(result.findings[0].id, result.findings[1].id);
+  assert.equal(result.findingsTruncated, undefined);
+  // The row message is unchanged: findings ride alongside it.
+  assert.doesNotMatch(result.message, /pattern:/);
+});
+
+test("a clean scan carries no findings (F-R-2)", async () => {
+  const result = await run(makeHttp());
+  assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined);
+});
