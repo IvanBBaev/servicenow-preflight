@@ -1,21 +1,47 @@
 version: 2
 updates:
-  # Keep devDependencies fresh (there are no runtime dependencies).
+  # Keep devDependencies fresh (there are no runtime dependencies). Minor and
+  # patch bumps arrive as one grouped PR; majors stay individual so each can be
+  # judged on its own.
   - package-ecosystem: npm
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
+    groups:
+      dev-minor-patch:
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # @types/node tracks the engines floor (Node >= 20), not the newest Node.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # TypeScript majors need a deliberate migration (TS 7 breaks the
+      # typescript-eslint peer range).
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   # The Tessera workspace has its own lockfile (tessera/package-lock.json).
   - package-ecosystem: npm
     directory: "/tessera"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
+    groups:
+      dev-minor-patch:
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   # Keep the SHA-pinned GitHub Actions from rotting; Dependabot bumps the pin
-  # and refreshes the trailing version comment.
+  # and refreshes the trailing version comment. All action bumps share one PR.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
