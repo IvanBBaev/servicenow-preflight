@@ -236,17 +236,17 @@ test("doctor only sends GET requests", async () => {
   assert.ok(calls.includes("GET sys_properties"));
 });
 
-test("doctor finishes in under a second on the fake with every row warning carrying a remediation", async () => {
+test("doctor on the fake carries a remediation on every row warning", async () => {
+  // E-1: no elapsed-time assert here; a wall-clock budget flakes on a loaded
+  // runner and the fake client has no latency to measure.
   const http = createFakeSnClient({
     tables: { sys_properties: restrictionOn(), sys_user: account() },
   });
-  const started = performance.now();
   const { report } = await doctor({
     http,
     forbidden: ["sys_user_has_role", "sys_update_set"],
     nodeVersion: "18.19.0",
   });
-  assert.ok(performance.now() - started < 1000);
   const warns = report.results.filter((r) => r.status === "warn");
   assert.ok(warns.length >= 3);
   for (const w of warns) {

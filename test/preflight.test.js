@@ -727,21 +727,21 @@ test("an abort under concurrency fails every running and every pending check", a
   assert.equal(report.summary.fail, 4);
 });
 
-test("concurrency speeds a run up without changing the report", async () => {
-  const make = () => {
-    const track = newTrack();
-    return Array.from({ length: 8 }, (_, i) => timedCheck(`c${i}`, 50, track));
-  };
-  let at = performance.now();
-  const serialReport = await runPreflight(ctx(), make(), { concurrency: 1 });
-  const serialMs = performance.now() - at;
-  at = performance.now();
-  const pooledReport = await runPreflight(ctx(), make(), { concurrency: 4 });
-  const pooledMs = performance.now() - at;
-  assert.ok(
-    pooledMs <= serialMs * 0.4,
-    `pooled ${pooledMs.toFixed(0)} ms vs serial ${serialMs.toFixed(0)} ms`,
-  );
+test("concurrency overlaps checks without changing the report", async () => {
+  // E-1: asserted on the observed overlap (peak in-flight checks), not on
+  // elapsed wall-clock time, which flakes on a loaded runner.
+  const serialTrack = newTrack();
+  const pooledTrack = newTrack();
+  const make = (track) =>
+    Array.from({ length: 8 }, (_, i) => timedCheck(`c${i}`, 5, track));
+  const serialReport = await runPreflight(ctx(), make(serialTrack), {
+    concurrency: 1,
+  });
+  const pooledReport = await runPreflight(ctx(), make(pooledTrack), {
+    concurrency: 4,
+  });
+  assert.equal(serialTrack.peak, 1);
+  assert.equal(pooledTrack.peak, 4);
   assert.deepEqual(pooledReport, serialReport);
 });
 
