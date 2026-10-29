@@ -76,6 +76,7 @@
 ./checks value clientScriptSafety
 ./checks value compareFamilies
 ./checks value connectivityAuth
+./checks value corsRules
 ./checks value declaredTables
 ./checks value defaultChecks
 ./checks value defaultSetLeakage

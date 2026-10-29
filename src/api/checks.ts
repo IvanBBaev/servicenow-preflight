@@ -54,6 +54,7 @@ export {
   logLeftovers,
   deprecatedApis,
   platformRelease,
+  corsRules,
   testDrift,
 } from "../checks/index.js";
 export {

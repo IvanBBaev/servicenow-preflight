@@ -35,7 +35,7 @@ test("list prints one line per default check plus a drift-only line", () => {
   assert.equal(res.status, 0, res.stderr);
   const lines = res.stdout.trimEnd().split("\n");
   assert.equal(lines.length, defaultChecks.length + 1);
-  assert.equal(defaultChecks.length, 31);
+  assert.equal(defaultChecks.length, 32);
   const drift = lines.filter((l) => l.includes("(drift only)"));
   assert.equal(drift.length, 1);
   assert.match(drift[0], /^test-drift /);
@@ -49,7 +49,7 @@ test("list --format json parses as the catalogue", () => {
   const res = runCli(["list", "--format", "json"]);
   assert.equal(res.status, 0, res.stderr);
   const out = JSON.parse(res.stdout);
-  assert.equal(out.length, 32);
+  assert.equal(out.length, 33);
   const drift = out.find((d) => d.name === "test-drift");
   assert.equal(drift.inDefaultSuite, false);
   assert.equal(typeof out[0].meta, "object");

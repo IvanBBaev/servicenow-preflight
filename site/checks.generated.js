@@ -279,5 +279,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "The instance runs a family older than the configured minimum.",
     "warn": "The family differs from the expected one, is unset or unknown, an option is malformed, or the read was trimmed.",
     "pass": "The release family is known and meets the configured minimum and expectation."
+  },
+  {
+    "code": "32",
+    "name": "cors-rules",
+    "tag": "scope",
+    "desc": "Active CORS rules in scope name an exact origin — never `*` or a bare-TLD wildcard.",
+    "fail": "A rule allows any origin (*, empty or *.tld), or the read was security-trimmed.",
+    "warn": "A rule uses a wildcard sub-domain, no scope set, or an ambiguous read.",
+    "pass": "Every active CORS rule names an exact origin, or the scope ships none."
   }
 ];

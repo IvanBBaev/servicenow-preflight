@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`cors-rules` check** (rule 2.7, blocker) — reads every active in-scope
+  `sys_cors_rule`. An empty domain, `*` or a bare-TLD wildcard (`*.com`)
+  fails; a wildcard sub-domain (`*.example.com`) warns; a security-trimmed
+  read fails. Messages name rules only, never the domain value. Each
+  offending rule is one finding (`wildcard-origin`, or `wildcard-subdomain`
+  with a `warn` status).
 - **Drift findings and fallback identity** — `test-drift` returns one finding
   per test missing on (`fail`) or extra on (`warn`) the target, keyed on its
   logical id; `app-version-parity` one per downgraded, missing or unverified

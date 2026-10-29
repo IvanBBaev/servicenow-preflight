@@ -54,6 +54,7 @@ export const RULE_TITLES: Readonly<Record<string, string>> = {
   "2.1": "UI Actions are gated by a condition and/or Required Roles",
   "2.2": "UI Pages have read ACLs",
   "2.6": "Service Portal widgets & pages have roles",
+  "2.7": "CORS rules name an exact origin (no wildcard)",
   "2.8": "No client-side eval(); validate GlideScopedEvaluator sources",
   "4.3": "Use jslog() not console.log()",
   "4.5": "No hard-coded URLs/constants",
