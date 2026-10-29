@@ -313,6 +313,11 @@
           "type": "object",
           "additionalProperties": {}
         },
+        "table-access-settings": {
+          "description": "App tables do not let other scopes write them, and web-service access names a user role.",
+          "type": "object",
+          "additionalProperties": {}
+        },
         "test-drift": {
           "description": "Every test on the current instance also exists on the promote target.",
           "type": "object",
@@ -686,6 +691,14 @@
           ]
         },
         "cors-rules": {
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "off"
+          ]
+        },
+        "table-access-settings": {
           "type": "string",
           "enum": [
             "fail",

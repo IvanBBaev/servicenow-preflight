@@ -30,6 +30,7 @@ import { logLeftovers } from "./log-leftovers.js";
 import { deprecatedApis } from "./deprecated-apis.js";
 import { platformRelease } from "./platform-release.js";
 import { corsRules } from "./cors-rules.js";
+import { tableAccessSettings } from "./table-access-settings.js";
 
 export { connectivityAuth } from "./connectivity-auth.js";
 export { updateSetState } from "./update-set-state.js";
@@ -62,6 +63,7 @@ export { logLeftovers } from "./log-leftovers.js";
 export { deprecatedApis } from "./deprecated-apis.js";
 export { platformRelease } from "./platform-release.js";
 export { corsRules } from "./cors-rules.js";
+export { tableAccessSettings } from "./table-access-settings.js";
 export { testDrift } from "./test-drift.js";
 
 /**
@@ -176,4 +178,5 @@ export const defaultChecks: Check[] = [
   deprecatedApis,
   platformRelease,
   corsRules,
+  tableAccessSettings,
 ];

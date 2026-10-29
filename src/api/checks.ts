@@ -55,6 +55,7 @@ export {
   deprecatedApis,
   platformRelease,
   corsRules,
+  tableAccessSettings,
   testDrift,
 } from "../checks/index.js";
 export {

@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scoped-app-deps` one per unsatisfied dependency (`logicalId: "app:<id>"`);
   `i18n-completeness` one `missing-translation` finding per missing key
   (`logicalId: "lang:<code>/<key>"`). Row messages are unchanged.
+- **`table-access-settings` check** — reads the Application Access fields of
+  every in-scope `sys_db_object` row. A table accessible from all application
+  scopes that also grants create, update or delete fails; a public read-only
+  table and web-service access without a user role warn. One finding per
+  offending table (`public-write:<ops>`, `public-read`, `ws-no-role`). Blocker;
+  a security-trimmed read fails. Registry grows to 33 checks.
 - **Drift findings and fallback identity** — `test-drift` returns one finding
   per test missing on (`fail`) or extra on (`warn`) the target, keyed on its
   logical id; `app-version-parity` one per downgraded, missing or unverified

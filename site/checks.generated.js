@@ -288,5 +288,14 @@ window.PREFLIGHT_CHECKS = [
     "fail": "A rule allows any origin (*, empty or *.tld), or the read was security-trimmed.",
     "warn": "A rule uses a wildcard sub-domain, no scope set, or an ambiguous read.",
     "pass": "Every active CORS rule names an exact origin, or the scope ships none."
+  },
+  {
+    "code": "33",
+    "name": "table-access-settings",
+    "tag": "scope",
+    "desc": "App tables keep Application Access restricted: no cross-scope writes, no role-less web-service access.",
+    "fail": "A public table lets other scopes create, update or delete, or the read was security-trimmed.",
+    "warn": "A public read-only table, web-service access without a user role, no scope, or an ambiguous zero-row read.",
+    "pass": "Every in-scope table restricts application access, or the scope ships none."
   }
 ];

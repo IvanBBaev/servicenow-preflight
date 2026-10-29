@@ -109,6 +109,7 @@
 ./checks value scriptHygiene
 ./checks value selectByTables
 ./checks value selectChecks
+./checks value tableAccessSettings
 ./checks value tableCrudAcl
 ./checks value tableNamespace
 ./checks value testDrift
