@@ -1,4 +1,4 @@
-import type { Check, CheckResult } from "../types.js";
+import type { Check, CheckResult, Finding } from "../types.js";
 import {
   SnAuthError,
   SnHttpError,
@@ -6,6 +6,7 @@ import {
   type SnClient,
 } from "../http/client.js";
 import { eq } from "../http/query.js";
+import { rowFinding, withFindings } from "./cert-common.js";
 
 const NAME = "update-set-state";
 
@@ -133,8 +134,22 @@ async function countChanges(http: SnClient, setId: string): Promise<number> {
 }
 
 /** Build a `CheckResult` for this check with the frozen name. */
-function result(status: CheckResult["status"], message: string): CheckResult {
-  return { name: NAME, status, message };
+function result(
+  status: CheckResult["status"],
+  message: string,
+  findings: readonly Finding[] = [],
+): CheckResult {
+  return withFindings({ name: NAME, status, message }, findings);
+}
+
+/**
+ * One finding per offending set in the batch, on `sys_update_set` with the
+ * set's sys_id and name (F-R-4).
+ */
+function setFindings(sets: readonly BatchSet[], kind: string): Finding[] {
+  return sets.map((s) =>
+    rowFinding(NAME, "sys_update_set", { sys_id: s.id, name: s.label }, kind),
+  );
 }
 
 /** Render a "label (state)" list for the failing/odd sets in a message. */
@@ -199,6 +214,14 @@ export const updateSetState: Check = {
         return result(
           "fail",
           `Update set "${updateSetId}" was not found on the instance.`,
+          [
+            rowFinding(
+              NAME,
+              "sys_update_set",
+              { sys_id: updateSetId },
+              "not-found",
+            ),
+          ],
         );
       }
       sets = [];
@@ -257,6 +280,7 @@ export const updateSetState: Check = {
         return result(
           "fail",
           `Update set "${root.label}" is marked "ignore" — explicitly flagged do-not-migrate; it must not be deployed. Remove it from this deployment or change its state.`,
+          setFindings(ignored, "ignored"),
         );
       }
       return result(
@@ -264,6 +288,7 @@ export const updateSetState: Check = {
         `Update set batch "${rootLabel}" includes ${ignored.length} set(s) marked "ignore" (explicitly do-not-migrate): ${ignored
           .map((s) => `"${s.label}"`)
           .join(", ")} — remove them or change their state before deploying.`,
+        setFindings(ignored, "ignored"),
       );
     }
 
@@ -275,6 +300,7 @@ export const updateSetState: Check = {
         return result(
           "fail",
           `Update set "${root.label}" is still in progress (state "${root.state}") — complete it before deploying.`,
+          setFindings(inProgress, "in-progress"),
         );
       }
       return result(
@@ -282,6 +308,7 @@ export const updateSetState: Check = {
         `Update set batch "${rootLabel}" has ${inProgress.length} set(s) still in progress: ${describeStates(
           inProgress,
         )} — complete them before deploying.`,
+        setFindings(inProgress, "in-progress"),
       );
     }
 
@@ -292,6 +319,7 @@ export const updateSetState: Check = {
         return result(
           "warn",
           `Update set "${root.label}" is in an unrecognised state "${root.state || "unknown"}" (${root.changeCount} change(s)); expected "complete".`,
+          setFindings(unrecognised, "unrecognised-state"),
         );
       }
       return result(
@@ -299,6 +327,7 @@ export const updateSetState: Check = {
         `Update set batch "${rootLabel}" has ${unrecognised.length} set(s) in an unrecognised state: ${describeStates(
           unrecognised,
         )}; expected "complete".`,
+        setFindings(unrecognised, "unrecognised-state"),
       );
     }
 
@@ -310,6 +339,7 @@ export const updateSetState: Check = {
         `Update set ${isBatch ? `batch "${rootLabel}"` : `"${rootLabel}"`} is complete but contains 0 changes${
           isBatch ? " across the batch" : ""
         } — nothing to deploy.`,
+        setFindings([root], "empty"),
       );
     }
 
@@ -322,6 +352,7 @@ export const updateSetState: Check = {
           .join(
             ", ",
           )}); merges can carry collisions — review before deploying.`,
+        setFindings(merged, "merged"),
       );
     }
 

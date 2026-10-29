@@ -1,7 +1,14 @@
-import type { Check, CheckResult, PreflightContext } from "../types.js";
+import type {
+  Check,
+  CheckResult,
+  Finding,
+  PreflightContext,
+} from "../types.js";
 import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { and, eq, resolveScope } from "../http/query.js";
 import { o } from "../options/dsl.js";
+import { makeFinding } from "../findings.js";
+import { withFindings } from "./cert-common.js";
 
 const NAME = "i18n-completeness";
 
@@ -49,8 +56,33 @@ const TRANSLATION_TABLES: readonly TranslationTable[] = [
 const SEP = String.fromCharCode(31);
 
 /** Build a small, well-formed result for this check. */
-function result(status: CheckResult["status"], message: string): CheckResult {
-  return { name: NAME, status, message };
+function result(
+  status: CheckResult["status"],
+  message: string,
+  findings: readonly Finding[] = [],
+): CheckResult {
+  return withFindings({ name: NAME, status, message }, findings);
+}
+
+/**
+ * A `missing-translation` finding for one key a language lacks (F-R-4). The
+ * internal key (`<table><SEP><col>…`) is rendered with `/` separators, so the
+ * logical id reads `lang:<code>/<table>/<col>…` and stays stable per key.
+ */
+function missingFinding(language: string, key: string): Finding {
+  const parts = key.split(SEP);
+  const table = parts[0] ?? "";
+  const readable = parts.join("/");
+  return makeFinding(
+    NAME,
+    "missing-translation",
+    `${language}: missing translation for ${readable}`,
+    {
+      table,
+      logicalId: `lang:${language}/${readable}`,
+      recordName: parts.slice(1).join("/"),
+    },
+  );
 }
 
 /**
@@ -293,10 +325,15 @@ export const i18nCompleteness: Check = {
     }
 
     const total = expectedKeys.size;
+    const findings: Finding[] = [];
     const gaps = coverage
       .map((c) => {
         let missing = 0;
-        for (const key of expectedKeys) if (!c.keys.has(key)) missing++;
+        for (const key of expectedKeys) {
+          if (c.keys.has(key)) continue;
+          missing++;
+          findings.push(missingFinding(c.language, key));
+        }
         return { language: c.language, covered: total - missing, missing };
       })
       .filter((g) => g.missing > 0);
@@ -311,6 +348,7 @@ export const i18nCompleteness: Check = {
       return result(
         "fail",
         `Incomplete translations in scope "${scope}" for ${gaps.length} of ${languages.length} language(s): ${detail}.`,
+        findings,
       );
     }
 

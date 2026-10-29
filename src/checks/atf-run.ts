@@ -1,9 +1,10 @@
 import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { eq } from "../http/query.js";
-import type { CheckResult, PreflightContext } from "../types.js";
+import type { CheckResult, Finding, PreflightContext } from "../types.js";
 import type { Check } from "../types.js";
 import { o } from "../options/dsl.js";
 import type { Shape } from "../options/dsl.js";
+import { rowFinding, withFindings } from "./cert-common.js";
 
 const NAME = "atf-run";
 
@@ -80,9 +81,13 @@ const FAILED_SUITE_STATUSES = new Set([
 function makeResult(
   status: CheckResult["status"],
   message: string,
+  findings: readonly Finding[] = [],
 ): CheckResult {
-  return { name: NAME, status, message };
+  return withFindings({ name: NAME, status, message }, findings);
 }
+
+/** Longest test output quoted in one finding message (F-R-4). */
+const MAX_FINDING_OUTPUT = 200;
 
 /**
  * Resolve the suite `sys_id`s to run. Explicit config wins: `options.atfSuites`
@@ -185,6 +190,37 @@ function testName(row: Record<string, unknown>): string {
 interface RedTest {
   test: string;
   output: string;
+  /**
+   * sys_id of the `sys_atf_test` (the result row's `test` reference), or of
+   * the suite for a suite-level failure; `""` when unreadable.
+   */
+  sysId: string;
+  /** Set when the entry stands for a whole suite run, not one test. */
+  suite?: boolean;
+}
+
+/** `text` cut to at most `max` characters, with an ellipsis when cut. */
+function truncate(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+/**
+ * One finding per red entry: a red test on `sys_atf_test` (kind
+ * `test-failed`), or a suite that settled red without per-test rows on
+ * `sys_atf_test_suite` (kind `suite-failed`). The quoted output is capped at
+ * {@link MAX_FINDING_OUTPUT} characters.
+ */
+function redFinding(t: RedTest): Finding {
+  const output = truncate(t.output, MAX_FINDING_OUTPUT);
+  const label = t.suite ? t.sysId : t.test;
+  return rowFinding(
+    NAME,
+    t.suite ? "sys_atf_test_suite" : "sys_atf_test",
+    { sys_id: t.sysId, name: label },
+    t.suite ? "suite-failed" : "test-failed",
+    "name",
+    `ATF ${t.suite ? "suite" : "test"} "${label}" failed${output ? `: ${output}` : ""}`,
+  );
 }
 
 /** The per-test outcomes rolled up for one suite run. */
@@ -253,7 +289,11 @@ async function collectTestOutcomes(
     for (const row of rows) {
       const status = asStatus(row.status);
       if (RED_TEST_STATUSES.has(status)) {
-        red.push({ test: testName(row), output: asText(row.output) });
+        red.push({
+          test: testName(row),
+          output: asText(row.output),
+          sysId: refValue(row.test),
+        });
       } else if (SKIPPED_TEST_STATUSES.has(status)) {
         skipped += 1;
       }
@@ -321,6 +361,7 @@ export const atfRun: Check = {
     const pending: string[] = [];
     const red: RedTest[] = [];
     const unrecognised: string[] = [];
+    const unrecognisedFindings: Finding[] = [];
     let skippedTotal = 0;
     let passedSuites = 0;
 
@@ -347,6 +388,8 @@ export const atfRun: Check = {
             red.push({
               test: `suite ${suiteId}`,
               output: `suite run reported status "${status}"`,
+              sysId: suiteId,
+              suite: true,
             });
           }
         } else if (SUCCESS_SUITE_STATUSES.has(status)) {
@@ -355,6 +398,16 @@ export const atfRun: Check = {
           // Terminal but unrecognised (unknown / not_found / timed_out / …):
           // fail closed, never count it as a passed suite.
           unrecognised.push(`${suiteId} ("${status || "empty"}")`);
+          unrecognisedFindings.push(
+            rowFinding(
+              NAME,
+              "sys_atf_test_suite",
+              { sys_id: suiteId },
+              "unrecognised-status",
+              "name",
+              `ATF suite "${suiteId}" returned an unrecognized status "${status || "empty"}"`,
+            ),
+          );
         }
       }
     } catch (err) {
@@ -400,7 +453,10 @@ export const atfRun: Check = {
           )}`,
         );
       }
-      return makeResult("fail", `${parts.join("; ")}${suffix}`);
+      return makeResult("fail", `${parts.join("; ")}${suffix}`, [
+        ...red.map(redFinding),
+        ...unrecognisedFindings,
+      ]);
     }
 
     if (pending.length > 0) {

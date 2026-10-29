@@ -399,3 +399,65 @@ test("maps an unexpected SnHttpError to warn (dependencies unverified)", async (
   assert.equal(result.status, "warn");
   assert.match(result.message, /unverified/);
 });
+
+test("F-R-4: one finding per unsatisfied dependency on sys_scope", async () => {
+  const result = await scopedAppDeps.run(
+    ctx(
+      [
+        { id: "x_acme_core", minVersion: "9.0.0" },
+        { id: "x_acme_missing" },
+        { id: "x_acme_ok" },
+      ],
+      {
+        tables: {
+          sys_store_app: [
+            { sys_id: "1", scope: "x_acme_core", version: "3.2.1" },
+            { sys_id: "2", scope: "x_acme_ok", version: "1.0.0" },
+          ],
+          sys_plugins: [],
+        },
+      },
+    ),
+  );
+  assert.equal(result.status, "fail");
+  assert.equal(result.findings.length, 2);
+  for (const f of result.findings) {
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+    assert.equal(f.location.table, "sys_scope");
+  }
+  const byId = Object.fromEntries(
+    result.findings.map((f) => [f.location.logicalId, f.kind]),
+  );
+  assert.deepEqual(byId, {
+    "app:x_acme_core": "outdated-dependency",
+    "app:x_acme_missing": "missing-dependency",
+  });
+});
+
+test("F-R-4: an unknown version is a warn-status finding", async () => {
+  const result = await scopedAppDeps.run(
+    ctx([{ id: "x_acme_core", minVersion: "1.0.0" }], {
+      tables: {
+        sys_store_app: [{ sys_id: "1", scope: "x_acme_core" }],
+        sys_plugins: [],
+      },
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assert.equal(result.findings.length, 1);
+  assert.equal(result.findings[0].kind, "unknown-version");
+  assert.equal(result.findings[0].status, "warn");
+});
+
+test("F-R-4: satisfied dependencies carry no findings", async () => {
+  const result = await scopedAppDeps.run(
+    ctx([{ id: "x_acme_ok" }], {
+      tables: {
+        sys_store_app: [{ sys_id: "2", scope: "x_acme_ok", version: "1.0.0" }],
+        sys_plugins: [],
+      },
+    }),
+  );
+  assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined);
+});

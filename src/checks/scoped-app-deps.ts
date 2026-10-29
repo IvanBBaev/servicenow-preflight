@@ -1,7 +1,9 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { compareVersions } from "../versions.js";
 import { o } from "../options/dsl.js";
+import { makeFinding } from "../findings.js";
+import { withFindings } from "./cert-common.js";
 
 const NAME = "scoped-app-deps";
 
@@ -194,8 +196,44 @@ function parseRequiredApps(raw: unknown): {
   return { apps, invalid, malformed: false };
 }
 
-function result(status: CheckStatus, message: string): CheckResult {
-  return { name: NAME, status, message };
+function result(
+  status: CheckStatus,
+  message: string,
+  findings: readonly Finding[] = [],
+): CheckResult {
+  return withFindings({ name: NAME, status, message }, findings);
+}
+
+/** Finding kind per unsatisfied resolution status (F-R-4). */
+const FINDING_KIND: Partial<Record<ResolutionStatus, string>> = {
+  missing: "missing-dependency",
+  inactive: "inactive-dependency",
+  outdated: "outdated-dependency",
+  "unparseable-version": "unparseable-version",
+  "unknown-version": "unknown-version",
+};
+
+/**
+ * One finding per unsatisfied dependency, on `sys_scope` keyed by the
+ * declared id (`logicalId "app:<id>"`); `unknown-version` is advisory and
+ * carries `status: "warn"`.
+ */
+function dependencyFindings(resolutions: readonly Resolution[]): Finding[] {
+  const findings: Finding[] = [];
+  for (const r of resolutions) {
+    const kind = FINDING_KIND[r.status];
+    if (kind === undefined) continue;
+    findings.push(
+      makeFinding(
+        NAME,
+        kind,
+        `${r.id}: ${r.detail}`,
+        { table: "sys_scope", logicalId: `app:${r.id}`, recordName: r.id },
+        r.status === "unknown-version" ? "warn" : undefined,
+      ),
+    );
+  }
+  return findings;
 }
 
 /**
@@ -337,6 +375,7 @@ export const scopedAppDeps: Check = {
       return result(
         "fail",
         `${hardFailures.length} of ${apps.length} required app(s) not satisfied: ${detail}.`,
+        dependencyFindings(resolutions),
       );
     }
 
@@ -355,6 +394,7 @@ export const scopedAppDeps: Check = {
       return result(
         "warn",
         `All required apps present, but with advisories: ${parts.join("; ")}.`,
+        dependencyFindings(resolutions),
       );
     }
 

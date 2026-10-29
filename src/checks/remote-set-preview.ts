@@ -1,4 +1,4 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import {
   SnAuthError,
   SnHttpError,
@@ -6,6 +6,8 @@ import {
   type SnClient,
 } from "../http/client.js";
 import { chunk, inClause } from "../http/query.js";
+import { makeFinding } from "../findings.js";
+import { rowFinding, withFindings } from "./cert-common.js";
 
 const NAME = "remote-set-preview";
 
@@ -155,8 +157,67 @@ function sample(row: Record<string, unknown>): string {
     : `${text.slice(0, SAMPLE_MAX_LENGTH - 1)}…`;
 }
 
-/** Classify one previewed set's `sys_update_preview_problem` rows. */
-function tallyProblems(rows: Record<string, unknown>[]): ProblemTally {
+/** The retrieved set a finding points at. */
+interface RemoteSet {
+  id: string;
+  label: string;
+}
+
+/** Table of the retrieved sets every finding of this check points at. */
+const REMOTE_SET_TABLE = "sys_remote_update_set";
+
+/** A finding on one retrieved set (`not-previewed`, `unrecognised-state`). */
+function setFinding(
+  set: RemoteSet,
+  kind: string,
+  status?: CheckStatus,
+): Finding {
+  const finding = rowFinding(
+    NAME,
+    REMOTE_SET_TABLE,
+    { sys_id: set.id, name: set.label },
+    kind,
+  );
+  if (status !== undefined) finding.status = status;
+  return finding;
+}
+
+/**
+ * A `preview-problem` finding: located on the retrieved set, identified by the
+ * problem row (`logicalId "sys_update_preview_problem:<sys_id>"`, falling back
+ * to its description when the sys_id is unreadable). Advisory problems
+ * (warning type, or resolved as accepted/skipped) carry `status: "warn"`.
+ */
+function problemFinding(
+  set: RemoteSet,
+  row: Record<string, unknown>,
+  note: string,
+  status?: CheckStatus,
+): Finding {
+  const problemId = str(row.sys_id) || `desc:${sample(row)}`;
+  return makeFinding(
+    NAME,
+    "preview-problem",
+    `"${set.label}" ${note}: ${sample(row)}`,
+    {
+      table: REMOTE_SET_TABLE,
+      sysId: set.id,
+      logicalId: `sys_update_preview_problem:${problemId}`,
+      recordName: set.label,
+    },
+    status,
+  );
+}
+
+/**
+ * Classify one previewed set's `sys_update_preview_problem` rows, pushing one
+ * `preview-problem` finding per problem onto `findings`.
+ */
+function tallyProblems(
+  set: RemoteSet,
+  rows: Record<string, unknown>[],
+  findings: Finding[],
+): ProblemTally {
   const tally: ProblemTally = {
     unresolvedErrors: 0,
     unresolvedWarnings: 0,
@@ -164,17 +225,30 @@ function tallyProblems(rows: Record<string, unknown>[]): ProblemTally {
     samples: [],
   };
   for (const row of rows) {
-    if (RESOLVED_STATUSES.has(str(row.status).toLowerCase())) {
+    const status = str(row.status).toLowerCase();
+    if (RESOLVED_STATUSES.has(status)) {
       tally.resolved++;
+      findings.push(
+        problemFinding(
+          set,
+          row,
+          `preview problem resolved as ${status}`,
+          "warn",
+        ),
+      );
       continue;
     }
     // Unresolved. Only an explicit `warning` type is advisory — an unknown or
     // empty type counts as an error so it can never soften the verdict (OPP-4).
     if (str(row.type).toLowerCase() === WARNING_TYPE) {
       tally.unresolvedWarnings++;
+      findings.push(
+        problemFinding(set, row, "unresolved preview warning", "warn"),
+      );
       continue;
     }
     tally.unresolvedErrors++;
+    findings.push(problemFinding(set, row, "unresolved preview error"));
     if (tally.samples.length < MAX_SAMPLES) tally.samples.push(sample(row));
   }
   return tally;
@@ -218,8 +292,12 @@ async function fetchProblemsBySet(
 }
 
 /** Build a `CheckResult` for this check with the frozen name. */
-function result(status: CheckStatus, message: string): CheckResult {
-  return { name: NAME, status, message };
+function result(
+  status: CheckStatus,
+  message: string,
+  findings: readonly Finding[] = [],
+): CheckResult {
+  return withFindings({ name: NAME, status, message }, findings);
 }
 
 /**
@@ -335,9 +413,10 @@ export const remoteSetPreview: Check = {
       }
 
       // Classify each pending set by state (see the state vocabulary above).
-      const loadedLabels: string[] = [];
+      const loaded: RemoteSet[] = [];
       const unrecognised: string[] = [];
-      const previewed: { id: string; label: string }[] = [];
+      const previewed: RemoteSet[] = [];
+      const findings: Finding[] = [];
       for (const row of pending) {
         const state = readState(row);
         const id = str(row.sys_id);
@@ -349,13 +428,20 @@ export const remoteSetPreview: Check = {
             unrecognised.push(
               `"${label}" (previewed, but its sys_id is unreadable — preview problems cannot be verified)`,
             );
+            findings.push(
+              setFinding({ id, label }, "unrecognised-state", "warn"),
+            );
           } else {
             previewed.push({ id, label });
           }
         } else if (state === LOADED_STATE) {
-          loadedLabels.push(label);
+          loaded.push({ id, label });
+          findings.push(setFinding({ id, label }, "not-previewed"));
         } else {
           unrecognised.push(`"${label}" (state "${state || "unknown"}")`);
+          findings.push(
+            setFinding({ id, label }, "unrecognised-state", "warn"),
+          );
         }
       }
 
@@ -368,14 +454,14 @@ export const remoteSetPreview: Check = {
       const warns: string[] = [];
       let clean = 0;
 
-      for (const label of loadedLabels) {
+      for (const { label } of loaded) {
         failures.push(
           `"${label}" is loaded but its preview has not been run — open the retrieved set and run "Preview Update Set" (then resolve every problem) before committing`,
         );
       }
 
       for (const set of previewed) {
-        const tally = tallyProblems(bySet.get(set.id) ?? []);
+        const tally = tallyProblems(set, bySet.get(set.id) ?? [], findings);
         if (tally.unresolvedErrors > 0) {
           const quoted = tally.samples.map((s) => `"${s}"`).join("; ");
           failures.push(
@@ -424,10 +510,15 @@ export const remoteSetPreview: Check = {
         return result(
           "fail",
           `${failures.length} of ${pending.length} pending retrieved update set(s) fail the preview gate: ${failures.join("; ")}.${also}`,
+          findings,
         );
       }
       if (warns.length > 0) {
-        return result("warn", `Preview gate advisories: ${warns.join("; ")}.`);
+        return result(
+          "warn",
+          `Preview gate advisories: ${warns.join("; ")}.`,
+          findings,
+        );
       }
       return result(
         "pass",

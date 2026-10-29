@@ -455,3 +455,86 @@ test("never throws — always returns a well-formed CheckResult", async () => {
   assert.ok(["pass", "warn", "fail"].includes(result.status));
   assert.equal(typeof result.message, "string");
 });
+
+test("F-R-4: one test-failed finding per red test, output capped at 200 chars", async () => {
+  const longOutput = "x".repeat(1000);
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1" },
+      fixtures: {
+        cicd: {
+          runTestSuite: { status: "success", resultId: "run-1" },
+        },
+        tables: {
+          sys_atf_test_result: [
+            { sys_id: "r0", test: "t_ok", status: "success" },
+            {
+              sys_id: "r1",
+              test: "t_red_1",
+              status: "failure",
+              output: longOutput,
+            },
+            {
+              sys_id: "r2",
+              test: "t_red_2",
+              status: "error",
+              output: "boom",
+            },
+          ],
+        },
+      },
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.equal(result.findings.length, 2);
+  for (const f of result.findings) {
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+    assert.equal(f.kind, "test-failed");
+    assert.equal(f.location.table, "sys_atf_test");
+  }
+  assert.deepEqual(result.findings.map((f) => f.location.sysId).sort(), [
+    "t_red_1",
+    "t_red_2",
+  ]);
+  const long = result.findings.find((f) => f.location.sysId === "t_red_1");
+  const quoted = long.message.slice(long.message.indexOf(": ") + 2);
+  assert.ok(quoted.length <= 200, `quoted output is ${quoted.length} chars`);
+  assert.ok(quoted.endsWith("…"));
+});
+
+test("F-R-4: a suite that settled red without test rows emits a suite-failed finding", async () => {
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1" },
+      fixtures: {
+        cicd: { runTestSuite: { status: "failure" } },
+        tables: { sys_atf_test_result: [] },
+      },
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.deepEqual(
+    result.findings.map((f) => [f.kind, f.location.table, f.location.sysId]),
+    [["suite-failed", "sys_atf_test_suite", "suite-1"]],
+  );
+});
+
+test("F-R-4: a green run carries no findings", async () => {
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1" },
+      fixtures: {
+        cicd: {
+          runTestSuite: { status: "success", resultId: "run-1" },
+        },
+        tables: {
+          sys_atf_test_result: [
+            { sys_id: "r0", test: "t1", status: "success" },
+          ],
+        },
+      },
+    }),
+  );
+  assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined);
+});

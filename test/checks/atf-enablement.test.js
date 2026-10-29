@@ -438,3 +438,26 @@ test("runs with a client certificate alone (mTLS identifies the caller)", async 
   });
   assert.equal(result.status, "pass");
 });
+
+test("F-R-4: a disabled runner emits one property-off finding on the instance", async () => {
+  const result = await atfEnablement.run(
+    ctx(
+      { tables: { sys_properties: [enabledProperty("false")] } },
+      { atfSuiteId: "suite1" },
+    ),
+  );
+  assert.equal(result.status, "fail");
+  assert.equal(result.findings.length, 1);
+  const [f] = result.findings;
+  assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  assert.equal(f.kind, "property-off");
+  assert.equal(f.location.logicalId, "instance");
+});
+
+test("F-R-4: an enabled runner carries no findings", async () => {
+  const result = await atfEnablement.run(
+    ctx({ tables: { sys_properties: [enabledProperty("true")] } }),
+  );
+  assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined);
+});

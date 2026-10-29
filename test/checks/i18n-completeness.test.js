@@ -364,3 +364,41 @@ test("never throws — always returns a well-formed CheckResult", async () => {
   assert.equal(typeof result.message, "string");
   assert.ok(result.message.length > 0);
 });
+
+test("F-R-4: one missing-translation finding per missing key", async () => {
+  const http = keyClient({
+    fr: ["a", "b", "c"],
+    de: ["a"],
+  });
+  const result = await i18nCompleteness.run({
+    instanceUrl: INSTANCE,
+    http,
+    scope: SCOPE,
+    options: { languages: ["fr", "de"] },
+  });
+  assert.equal(result.status, "fail");
+  assert.equal(result.findings.length, 2);
+  for (const f of result.findings) {
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+    assert.equal(f.kind, "missing-translation");
+    assert.equal(f.location.table, "sys_ui_message");
+    assert.match(f.location.logicalId, /^lang:de\//);
+  }
+  assert.deepEqual(result.findings.map((f) => f.location.logicalId).sort(), [
+    "lang:de/sys_ui_message/b",
+    "lang:de/sys_ui_message/c",
+  ]);
+  assert.equal(new Set(result.findings.map((f) => f.id)).size, 2);
+});
+
+test("F-R-4: full coverage carries no findings", async () => {
+  const http = keyClient({ fr: ["a"], de: ["a"] });
+  const result = await i18nCompleteness.run({
+    instanceUrl: INSTANCE,
+    http,
+    scope: SCOPE,
+    options: { languages: ["fr", "de"] },
+  });
+  assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined);
+});

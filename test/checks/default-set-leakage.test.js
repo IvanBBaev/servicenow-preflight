@@ -396,3 +396,31 @@ test("never throws — always returns a well-formed CheckResult", async () => {
   assert.equal(typeof result.message, "string");
   assert.ok(result.message.length > 0);
 });
+
+test("F-R-4: one default-set-update finding per leaked sys_update_xml row", async () => {
+  const updates = [
+    update(SCOPED_DEFAULT_ID, "widget-a"),
+    update(GLOBAL_DEFAULT_ID, "widget-b"),
+    update(NAMED_SET_ID, "shipped-fine"),
+  ];
+  const result = await run(makeHttp({ updates }));
+  assert.equal(result.status, "fail");
+  assert.equal(result.findings.length, 2);
+  for (const f of result.findings) {
+    assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+    assert.equal(f.kind, "default-set-update");
+    assert.equal(f.location.table, "sys_update_xml");
+  }
+  assert.deepEqual(result.findings.map((f) => f.location.sysId).sort(), [
+    "u_widget-a",
+    "u_widget-b",
+  ]);
+});
+
+test("F-R-4: a clean scope carries no findings", async () => {
+  const result = await run(
+    makeHttp({ updates: [update(NAMED_SET_ID, "widget-a")] }),
+  );
+  assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined);
+});

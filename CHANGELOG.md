@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read fails. Messages name rules only, never the domain value. Each
   offending rule is one finding (`wildcard-origin`, or `wildcard-subdomain`
   with a `warn` status).
+- **Delivery, ATF and app/i18n findings** — `update-set-state` and
+  `default-set-leakage` return one finding per offending `sys_update_set` /
+  leaked `sys_update_xml` row; `remote-set-preview` one per unpreviewed set and
+  per preview problem (`logicalId: "sys_update_preview_problem:<sys_id>"`,
+  warnings and resolved problems as `warn`); `atf-run` one `test-failed`
+  finding per red test on `sys_atf_test` with the quoted output capped at 200
+  characters; `atf-enablement` one `logicalId: "instance"` finding;
+  `scoped-app-deps` one per unsatisfied dependency (`logicalId: "app:<id>"`);
+  `i18n-completeness` one `missing-translation` finding per missing key
+  (`logicalId: "lang:<code>/<key>"`). Row messages are unchanged.
 - **Drift findings and fallback identity** — `test-drift` returns one finding
   per test missing on (`fail`) or extra on (`warn`) the target, keyed on its
   logical id; `app-version-parity` one per downgraded, missing or unverified

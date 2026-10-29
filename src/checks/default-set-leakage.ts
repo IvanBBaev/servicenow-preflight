@@ -1,4 +1,4 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import {
   SnAuthError,
   SnHttpError,
@@ -16,6 +16,7 @@ import {
   resolveScope,
   type ResolvedScope,
 } from "../http/query.js";
+import { rowFinding, withFindings } from "./cert-common.js";
 
 const NAME = "default-set-leakage";
 
@@ -26,8 +27,12 @@ const MAX_SAMPLES = 5;
 const MAX_SET_LABELS = 3;
 
 /** Build a well-formed result for this check. */
-function result(status: CheckStatus, message: string): CheckResult {
-  return { name: NAME, status, message };
+function result(
+  status: CheckStatus,
+  message: string,
+  findings: readonly Finding[] = [],
+): CheckResult {
+  return withFindings({ name: NAME, status, message }, findings);
 }
 
 /** Read a string-ish field from a row, unwrapping a `{ value }` reference; "" when absent. */
@@ -244,6 +249,10 @@ export const defaultSetLeakage: Check = {
             labels,
             MAX_SAMPLES,
           )}. Move them into a deployable update set before promoting.`,
+          // One finding per leaked customer update (F-R-4).
+          leaks.rows.map((row) =>
+            rowFinding(NAME, "sys_update_xml", row, "default-set-update"),
+          ),
         );
       }
 

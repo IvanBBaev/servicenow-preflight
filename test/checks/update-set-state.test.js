@@ -369,3 +369,62 @@ test("update-set-state: never throws — always returns a well-formed result", a
   assert.equal(typeof result.message, "string");
   assert.ok(result.message.length > 0);
 });
+
+test("update-set-state: F-R-4 — an in-progress set emits one finding on sys_update_set", async () => {
+  const http = createFakeSnClient({
+    tables: {
+      sys_update_set: [
+        { sys_id: SET_ID, name: "WIP set", state: "in progress" },
+      ],
+      sys_update_xml: [{ sys_id: "x1" }],
+    },
+  });
+  const result = await updateSetState.run(ctx(http));
+  assert.equal(result.status, "fail");
+  assert.equal(result.findings.length, 1);
+  const [f] = result.findings;
+  assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  assert.equal(f.kind, "in-progress");
+  assert.equal(f.location.table, "sys_update_set");
+  assert.equal(f.location.sysId, SET_ID);
+});
+
+test("update-set-state: F-R-4 — a missing set and an empty set each emit a finding", async () => {
+  const missing = await updateSetState.run(
+    ctx(createFakeSnClient({ tables: { sys_update_set: [] } })),
+  );
+  assert.equal(missing.status, "fail");
+  assert.deepEqual(
+    missing.findings.map((f) => [f.kind, f.location.sysId]),
+    [["not-found", SET_ID]],
+  );
+
+  const empty = await updateSetState.run(
+    ctx(
+      createFakeSnClient({
+        tables: {
+          sys_update_set: [
+            { sys_id: SET_ID, name: "Empty set", state: "complete" },
+          ],
+          sys_update_xml: [],
+        },
+      }),
+    ),
+  );
+  assert.deepEqual(
+    empty.findings.map((f) => f.kind),
+    ["empty"],
+  );
+});
+
+test("update-set-state: F-R-4 — a passing set carries no findings", async () => {
+  const http = createFakeSnClient({
+    tables: {
+      sys_update_set: [{ sys_id: SET_ID, name: "My set", state: "complete" }],
+      sys_update_xml: [{ sys_id: "x1" }],
+    },
+  });
+  const result = await updateSetState.run(ctx(http));
+  assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined);
+});

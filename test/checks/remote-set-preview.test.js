@@ -556,3 +556,66 @@ test("runs with a client certificate alone (mTLS identifies the caller)", async 
   });
   assert.equal(result.status, "pass");
 });
+
+test("F-R-4: an unpreviewed set emits a not-previewed finding on sys_remote_update_set", async () => {
+  const result = await run(
+    makeHttp({
+      remoteSets: [{ sys_id: "r1", name: "Sprint fixes", state: "loaded" }],
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.equal(result.findings.length, 1);
+  const [f] = result.findings;
+  assert.match(f.id, /^f1:[0-9a-f]{16}$/);
+  assert.equal(f.kind, "not-previewed");
+  assert.equal(f.location.table, "sys_remote_update_set");
+  assert.equal(f.location.sysId, "r1");
+});
+
+test("F-R-4: one preview-problem finding per problem, keyed by the problem sys_id", async () => {
+  const problems = [
+    {
+      sys_id: "p1",
+      remote_update_set: "r1",
+      type: "error",
+      status: "",
+      description: "collision on widget",
+    },
+    {
+      sys_id: "p2",
+      remote_update_set: "r1",
+      type: "warning",
+      status: "",
+      description: "newer version exists",
+    },
+  ];
+  const result = await run(
+    makeHttp({
+      remoteSets: [{ sys_id: "r1", name: "Sprint fixes", state: "previewed" }],
+      problems,
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.equal(result.findings.length, 2);
+  const byId = Object.fromEntries(
+    result.findings.map((f) => [f.location.logicalId, f]),
+  );
+  const error = byId["sys_update_preview_problem:p1"];
+  const warning = byId["sys_update_preview_problem:p2"];
+  assert.equal(error.kind, "preview-problem");
+  assert.equal(error.status, undefined);
+  assert.equal(error.location.sysId, "r1");
+  assert.match(error.message, /collision on widget/);
+  assert.equal(warning.kind, "preview-problem");
+  assert.equal(warning.status, "warn");
+});
+
+test("F-R-4: a cleanly previewed set carries no findings", async () => {
+  const result = await run(
+    makeHttp({
+      remoteSets: [{ sys_id: "r1", name: "Sprint fixes", state: "previewed" }],
+    }),
+  );
+  assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined);
+});

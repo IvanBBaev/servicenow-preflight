@@ -1,8 +1,9 @@
-import type { Check, CheckResult, CheckStatus } from "../types.js";
+import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { and, eq } from "../http/query.js";
 import { ATF_SUITE_OPTIONS, resolveSuiteIds } from "./atf-run.js";
 import { o } from "../options/dsl.js";
+import { subjectFinding, withFindings } from "./cert-common.js";
 
 const NAME = "atf-enablement";
 
@@ -37,8 +38,21 @@ const AGENT_TYPE_SCHEDULED = "scheduled";
 const AGENT_STATUS_ONLINE = "online";
 
 /** Build a well-formed result for this check. */
-function result(status: CheckStatus, message: string): CheckResult {
-  return { name: NAME, status, message };
+function result(
+  status: CheckStatus,
+  message: string,
+  findings: readonly Finding[] = [],
+): CheckResult {
+  return withFindings({ name: NAME, status, message }, findings);
+}
+
+/**
+ * The instance-level finding (`logicalId "instance"`): the runner property is
+ * off (`property-off`) or no scheduled client test runner is online
+ * (`runner-offline`) (F-R-4).
+ */
+function instanceFinding(kind: string, message: string): Finding[] {
+  return [subjectFinding(NAME, "instance", "instance", kind, message)];
 }
 
 /** Read a string-ish field from an arbitrary record, trimmed; "" when absent. */
@@ -217,15 +231,21 @@ export const atfEnablement: Check = {
         // use ATF was a false-fail; surface it as advisory instead. Configuring
         // a suite (options.atfSuites/atfSuiteId or a manifest suite) re-arms the
         // hard gate so the two checks stay in agreement (OPP-2).
+        const off = instanceFinding(
+          "property-off",
+          `"${RUNNER_ENABLED_PROPERTY}" ${detail}`,
+        );
         if (resolveSuiteIds(ctx).length === 0) {
           return result(
             "warn",
             `ATF test execution is disabled: "${RUNNER_ENABLED_PROPERTY}" ${detail}. No ATF suite is configured for this run (set options.atfSuites/atfSuiteId or a manifest suite), so nothing will run; enable the property before triggering an ATF run.`,
+            off,
           );
         }
         return result(
           "fail",
           `ATF test execution is disabled: "${RUNNER_ENABLED_PROPERTY}" ${detail}. Enable the property (Automated Test Framework > Administration > Properties), otherwise atf-run cannot execute tests.`,
+          off,
         );
       }
 
@@ -253,6 +273,10 @@ export const atfEnablement: Check = {
           return result(
             "fail",
             `ATF is enabled, but no scheduled client test runner is online (${AGENT_TABLE}: type=${AGENT_TYPE_SCHEDULED}, status=${AGENT_STATUS_ONLINE} matched 0 rows) — tests that need a browser cannot execute. Start a scheduled client test runner (Automated Test Framework > Run > Scheduled Client Test Runner) before triggering a run.`,
+            instanceFinding(
+              "runner-offline",
+              "No scheduled client test runner is online",
+            ),
           );
         }
         runnerNote = ` ${agents.rows.length} scheduled client test runner(s) online.`;
