@@ -225,10 +225,10 @@ test("warns when the instance is unreachable", async () => {
 
 test("warns on an HTTP error from the table read", async () => {
   const result = await run(
-    makeHttp({ fail: { table: { sys_cors_rule: { http: 403 } } } }),
+    makeHttp({ fail: { table: { sys_cors_rule: { http: 500 } } } }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /403/);
+  assert.match(result.message, /500/);
 });
 
 test("one finding per offending rule; a pass carries none", async () => {

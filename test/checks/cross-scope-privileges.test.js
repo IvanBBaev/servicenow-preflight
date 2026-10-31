@@ -273,7 +273,7 @@ test("warns on a network error", async () => {
 });
 
 test("warns on an HTTP error", async () => {
-  const { http } = makeHttp({ fail: { table: { [TABLE]: { http: 403 } } } });
+  const { http } = makeHttp({ fail: { table: { [TABLE]: { http: 500 } } } });
   const result = await run(http);
   assert.equal(result.status, "warn");
 });

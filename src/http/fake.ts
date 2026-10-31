@@ -38,9 +38,12 @@
  *   fail: { auth: true }, // every call throws SnAuthError
  * });
  * // or per-op: fail: { table: { sys_update_set: { network: true } } }
+ * // a 401/403 raises SnAuthError, exactly like the real client:
+ * // fail: { table: { sys_security_acl: { forbidden: true } } } (= { http: 403 })
  * ```
  */
 
+import { diagnoseAuthFailure } from "./diagnose.js";
 import {
   SnAuthError,
   SnError,
@@ -80,13 +83,26 @@ function parseCount(table: string, param: string, raw: string): number {
   return n;
 }
 
-/** A forced failure — exactly one kind should be set. */
+/**
+ * A forced failure — exactly one kind should be set. Each kind raises the same
+ * error class the real client raises for that condition, so a check test
+ * asserts the verdict a user would actually see (QA-1).
+ */
 export interface ForcedFailure {
-  /** Throw {@link SnAuthError}. */
+  /** Throw {@link SnAuthError} with status 401 (credentials refused). */
   auth?: boolean;
+  /**
+   * Throw {@link SnAuthError} with status 403 — the account authenticates but
+   * may not read this table. Same as `http: 403`, named for readability.
+   */
+  forbidden?: boolean;
   /** Throw {@link SnNetworkError}. */
   network?: boolean;
-  /** Throw {@link SnHttpError} with this status (defaults to 500). */
+  /**
+   * Fail with this HTTP status (defaults to 500). Like the real client, 401
+   * and 403 raise {@link SnAuthError}; every other status raises
+   * {@link SnHttpError}.
+   */
   http?: number | boolean;
   /**
    * Throw {@link SnResponseError} — the "2xx with a non-JSON body" case a
@@ -323,15 +339,45 @@ function isSingleTestSuiteResult(
   return typeof (value as { status?: unknown }).status === "string";
 }
 
-/** Throw the error described by `f`, or return without throwing if `f` is falsy. */
-function maybeThrow(f: ForcedFailure | undefined, where: string): void {
+/**
+ * The {@link SnAuthError} the real client raises for a refused request: same
+ * message shape and the same diagnosis (a 403 names the table it could not
+ * read). The fake has no auth configuration, so it diagnoses as basic auth —
+ * the most common CI setup.
+ */
+function authError(status: 401 | 403, detail: string, path: string) {
+  return new SnAuthError(
+    `ServiceNow authentication failed (${status}): ${detail}.`,
+    status,
+    diagnoseAuthFailure({ status, authKind: "basic", path, detail }),
+  );
+}
+
+/**
+ * Throw the error described by `f`, or return without throwing if `f` is falsy.
+ * `path` is the REST path the real client would have called, so an auth
+ * diagnosis can name the table the way production does.
+ */
+function maybeThrow(
+  f: ForcedFailure | undefined,
+  where: string,
+  path: string,
+): void {
   if (!f) return;
   const msg = f.message ?? `Forced failure (${where})`;
-  if (f.auth) throw new SnAuthError(msg, 401);
+  if (f.auth) {
+    throw new SnAuthError(
+      msg,
+      401,
+      diagnoseAuthFailure({ status: 401, authKind: "basic", path }),
+    );
+  }
+  if (f.forbidden) throw authError(403, msg, path);
   if (f.network) throw new SnNetworkError(msg);
   if (f.response) throw new SnResponseError(msg, 200, "");
   if (f.http !== undefined && f.http !== false) {
     const status = typeof f.http === "number" ? f.http : 500;
+    if (status === 401 || status === 403) throw authError(status, msg, path);
     throw new SnHttpError(status, msg);
   }
 }
@@ -355,6 +401,7 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
   return {
     table(name: string): SnTable {
       const refs = referenceFieldsFor(name, fixtures.referenceFields);
+      const tablePath = `/api/now/table/${name}`;
       // Raw seeded rows for this query — narrowed by `queryFilter` when one is
       // supplied. The filter sees the un-shaped rows so it can match plain
       // string fields (e.g. `sys_scope`), the way a real query encodes them.
@@ -408,7 +455,7 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
       };
       return {
         get(sysId, params) {
-          maybeThrow(tableFail(name), `table ${name}`);
+          maybeThrow(tableFail(name), `table ${name}`, tablePath);
           const all = tableRows(name);
           const raw = all.find((r) => r.sys_id === sysId) ?? null;
           if (!raw) return Promise.resolve(null);
@@ -418,11 +465,11 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
           );
         },
         query(params) {
-          maybeThrow(tableFail(name), `table ${name}`);
+          maybeThrow(tableFail(name), `table ${name}`, tablePath);
           return Promise.resolve(pagedRows(params));
         },
         queryWithMeta(params): Promise<TableQueryResult> {
-          maybeThrow(tableFail(name), `table ${name}`);
+          maybeThrow(tableFail(name), `table ${name}`, tablePath);
           // The real client refuses this pairing: `securityTrimmed` compares the
           // pre-trim count against the rows fetched, which says nothing when a
           // limit already capped them.
@@ -448,7 +495,11 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
     },
     cicd: {
       runTestSuite(suiteSysId): Promise<CicdTestSuiteResult> {
-        maybeThrow(globalFail?.cicd ?? globalFail, "cicd.runTestSuite");
+        maybeThrow(
+          globalFail?.cicd ?? globalFail,
+          "cicd.runTestSuite",
+          "/api/sn_cicd/testsuite/run",
+        );
         const canned = fixtures.cicd?.runTestSuite;
         if (!canned) {
           return Promise.resolve({ status: "success" });
@@ -461,7 +512,7 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
       },
     },
     request(method: string, path: string): Promise<SnRawResponse> {
-      maybeThrow(globalFail, `request ${method} ${path}`);
+      maybeThrow(globalFail, `request ${method} ${path}`, path);
       const key = `${method} ${path}`;
       const canned = fixtures.requests?.[key];
       return Promise.resolve(canned ?? { status: 404, body: null });

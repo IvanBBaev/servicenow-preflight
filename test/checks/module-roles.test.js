@@ -275,11 +275,11 @@ test("warns (degraded) on an HTTP error reading the menus", async () => {
   const result = await run(
     makeHttp({
       modules: [mod("Assets")],
-      fail: { table: { sys_app_application: { http: 403 } } },
+      fail: { table: { sys_app_application: { http: 500 } } },
     }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /HTTP 403/);
+  assert.match(result.message, /HTTP 500/);
 });
 
 function assertRowFindings(result, table, kinds) {

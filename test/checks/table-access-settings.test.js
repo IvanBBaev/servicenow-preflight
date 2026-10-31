@@ -296,10 +296,10 @@ test("maps a network error to warn", async () => {
 
 test("maps an HTTP error to warn", async () => {
   const { result } = await run([], {
-    fail: { table: { sys_db_object: { http: 403 } } },
+    fail: { table: { sys_db_object: { http: 500 } } },
   });
   assert.equal(result.status, "warn");
-  assert.match(result.message, /HTTP 403/);
+  assert.match(result.message, /HTTP 500/);
 });
 
 test("an operator-bearing scope fails closed without a table read", async () => {

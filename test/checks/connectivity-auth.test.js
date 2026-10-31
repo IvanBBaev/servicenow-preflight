@@ -92,18 +92,12 @@ test("connectivity-auth fails on a 401 authentication error", async () => {
 });
 
 test("connectivity-auth warns on a 403 insufficient-rights error", async () => {
-  // The fake's forced auth failure is 401; a 403 (reachable but degraded) is
-  // modelled by wrapping the fake so the sys_user query throws SnAuthError(403).
-  const base = createFakeSnClient({ tables: { sys_user: [{ sys_id: "u1" }] } });
-  const http = {
-    ...base,
-    table() {
-      return {
-        get: () => Promise.reject(new SnAuthError("forbidden", 403)),
-        query: () => Promise.reject(new SnAuthError("forbidden", 403)),
-      };
-    },
-  };
+  // The fake raises SnAuthError(403) exactly like the real client (QA-1). This
+  // check deliberately reads a 403 on its ping as "reachable but degraded".
+  const http = createFakeSnClient({
+    tables: { sys_user: [{ sys_id: "u1" }] },
+    fail: { forbidden: true },
+  });
   const result = await connectivityAuth.run({
     instanceUrl: INSTANCE,
     auth: AUTH,

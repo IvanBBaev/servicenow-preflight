@@ -224,10 +224,10 @@ test("maps auth, network and HTTP errors", async () => {
   assert.match(network.message, /Could not reach/);
 
   const http = await run(
-    makeHttp({ fail: { table: { sys_ui_policy: { http: 403 } } } }),
+    makeHttp({ fail: { table: { sys_ui_policy: { http: 500 } } } }),
   );
   assert.equal(http.status, "warn");
-  assert.match(http.message, /HTTP 403/);
+  assert.match(http.message, /HTTP 500/);
 });
 
 test("emits one finding per hit with distinct ids and lines (F-R-2)", async () => {

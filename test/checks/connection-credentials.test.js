@@ -335,10 +335,11 @@ test("an HTTP error warns", async () => {
 
 for (const [table, kind, status] of [
   ["discovery_credentials", { auth: true }, "fail"],
-  ["discovery_credentials", { http: 403 }, "warn"],
+  // A 403 is an auth failure in production (SnAuthError), so it fails (QA-1).
+  ["discovery_credentials", { http: 403 }, "fail"],
   ["sys_rest_message", { network: true }, "warn"],
   ["sys_rest_message_fn", { http: 500 }, "warn"],
-  ["sys_alias", { http: 403 }, "warn"],
+  ["sys_alias", { forbidden: true }, "fail"],
   ["sys_alias", { response: true }, "fail"],
 ]) {
   test(`a forced ${Object.keys(kind)[0]} failure on ${table} → ${status}, other reads still run`, async () => {

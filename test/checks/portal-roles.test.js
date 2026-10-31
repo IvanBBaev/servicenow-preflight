@@ -247,10 +247,10 @@ test("warns (degraded) on a network error", async () => {
 
 test("warns (degraded) on an HTTP error reading sp_page", async () => {
   const result = await run(
-    makeHttp({ fail: { table: { sp_page: { http: 403 } } } }),
+    makeHttp({ fail: { table: { sp_page: { http: 500 } } } }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /HTTP 403/);
+  assert.match(result.message, /HTTP 500/);
 });
 
 test("emits one finding per role-less widget and page (F-R-3)", async () => {

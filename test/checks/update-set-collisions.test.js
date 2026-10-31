@@ -414,8 +414,8 @@ test("maps a network error to warn", async () => {
 test("maps an HTTP error to warn", async () => {
   const { result } = await run({
     updateSetId: TARGET,
-    fail: { table: { sys_update_xml: { http: 403 } } },
+    fail: { table: { sys_update_xml: { http: 500 } } },
   });
   assert.equal(result.status, "warn");
-  assert.match(result.message, /HTTP 403/);
+  assert.match(result.message, /HTTP 500/);
 });

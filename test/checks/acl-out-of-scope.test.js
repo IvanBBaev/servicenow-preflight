@@ -314,11 +314,11 @@ test("warns (degraded) on an HTTP error reading the table list", async () => {
   const result = await run(
     makeHttp({
       acls: [acl("incident")],
-      fail: { table: { sys_db_object: { http: 403 } } },
+      fail: { table: { sys_db_object: { http: 500 } } },
     }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /HTTP 403/);
+  assert.match(result.message, /HTTP 500/);
 });
 
 function assertRowFindings(result, table, kinds) {

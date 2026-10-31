@@ -262,10 +262,10 @@ test("warns (degraded) on a network error", async () => {
 
 test("warns (degraded) on an HTTP error reading Fix Scripts", async () => {
   const result = await run(
-    makeHttp({ fail: { table: { sys_script_fix: { http: 403 } } } }),
+    makeHttp({ fail: { table: { sys_script_fix: { http: 500 } } } }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /HTTP 403/);
+  assert.match(result.message, /HTTP 500/);
 });
 
 test("emits one finding per empty Fix Script and duplicated name (F-R-3)", async () => {

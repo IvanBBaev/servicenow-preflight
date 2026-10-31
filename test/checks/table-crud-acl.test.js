@@ -385,11 +385,11 @@ test("warns (degraded) on an HTTP error reading the ACL table", async () => {
   const result = await run(
     makeHttp({
       tables: [baseTable("x_acme_asset")],
-      fail: { table: { sys_security_acl: { http: 403 } } },
+      fail: { table: { sys_security_acl: { http: 500 } } },
     }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /HTTP 403/);
+  assert.match(result.message, /HTTP 500/);
 });
 
 test("emits one finding per missing operation on a table subject (F-R-3)", async () => {

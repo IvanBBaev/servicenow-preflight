@@ -134,10 +134,10 @@ test("warns when the instance is unreachable", async () => {
 
 test("warns on an HTTP error from the table read", async () => {
   const result = await run(
-    makeHttp({ fail: { table: { sysauto_script: { http: 403 } } } }),
+    makeHttp({ fail: { table: { sysauto_script: { http: 500 } } } }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /403/);
+  assert.match(result.message, /500/);
 });
 
 function assertRowFindings(result, table, kinds) {

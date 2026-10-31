@@ -191,10 +191,10 @@ test("warns on a network error", async () => {
 
 test("warns on an HTTP error reading one of the tables", async () => {
   const result = await run(
-    makeHttp({ fail: { table: { sys_ui_action: { http: 403 } } } }),
+    makeHttp({ fail: { table: { sys_ui_action: { http: 500 } } } }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /403/);
+  assert.match(result.message, /500/);
 });
 
 test("emits one finding per inactive record on its own table (F-R-3)", async () => {

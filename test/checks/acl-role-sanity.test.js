@@ -537,10 +537,9 @@ test("warns (degraded) on an HTTP error reading ACL tables", async () => {
 
 test("never throws — always returns a well-formed CheckResult", async () => {
   const result = await run(makeHttp({ fail: { http: 403 } }));
-  // 403 surfaces as SnAuthError from the real client contract; the fake maps
-  // http:403 to SnHttpError, so we just assert the shape stays well-formed.
+  // A 403 surfaces as SnAuthError, in the fake exactly as in the real client.
   assert.equal(result.name, "acl-role-sanity");
-  assert.ok(["pass", "warn", "fail"].includes(result.status));
+  assert.equal(result.status, "fail");
   assert.equal(typeof result.message, "string");
   assert.ok(result.message.length > 0);
 });

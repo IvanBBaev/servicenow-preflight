@@ -584,6 +584,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count instead of breaking on the first short page; `query()` callers no
   longer silently lose the rows after it. Without the header a short page still
   ends the walk, and the row cap still fails closed.
+- **Test fake raises auth errors like the real client** (RR-2) — the in-memory
+  `createFakeSnClient` turned a forced HTTP 403 into a plain `SnHttpError`,
+  while `SnClient` raises `SnAuthError` for 401 and 403. Check tests therefore
+  pinned a `warn` verdict on a forbidden table that production reports as
+  `fail`. `fail: { http: 401 | 403 }` now raises `SnAuthError` with the same
+  message shape and diagnosis as the client (a 403 names the table), a new
+  `fail: { forbidden: true }` mode spells out the 403 case, and a parity suite
+  runs 401, 403, 404, exhausted 429, 500 and a network error through both the
+  fake and the real client.
 - **`drift` verdict is fail-closed** — results folded into a `drift` report
   (promotion order, manifest staleness, version parity) are now summarised by
   the same rule as `runPreflight`: an unrecognised status counts as a failure

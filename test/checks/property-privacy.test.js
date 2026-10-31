@@ -232,10 +232,10 @@ test("warns on a network error", async () => {
 
 test("warns on an HTTP error reading sys_properties", async () => {
   const result = await run(
-    makeHttp({ fail: { table: { sys_properties: { http: 403 } } } }),
+    makeHttp({ fail: { table: { sys_properties: { http: 500 } } } }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /403/);
+  assert.match(result.message, /500/);
 });
 
 function assertRowFindings(result, table, kinds) {

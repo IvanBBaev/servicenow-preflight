@@ -230,10 +230,10 @@ test("warns on a network error", async () => {
 
 test("warns on an HTTP error reading sysevent_email_action", async () => {
   const result = await run(
-    makeHttp({ fail: { table: { sysevent_email_action: { http: 403 } } } }),
+    makeHttp({ fail: { table: { sysevent_email_action: { http: 500 } } } }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /403/);
+  assert.match(result.message, /500/);
 });
 
 function assertRowFindings(result, table, kinds) {

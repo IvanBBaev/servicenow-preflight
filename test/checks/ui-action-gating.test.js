@@ -282,11 +282,11 @@ test("warns (degraded) on an HTTP error reading the role table", async () => {
   const result = await run(
     makeHttp({
       actions: [action(1)],
-      fail: { table: { sys_ui_action_role: { http: 403 } } },
+      fail: { table: { sys_ui_action_role: { http: 500 } } },
     }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /HTTP 403/);
+  assert.match(result.message, /HTTP 500/);
 });
 
 function assertRowFindings(result, table, kinds) {
