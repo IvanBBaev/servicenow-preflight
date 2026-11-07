@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { tableAccessSettings } from "../../build/checks/table-access-settings.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { tracked } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const SCOPE_SYS_ID = "a".repeat(32);
@@ -34,21 +35,18 @@ function table(name, fields = {}) {
  * defaults to the seeded row count (`null` omits it → ambiguous).
  */
 async function run(rows, { totalCount, fail, scope = SCOPE } = {}) {
-  const calls = [];
   const counts =
     totalCount === null ? {} : { sys_db_object: totalCount ?? rows.length };
-  const http = createFakeSnClient({
-    tables: {
-      sys_db_object: rows,
-      sys_scope: [{ sys_id: SCOPE_SYS_ID, scope: SCOPE }],
-    },
-    totalCounts: counts,
-    queryFilter: (t, tableRows, params) => {
-      calls.push({ table: t, params });
-      return tableRows;
-    },
-    fail,
-  });
+  const { http, calls } = tracked(
+    createFakeSnClient({
+      tables: {
+        sys_db_object: rows.map((row) => ({ sys_scope: SCOPE_SYS_ID, ...row })),
+        sys_scope: [{ sys_id: SCOPE_SYS_ID, scope: SCOPE }],
+      },
+      totalCounts: counts,
+      fail,
+    }),
+  );
   const result = await tableAccessSettings.run({
     instanceUrl: INSTANCE,
     http,

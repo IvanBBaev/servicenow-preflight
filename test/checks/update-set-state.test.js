@@ -12,25 +12,6 @@ function ctx(http, updateSetId = SET_ID) {
   return { instanceUrl: INSTANCE, http, updateSetId };
 }
 
-/**
- * Route batch queries the way a live instance would: `sys_update_set` filtered
- * by `parent=<id>` (child sets), `sys_update_xml` by `update_set=<id>` (a set's
- * change rows). Runs on the raw seeded rows, so it matches the plain
- * `parent` / `update_set` strings the fixtures carry.
- */
-function routed(table, rows, params) {
-  const q = params?.sysparm_query ?? "";
-  if (table === "sys_update_set") {
-    const m = /parent=(\S+)/.exec(q);
-    if (m) return rows.filter((r) => String(r.parent ?? "") === m[1]);
-  }
-  if (table === "sys_update_xml") {
-    const m = /update_set=(\S+)/.exec(q);
-    if (m) return rows.filter((r) => String(r.update_set ?? "") === m[1]);
-  }
-  return rows;
-}
-
 test("update-set-state: warns when no update set is specified", async () => {
   const http = createFakeSnClient();
   const result = await updateSetState.run({ instanceUrl: INSTANCE, http });
@@ -61,7 +42,10 @@ test("update-set-state: passes when set is complete with changes", async () => {
   const http = createFakeSnClient({
     tables: {
       sys_update_set: [{ sys_id: SET_ID, name: "My set", state: "complete" }],
-      sys_update_xml: [{ sys_id: "x1" }, { sys_id: "x2" }],
+      sys_update_xml: [
+        { sys_id: "x1", update_set: SET_ID },
+        { sys_id: "x2", update_set: SET_ID },
+      ],
     },
   });
   const result = await updateSetState.run(ctx(http));
@@ -91,7 +75,7 @@ test("update-set-state: fails when set is still in progress", async () => {
       sys_update_set: [
         { sys_id: SET_ID, name: "WIP set", state: "in progress" },
       ],
-      sys_update_xml: [{ sys_id: "x1" }],
+      sys_update_xml: [{ sys_id: "x1", update_set: SET_ID }],
     },
   });
   const result = await updateSetState.run(ctx(http));
@@ -105,7 +89,7 @@ test("update-set-state: fails for the in_progress (underscore) variant", async (
       sys_update_set: [
         { sys_id: SET_ID, name: "WIP set", state: "in_progress" },
       ],
-      sys_update_xml: [{ sys_id: "x1" }],
+      sys_update_xml: [{ sys_id: "x1", update_set: SET_ID }],
     },
   });
   const result = await updateSetState.run(ctx(http));
@@ -134,7 +118,7 @@ test("update-set-state: warns when the set carries a base_update_set (merged)", 
           base_update_set: "us_base",
         },
       ],
-      sys_update_xml: [{ sys_id: "x1" }],
+      sys_update_xml: [{ sys_id: "x1", update_set: SET_ID }],
     },
   });
   const result = await updateSetState.run(ctx(http));
@@ -146,7 +130,7 @@ test("update-set-state: warns on an unrecognised state", async () => {
   const http = createFakeSnClient({
     tables: {
       sys_update_set: [{ sys_id: SET_ID, name: "Odd set", state: "weird" }],
-      sys_update_xml: [{ sys_id: "x1" }],
+      sys_update_xml: [{ sys_id: "x1", update_set: SET_ID }],
     },
   });
   const result = await updateSetState.run(ctx(http));
@@ -160,7 +144,7 @@ test("update-set-state: SN-3 — an 'ignore' set fails as explicitly do-not-migr
       sys_update_set: [
         { sys_id: SET_ID, name: "Do not ship", state: "ignore" },
       ],
-      sys_update_xml: [{ sys_id: "x1" }],
+      sys_update_xml: [{ sys_id: "x1", update_set: SET_ID }],
     },
   });
   const result = await updateSetState.run(ctx(http));
@@ -188,7 +172,6 @@ test("update-set-state: SN-2 — a complete parent fails on an in-progress child
       ],
       sys_update_xml: [{ sys_id: "x1", update_set: "us_child" }],
     },
-    queryFilter: routed,
   });
   const result = await updateSetState.run(ctx(http, "us_parent"));
   assert.equal(result.status, "fail");
@@ -216,7 +199,6 @@ test("update-set-state: SN-2 — a container parent with changed children is not
         { sys_id: "x2", update_set: "us_child" },
       ],
     },
-    queryFilter: routed,
   });
   const result = await updateSetState.run(ctx(http, "us_parent"));
   assert.equal(result.status, "pass");
@@ -247,7 +229,6 @@ test("update-set-state: SN-2 — recursion reaches an in-progress grandchild", a
         { sys_id: "x2", update_set: "us_grandchild" },
       ],
     },
-    queryFilter: routed,
   });
   const result = await updateSetState.run(ctx(http, "us_parent"));
   assert.equal(result.status, "fail");
@@ -270,7 +251,6 @@ test("update-set-state: batch form — an 'ignore' child fails and is named", as
       ],
       sys_update_xml: [{ sys_id: "x1", update_set: "us_child" }],
     },
-    queryFilter: routed,
   });
   const result = await updateSetState.run(ctx(http, "us_parent"));
   assert.equal(result.status, "fail");
@@ -294,7 +274,6 @@ test("update-set-state: batch form — all complete but 0 changes across the bat
       ],
       sys_update_xml: [],
     },
-    queryFilter: routed,
   });
   const result = await updateSetState.run(ctx(http, "us_parent"));
   assert.equal(result.status, "fail");
@@ -318,7 +297,6 @@ test("update-set-state: batch form — an unrecognised child state warns and is 
       ],
       sys_update_xml: [{ sys_id: "x1", update_set: "us_child" }],
     },
-    queryFilter: routed,
   });
   const result = await updateSetState.run(ctx(http, "us_parent"));
   assert.equal(result.status, "warn");
@@ -360,7 +338,7 @@ test("update-set-state: never throws — always returns a well-formed result", a
   const http = createFakeSnClient({
     tables: {
       sys_update_set: [{ sys_id: SET_ID, name: "Set", state: "complete" }],
-      sys_update_xml: [{ sys_id: "x1" }],
+      sys_update_xml: [{ sys_id: "x1", update_set: SET_ID }],
     },
   });
   const result = await updateSetState.run(ctx(http));
@@ -376,7 +354,7 @@ test("update-set-state: F-R-4 — an in-progress set emits one finding on sys_up
       sys_update_set: [
         { sys_id: SET_ID, name: "WIP set", state: "in progress" },
       ],
-      sys_update_xml: [{ sys_id: "x1" }],
+      sys_update_xml: [{ sys_id: "x1", update_set: SET_ID }],
     },
   });
   const result = await updateSetState.run(ctx(http));
@@ -421,7 +399,7 @@ test("update-set-state: F-R-4 — a passing set carries no findings", async () =
   const http = createFakeSnClient({
     tables: {
       sys_update_set: [{ sys_id: SET_ID, name: "My set", state: "complete" }],
-      sys_update_xml: [{ sys_id: "x1" }],
+      sys_update_xml: [{ sys_id: "x1", update_set: SET_ID }],
     },
   });
   const result = await updateSetState.run(ctx(http));

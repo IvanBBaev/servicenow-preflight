@@ -577,6 +577,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The test fake evaluates `sysparm_query`** (RR-2b) — `createFakeSnClient`
+  used to return every seeded row whatever the query said, so a check that
+  built a wrong query still passed its tests. It now selects rows through one
+  strict encoded-query interpreter (`^NQ`, then `^`, then `^OR`; `=`, `!=`,
+  `IN`, `STARTSWITH`, `LIKE`, `ISEMPTY`, `ISNOTEMPTY`, `RELATIVEGE`, `ORDERBY`,
+  `ORDERBYDESC`, `^EQ`) that throws `FakeQueryError` on anything else. Fixtures
+  must seed every column a query filters on; the new `now` fixture anchors
+  relative dates, and `queryFilter` is left for fault injection, running on the
+  rows the query already selected. The per-test matchers are gone.
+
 - **Auto-pagination no longer stops on a security-trimmed short page**
   (RR-1) — ServiceNow cuts the offset window before it drops ACL-denied rows,
   so a page can come back short while later windows still hold readable rows.

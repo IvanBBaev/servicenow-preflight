@@ -7,15 +7,12 @@ import {
 } from "../../build/checks/script-hygiene.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
 
-/**
- * The scope read carries a scope term; the cross-scope clash read is a bare
- * `nameIN…`. `others` are Script Includes in other scopes — visible only to
- * the clash read, as on a real instance.
- */
+/** `others` are Script Includes in another scope, seen only by the clash read. */
 function makeHttp({
   fixes = [],
   includes = [],
@@ -25,20 +22,11 @@ function makeHttp({
 } = {}) {
   return createFakeSnClient({
     tables: {
-      sys_script_fix: fixes,
-      sys_script_include: [...includes, ...others],
-    },
-    queryFilter(table, rows, params) {
-      if (table !== "sys_script_include") return rows;
-      const q = params?.sysparm_query ?? "";
-      const inMatch = /(?:^|\^)nameIN([^^]+)/.exec(q);
-      if (inMatch) {
-        const names = new Set(
-          inMatch[1].split(",").map((n) => n.toLowerCase()),
-        );
-        return rows.filter((r) => names.has(String(r.name).toLowerCase()));
-      }
-      return rows.filter((r) => !others.includes(r));
+      sys_script_fix: inScope(fixes, SCOPE),
+      sys_script_include: [
+        ...inScope(includes, SCOPE),
+        ...inScope(others, "x_other_app"),
+      ],
     },
     totalCounts,
     fail,

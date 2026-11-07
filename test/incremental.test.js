@@ -20,6 +20,7 @@ import {
 } from "../build/incremental.js";
 import { defaultChecks } from "../build/checks/index.js";
 import { createFakeSnClient } from "../build/http/fake.js";
+import { tracked } from "./helpers/seed.js";
 import { SnTruncationError } from "../build/http/client.js";
 import { reportOf } from "./helpers/json-report.js";
 
@@ -32,6 +33,8 @@ const GRANDCHILD = "22222222222222222222222222222222";
 const SCOPE_ID = "33333333333333333333333333333333";
 const HEX = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const NOW = new Date("2026-10-29T12:00:00Z");
+/** A `sys_updated_on` value between SINCE and NOW. */
+const CHANGED_ON = "2026-10-29 11:00:00";
 const SINCE = new Date("2026-10-28T12:00:00Z");
 const KNOWN = declaredTables(defaultChecks);
 
@@ -39,17 +42,14 @@ const check = (name, meta) => ({ name, meta, run: async () => ({}) });
 
 function ctxOf(tables, extra = {}) {
   const http = createFakeSnClient({
-    tables,
-    queryFilter(table, rows, params) {
-      const query = params?.sysparm_query ?? "";
-      if (table === "sys_update_set") {
-        return rows.filter((r) => query.includes(r.parent));
-      }
-      if (table === "sys_update_xml") {
-        return rows.filter((r) => query.includes(r.update_set));
-      }
-      return rows;
+    tables: {
+      ...tables,
+      sys_update_xml: tables.sys_update_xml?.map((row) => ({
+        sys_updated_on: CHANGED_ON,
+        ...row,
+      })),
     },
+    now: NOW,
   });
   return { instanceUrl: "https://x.service-now.com", http, ...extra };
 }
@@ -155,21 +155,28 @@ test("changedTables reads the update set and its batched children", async () => 
 });
 
 test("changedTables reads sys_metadata for a scope", async () => {
-  const seen = [];
-  const http = createFakeSnClient({
-    tables: {
-      sys_scope: [{ sys_id: SCOPE_ID, scope: "x_app" }],
-      sys_metadata: [
-        { sys_id: "1", sys_class_name: "sys_script_include" },
-        { sys_id: "2", sys_class_name: "sys_script_include" },
-        { sys_id: "3", sys_class_name: "sp_widget" },
-      ],
-    },
-    queryFilter(table, rows, params) {
-      seen.push([table, params?.sysparm_query]);
-      return rows;
-    },
-  });
+  const { http, calls } = tracked(
+    createFakeSnClient({
+      tables: {
+        sys_scope: [{ sys_id: SCOPE_ID, scope: "x_app" }],
+        sys_metadata: [
+          { sys_id: "1", sys_class_name: "sys_script_include" },
+          { sys_id: "2", sys_class_name: "sys_script_include" },
+          { sys_id: "3", sys_class_name: "sp_widget" },
+          {
+            sys_id: "4",
+            sys_class_name: "sys_ui_page",
+            sys_updated_on: "2026-10-01 00:00:00",
+          },
+        ].map((row) => ({
+          sys_scope: SCOPE_ID,
+          sys_updated_on: CHANGED_ON,
+          ...row,
+        })),
+      },
+      now: NOW,
+    }),
+  );
   const change = await changedTables(
     { instanceUrl: "https://x", http, scope: "x_app" },
     SINCE,
@@ -179,9 +186,10 @@ test("changedTables reads sys_metadata for a scope", async () => {
     tables: ["sp_widget", "sys_script_include"],
     source: "scope",
   });
-  const metadata = seen.find(([t]) => t === "sys_metadata");
-  assert.match(metadata[1], new RegExp(`sys_scope=${SCOPE_ID}`));
-  assert.match(metadata[1], /RELATIVEGE@minute@ago@1440/);
+  const metadata = calls.find((c) => c.table === "sys_metadata");
+  const query = metadata.params.sysparm_query;
+  assert.match(query, new RegExp(`sys_scope=${SCOPE_ID}`));
+  assert.match(query, /RELATIVEGE@minute@ago@1440/);
 });
 
 test("changedTables flags a truncated read and needs a source", async () => {

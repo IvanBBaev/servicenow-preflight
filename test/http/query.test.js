@@ -210,23 +210,10 @@ test("scopeFilterClause fails closed on an operator-bearing scope (SR-1)", () =>
 // resolveScope — name↔sys_id parity, fail-closed fallback, per-run caching
 // ---------------------------------------------------------------------------
 
-/** A fake `sys_scope` table that answers the resolver's `sys_id=…^ORscope=…` query. */
+/** A fake `sys_scope` table for the resolver's `sys_id=…^ORscope=…` query. */
 function scopeClient(rows) {
   return createFakeSnClient({
     tables: { sys_scope: rows },
-    queryFilter(table, seeded, params) {
-      if (table !== "sys_scope") return seeded;
-      const q = params?.sysparm_query ?? "";
-      const idMatch = /sys_id=([^^]+)/.exec(q);
-      const scopeMatch = /scope=([^^]+)/.exec(q);
-      const wantId = idMatch ? idMatch[1] : null;
-      const wantScope = scopeMatch ? scopeMatch[1] : null;
-      return seeded.filter(
-        (r) =>
-          (wantId !== null && r.sys_id === wantId) ||
-          (wantScope !== null && r.scope === wantScope),
-      );
-    },
   });
 }
 

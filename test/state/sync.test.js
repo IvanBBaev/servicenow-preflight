@@ -20,10 +20,6 @@ import {
  * two in-scope tests (one active, one inactive), one out-of-scope test, an
  * in-scope suite linking all three (the out-of-scope link must drop), a
  * global suite, and result rows so `withLastRun` has something to attach.
- *
- * `queryFilter` emulates the real instance: it honours `sys_scope.scope=` in
- * `sysparm_query`, and for `sys_atf_test_result` it filters by `test=` and
- * sorts newest-first (emulating `ORDERBYDESCsys_created_on`).
  */
 function seedRows() {
   return {
@@ -83,31 +79,8 @@ function seedRows() {
   };
 }
 
-/** A scope-and-result-aware `queryFilter` shared by the seeded fixtures. */
-function scopeAwareFilter(table, rows, params) {
-  const q = params?.sysparm_query ?? "";
-  if (table === "sys_atf_test_result") {
-    const m = /(?:^|\^)test=([^^]+)/.exec(q);
-    const testId = m?.[1];
-    const matched = testId ? rows.filter((r) => r.test === testId) : rows;
-    // Emulate ORDERBYDESCsys_created_on: newest first.
-    return [...matched].sort((a, b) =>
-      String(b.sys_created_on).localeCompare(String(a.sys_created_on)),
-    );
-  }
-  const sm = /(?:^|\^)sys_scope\.scope=([^^]+)/.exec(q);
-  if (sm) {
-    const scope = sm[1];
-    return rows.filter((r) => (r["sys_scope.scope"] ?? r.scope) === scope);
-  }
-  return rows;
-}
-
 function seededClient() {
-  return createFakeSnClient({
-    tables: seedRows(),
-    queryFilter: scopeAwareFilter,
-  });
+  return createFakeSnClient({ tables: seedRows() });
 }
 
 /**
@@ -268,7 +241,6 @@ test("pullManifest withLastRun leaves lastRun unset for a test with no result ro
       sys_atf_test_suite_test: [],
       sys_atf_test_result: [], // no runs for anyone
     },
-    queryFilter: scopeAwareFilter,
   });
   const m = await pullManifest(client, "dev", undefined, {
     scope: "x_acme_app",
@@ -432,7 +404,6 @@ test("pullManifest carries a coverage hint through onto the test state", async (
       sys_atf_test_suite: [],
       sys_atf_test_suite_test: [],
     },
-    queryFilter: scopeAwareFilter,
   });
   const m = await pullManifest(client, "dev", undefined, {
     scope: "x_acme_app",
@@ -526,7 +497,6 @@ test("pullManifest normalises assorted raw run statuses", async () => {
         },
       ],
     },
-    queryFilter: scopeAwareFilter,
   });
   const m = await pullManifest(client, "dev", undefined, { withLastRun: true });
   const byId = Object.fromEntries(m.tests.map((t) => [t.id, t.lastRun.status]));
@@ -601,7 +571,6 @@ test("pullManifest rejects two same-scope tests that slug to the same logical id
       sys_atf_test_suite: [],
       sys_atf_test_suite_test: [],
     },
-    queryFilter: scopeAwareFilter,
   });
   await assert.rejects(
     () => pullManifest(client, "dev", undefined, { scope: "x_acme_app" }),
@@ -626,7 +595,6 @@ test("syncManifest rejects two same-scope suites that slug to the same logical i
       ],
       sys_atf_test_suite_test: [],
     },
-    queryFilter: scopeAwareFilter,
   });
   await assert.rejects(
     () =>
@@ -735,7 +703,6 @@ test("syncManifest keeps the logical id stable when the instance reports a NEW s
   };
   const prodClient = createFakeSnClient({
     tables: reCreated,
-    queryFilter: scopeAwareFilter,
   });
 
   const second = await syncManifest(prodClient, "prod", undefined, committed, {
@@ -922,7 +889,6 @@ test("pullManifest propagates an auth failure from the very first read", async (
 test("pullManifest propagates a network failure scoped to the suite table", async () => {
   const client = createFakeSnClient({
     tables: seedRows(),
-    queryFilter: scopeAwareFilter,
     // Tests read fine; the suite read blows up mid-pull.
     fail: { table: { sys_atf_test_suite: { network: true } } },
   });
@@ -938,7 +904,6 @@ test("pullManifest propagates a network failure scoped to the suite table", asyn
 test("pullManifest withLastRun propagates a failure from the result table", async () => {
   const client = createFakeSnClient({
     tables: seedRows(),
-    queryFilter: scopeAwareFilter,
     fail: {
       table: {
         sys_atf_test_result: { http: 503, message: "result table down" },
@@ -1021,6 +986,7 @@ function versionSeedRows() {
     ],
     sys_plugins: [
       {
+        active: "true",
         sys_id: "pl1",
         id: "com.snc.incident",
         name: "Incident",
@@ -1028,6 +994,7 @@ function versionSeedRows() {
       },
       // No `id` value; the capture must fall back to `source`.
       {
+        active: "true",
         sys_id: "pl2",
         source: "com.snc.source_only",
         name: "Source Only",
@@ -1042,7 +1009,6 @@ function versionSeedRows() {
 function versionSeededClient() {
   return createFakeSnClient({
     tables: versionSeedRows(),
-    queryFilter: scopeAwareFilter,
   });
 }
 
@@ -1153,7 +1119,6 @@ test("app capture reads the INSTALLED version column, never latest_version (SN-5
   });
   const client = createFakeSnClient({
     tables: rows,
-    queryFilter: scopeAwareFilter,
   });
   const m = await pullManifest(client, "dev", undefined, {
     scope: "x_acme_app",
@@ -1194,7 +1159,6 @@ test("app capture dedupes by id with store > scoped app > plugin precedence (OPP
   });
   const client = createFakeSnClient({
     tables: rows,
-    queryFilter: scopeAwareFilter,
   });
   const m = await pullManifest(client, "dev", undefined, {
     scope: "x_acme_app",
@@ -1213,7 +1177,6 @@ test("app capture dedupes by id with store > scoped app > plugin precedence (OPP
 test("a security-trimmed app read drops the whole inventory — partial would mis-gate (SN-1/OPP-5)", async () => {
   const client = createFakeSnClient({
     tables: versionSeedRows(),
-    queryFilter: scopeAwareFilter,
     // More matching rows than visible ones on ONE of the three app tables.
     totalCounts: { sys_store_app: 10 },
   });
@@ -1231,7 +1194,6 @@ test("a security-trimmed app read drops the whole inventory — partial would mi
 test("a failing capture read records absence but the sync still succeeds (OPP-1/OPP-5)", async () => {
   const client = createFakeSnClient({
     tables: versionSeedRows(),
-    queryFilter: scopeAwareFilter,
     fail: {
       table: {
         sys_properties: { http: 403, message: "ACL denies sys_properties" },
@@ -1257,7 +1219,6 @@ test("blank property values are recorded as absent, never fabricated (OPP-1)", a
   ];
   const client = createFakeSnClient({
     tables: rows,
-    queryFilter: scopeAwareFilter,
   });
   const m = await pullManifest(client, "dev", undefined, {
     scope: "x_acme_app",

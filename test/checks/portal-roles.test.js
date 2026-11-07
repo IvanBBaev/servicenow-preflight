@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { portalRoles } from "../../build/checks/portal-roles.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
@@ -11,7 +12,10 @@ const INSTANCE = "https://dev12345.service-now.com";
 /** Assemble a fake client from widget / page fixtures plus options. */
 function makeHttp({ widgets = [], pages = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sp_widget: widgets, sp_page: pages },
+    tables: {
+      sp_widget: inScope(widgets, SCOPE),
+      sp_page: inScope(pages, SCOPE),
+    },
     totalCounts,
     fail,
   });

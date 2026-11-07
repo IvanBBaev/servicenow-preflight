@@ -3,33 +3,18 @@ import assert from "node:assert/strict";
 
 import { restEndpointSecurity } from "../../build/checks/rest-endpoint-security.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
-
-/**
- * Route the fake's single global query filter by table name. The backing-ACL
- * probe asks for `type=REST_Endpoint^active=true`, so `sys_security_acl` rows
- * are filtered down to exactly those — proving a differently-typed or inactive
- * ACL never satisfies the probe.
- */
-function queryFilter(table, rows) {
-  if (table === "sys_security_acl") {
-    return rows.filter(
-      (r) => r.type === "REST_Endpoint" && r.active === "true",
-    );
-  }
-  return rows;
-}
 
 /** Assemble a fake client from REST-operation / ACL fixtures plus options. */
 function makeHttp({ ops = [], acls = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
     tables: {
-      sys_ws_operation: ops,
-      sys_security_acl: acls,
+      sys_ws_operation: inScope(ops, SCOPE, { active: "true" }),
+      sys_security_acl: inScope(acls, SCOPE),
     },
-    queryFilter,
     totalCounts,
     fail,
   });

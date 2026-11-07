@@ -9,6 +9,7 @@ import {
   releaseFamily,
 } from "../../build/releases.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { tracked } from "../helpers/seed.js";
 
 const INSTANCE = "https://dev12345.service-now.com";
 const AUTH = { kind: "basic", user: "admin", pass: "secret" };
@@ -32,18 +33,15 @@ function props(buildName, war = WAR) {
  * defaults to the seeded row count (`null` omits it → ambiguous).
  */
 async function run(rows, { options, totalCount, fail, auth = AUTH } = {}) {
-  const calls = [];
   const counts =
     totalCount === null ? {} : { sys_properties: totalCount ?? rows.length };
-  const http = createFakeSnClient({
-    tables: { sys_properties: rows },
-    totalCounts: counts,
-    queryFilter: (table, tableRows, params) => {
-      calls.push({ table, params });
-      return tableRows;
-    },
-    fail,
-  });
+  const { http, calls } = tracked(
+    createFakeSnClient({
+      tables: { sys_properties: rows },
+      totalCounts: counts,
+      fail,
+    }),
+  );
   const result = await platformRelease.run({
     instanceUrl: INSTANCE,
     auth,

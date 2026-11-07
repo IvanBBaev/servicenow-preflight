@@ -7,6 +7,7 @@ import {
 } from "../../build/checks/inactive-artifacts.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { tablesInScope, tracked } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
@@ -22,14 +23,18 @@ function sid(n) {
  * Fake client. Every swept table gets a pre-trim count equal to its seeded
  * rows unless overridden (`null` omits the count to simulate an ambiguous read).
  */
-function makeHttp({ tables = {}, totalCounts = {}, fail, queryFilter } = {}) {
+function makeHttp({ tables = {}, totalCounts = {}, fail } = {}) {
   const counts = {};
   for (const t of TABLES) {
     const override = totalCounts[t];
     if (override === null) continue;
     counts[t] = override ?? tables[t]?.length ?? 0;
   }
-  return createFakeSnClient({ tables, totalCounts: counts, fail, queryFilter });
+  return createFakeSnClient({
+    tables: tablesInScope(tables, SCOPE, { active: "false" }),
+    totalCounts: counts,
+    fail,
+  });
 }
 
 function run(http, extra = {}) {
@@ -156,14 +161,9 @@ test("a clean but security-trimmed sweep warns rather than passes", async () => 
 });
 
 test("reads only active=false rows in scope and never a script body", async () => {
-  const seen = new Map();
-  const http = makeHttp({
-    queryFilter: (table, rows, params) => {
-      seen.set(table, params);
-      return rows;
-    },
-  });
+  const { http, calls } = tracked(makeHttp());
   await run(http);
+  const seen = new Map(calls.map((c) => [c.table, c.params]));
   for (const { table, nameField } of INACTIVE_ARTIFACT_TABLES) {
     const params = seen.get(table);
     assert.ok(params, table);

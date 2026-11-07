@@ -3,35 +3,21 @@ import assert from "node:assert/strict";
 
 import { clientCallableAcl } from "../../build/checks/client-callable-acl.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
-
-/**
- * Route the fake's single global query filter by table name. The ACL lookup
- * arrives as `type=client_callable_script_include^nameIN<a>,<b>,…` in chunked
- * batches, so `sys_security_acl` is filtered by the batch's name membership —
- * case-insensitively, the way the real encoded-query `IN` matches.
- */
-function queryFilter(table, rows, params) {
-  if (table === "sys_security_acl") {
-    const q = params?.sysparm_query ?? "";
-    const inMatch = /nameIN([^^]+)/.exec(q);
-    if (!inMatch) return rows;
-    const names = new Set(inMatch[1].split(",").map((n) => n.toLowerCase()));
-    return rows.filter((r) => names.has(String(r.name).toLowerCase()));
-  }
-  return rows;
-}
 
 /** Assemble a fake client from Script Include / ACL fixtures plus options. */
 function makeHttp({ sis = [], acls = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
     tables: {
-      sys_script_include: sis,
+      sys_script_include: inScope(sis, SCOPE, {
+        active: "true",
+        client_callable: "true",
+      }),
       sys_security_acl: acls,
     },
-    queryFilter,
     totalCounts,
     fail,
   });

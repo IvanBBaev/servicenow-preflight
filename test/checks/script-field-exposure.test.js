@@ -3,38 +3,18 @@ import assert from "node:assert/strict";
 
 import { scriptFieldExposure } from "../../build/checks/script-field-exposure.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
-
-/**
- * Route the fake's single global query filter by table name. The dictionary
- * read carries `internal_typeIN<a>,<b>,…` (only script-typed columns), and the
- * ACL read asks for `type=record^operation=write` — both are honoured here so
- * a non-script column or a read ACL seeded alongside never leaks through.
- */
-function queryFilter(table, rows, params) {
-  if (table === "sys_dictionary") {
-    const q = params?.sysparm_query ?? "";
-    const inMatch = /internal_typeIN([^^]+)/.exec(q);
-    if (!inMatch) return rows;
-    const types = new Set(inMatch[1].split(","));
-    return rows.filter((r) => types.has(String(r.internal_type)));
-  }
-  if (table === "sys_security_acl") {
-    return rows.filter((r) => r.type === "record" && r.operation === "write");
-  }
-  return rows;
-}
 
 /** Assemble a fake client from dictionary / ACL fixtures plus options. */
 function makeHttp({ columns = [], acls = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
     tables: {
-      sys_dictionary: columns,
-      sys_security_acl: acls,
+      sys_dictionary: inScope(columns, SCOPE),
+      sys_security_acl: inScope(acls, SCOPE),
     },
-    queryFilter,
     totalCounts,
     fail,
   });

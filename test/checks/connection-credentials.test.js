@@ -5,6 +5,7 @@ import { connectionCredentials } from "../../build/checks/connection-credentials
 import { defaultChecks } from "../../build/checks/index.js";
 import { RULE_TITLES } from "../../build/catalogue.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
@@ -31,10 +32,10 @@ function makeHttp({
 } = {}) {
   return createFakeSnClient({
     tables: {
-      discovery_credentials: creds,
-      sys_rest_message: messages,
-      sys_rest_message_fn: fns,
-      sys_alias: aliases,
+      discovery_credentials: inScope(creds, SCOPE),
+      sys_rest_message: inScope(messages, SCOPE),
+      sys_rest_message_fn: inScope(fns, SCOPE),
+      sys_alias: inScope(aliases, SCOPE),
     },
     totalCounts: { ...EMPTY_COUNTS, ...totalCounts },
     fail,

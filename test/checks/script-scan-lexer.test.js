@@ -9,6 +9,8 @@ import {
 } from "../../build/checks/script-scan.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
 
+const SCOPE_SYS_ID = "0123456789abcdef0123456789abcdef";
+
 /** Every view of `src` has one line per source line, each as long as the source line. */
 function assertShape(src, lexed) {
   const lines = src.split(/\r?\n/);
@@ -149,6 +151,8 @@ test("scanScripts tests each pattern against its own view", async () => {
         {
           sys_id: "s1",
           name: "R",
+          sys_scope: SCOPE_SYS_ID,
+          active: "true",
           script: "var s = 'eval(x)';\neval(y); // eval(z)",
         },
       ],
@@ -157,7 +161,7 @@ test("scanScripts tests each pattern against its own view", async () => {
   const re = /\beval\(/;
   const res = await scanScripts(
     { http },
-    "sys_scope=0123456789abcdef0123456789abcdef",
+    `sys_scope=${SCOPE_SYS_ID}`,
     [{ table: "sys_script", nameField: "name", scriptFields: ["script"] }],
     [
       { id: "code", regex: re },
@@ -179,6 +183,8 @@ test("scanScripts sets truncated when hits are dropped", async () => {
         {
           sys_id: "s1",
           name: "R",
+          sys_scope: SCOPE_SYS_ID,
+          active: "true",
           script: Array.from(
             { length: MAX_SCAN_HITS + 2 },
             () => "eval(1);",
@@ -189,7 +195,7 @@ test("scanScripts sets truncated when hits are dropped", async () => {
   });
   const res = await scanScripts(
     { http },
-    "sys_scope=0123456789abcdef0123456789abcdef",
+    `sys_scope=${SCOPE_SYS_ID}`,
     [{ table: "sys_script", nameField: "name", scriptFields: ["script"] }],
     [{ id: "eval", regex: /\beval\(/ }],
   );

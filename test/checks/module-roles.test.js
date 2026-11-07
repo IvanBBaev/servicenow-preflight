@@ -4,23 +4,13 @@ import assert from "node:assert/strict";
 import { moduleRoles } from "../../build/checks/module-roles.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
 const MENU_OPEN = "1".repeat(32);
 const MENU_GATED = "2".repeat(32);
 const MENU_GONE = "3".repeat(32);
-
-/** The menu lookup arrives as `sys_idIN<id>,<id>,…`. */
-function queryFilter(table, rows, params) {
-  if (table === "sys_app_application") {
-    const m = /sys_idIN([^^]+)/.exec(params?.sysparm_query ?? "");
-    if (!m) return rows;
-    const ids = new Set(m[1].split(","));
-    return rows.filter((r) => ids.has(r.sys_id));
-  }
-  return rows;
-}
 
 const MENUS = [
   { sys_id: MENU_OPEN, title: "Acme", roles: "" },
@@ -29,8 +19,10 @@ const MENUS = [
 
 function makeHttp({ modules = [], menus = MENUS, fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sys_app_module: modules, sys_app_application: menus },
-    queryFilter,
+    tables: {
+      sys_app_module: inScope(modules, SCOPE, { active: "true" }),
+      sys_app_application: menus,
+    },
     totalCounts,
     fail,
   });

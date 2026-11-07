@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { propertyPrivacy } from "../../build/checks/property-privacy.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope, tracked } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
@@ -14,11 +15,10 @@ function sid(n) {
 }
 
 /** Assemble a fake client from `sys_properties` fixtures plus options. */
-function makeHttp({ props = [], fail, totalCounts, queryFilter } = {}) {
+function makeHttp({ props = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sys_properties: props },
+    tables: { sys_properties: inScope(props, SCOPE, { active: "true" }) },
     totalCounts,
-    queryFilter,
     fail,
   });
 }
@@ -201,17 +201,11 @@ test("passes when every property is correctly typed and private", async () => {
 });
 
 test("queries only active properties in scope and never asks for the value", async () => {
-  const seen = [];
-  const http = makeHttp({
-    props: [PRIVATE_PW],
-    queryFilter: (table, rows, params) => {
-      if (table === "sys_properties") seen.push(params);
-      return rows;
-    },
-  });
+  const { http, calls } = tracked(makeHttp({ props: [PRIVATE_PW] }));
   await run(http);
-  assert.equal(seen.length, 1);
-  const [params] = seen;
+  const reads = calls.filter((c) => c.table === "sys_properties");
+  assert.equal(reads.length, 1);
+  const [{ params }] = reads;
   assert.match(params.sysparm_query, /sys_scope(\.scope)?=/);
   assert.match(params.sysparm_query, /(^|\^)active=true($|\^)/);
   assert.equal(params.sysparm_fields, "sys_id,name,type,is_private");

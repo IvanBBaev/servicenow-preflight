@@ -9,9 +9,11 @@ import {
   MAX_SCAN_HITS,
 } from "../../build/checks/script-scan.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { tablesInScope, tracked } from "../helpers/seed.js";
 import { findingId } from "../../build/findings.js";
 
-const CLAUSE = "sys_scope=0123456789abcdef0123456789abcdef";
+const SCOPE_SYS_ID = "0123456789abcdef0123456789abcdef";
+const CLAUSE = `sys_scope=${SCOPE_SYS_ID}`;
 const EVAL = { id: "eval", regex: /\beval\s*\(/ };
 const SOURCE = {
   table: "sys_script",
@@ -19,8 +21,16 @@ const SOURCE = {
   scriptFields: ["script"],
 };
 
-function ctxFor(fixtures) {
-  return { http: createFakeSnClient(fixtures) };
+function ctxFor({ tables, ...fixtures }) {
+  return {
+    http: createFakeSnClient({
+      ...fixtures,
+      tables: tablesInScope(tables, "x_app", {
+        sys_scope: SCOPE_SYS_ID,
+        active: "true",
+      }),
+    }),
+  };
 }
 
 test("codeLines keeps line count and drops // comment lines", () => {
@@ -100,17 +110,14 @@ test("scanScripts reports artifact, field and line — never the matched text", 
 });
 
 test("scanScripts builds a scoped, active-only query with the source fields", async () => {
-  const seen = [];
-  const ctx = ctxFor({
-    tables: { sys_ui_policy: [] },
-    totalCounts: { sys_ui_policy: 0 },
-    queryFilter(table, rows, params) {
-      seen.push({ table, params });
-      return rows;
-    },
-  });
+  const { http, calls: seen } = tracked(
+    ctxFor({
+      tables: { sys_ui_policy: [] },
+      totalCounts: { sys_ui_policy: 0 },
+    }).http,
+  );
   const res = await scanScripts(
-    ctx,
+    { http },
     CLAUSE,
     [
       {

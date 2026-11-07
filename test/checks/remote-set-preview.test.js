@@ -7,30 +7,6 @@ import { createFakeSnClient } from "../../build/http/fake.js";
 const INSTANCE = "https://dev12345.service-now.com";
 const AUTH = { kind: "basic", user: "admin", pass: "secret" };
 
-/**
- * Route the fake's single global query filter by table name:
- * - `sys_remote_update_set` honours the check's static `state!=committed`
- *   filter, so committed history stays out of the read the way the real
- *   instance would keep it out;
- * - `sys_update_preview_problem` honours the batched
- *   `remote_update_setIN<id1>,<id2>,…` membership clause (SN-6), yielding every
- *   seeded problem whose set is in the batch.
- */
-function queryFilter(table, rows, params) {
-  const q = params?.sysparm_query ?? "";
-  if (table === "sys_remote_update_set" && q.includes("state!=committed")) {
-    return rows.filter((r) => r.state !== "committed");
-  }
-  if (table === "sys_update_preview_problem") {
-    const inMatch = /remote_update_setIN([^^]+)/.exec(q);
-    if (inMatch) {
-      const ids = new Set(inMatch[1].split(","));
-      return rows.filter((r) => ids.has(r.remote_update_set));
-    }
-  }
-  return rows;
-}
-
 /** Assemble a fake client from remote-set / problem fixtures plus overrides. */
 function makeHttp({ remoteSets = [], problems = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
@@ -42,7 +18,6 @@ function makeHttp({ remoteSets = [], problems = [], fail, totalCounts } = {}) {
     // reference object, never a bare string — force that shape so the check's
     // reference unwrapping is exercised, not bypassed.
     referenceFields: { sys_update_preview_problem: ["remote_update_set"] },
-    queryFilter,
     totalCounts,
     fail,
   });

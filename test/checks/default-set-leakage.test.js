@@ -45,45 +45,6 @@ function update(setId, targetName, extra = {}) {
   };
 }
 
-/**
- * Route the fake's single global query filter by table name, emulating the
- * encoded queries the check issues: the resolver's `sys_id=…^ORscope=…` lookup
- * on `sys_scope`, the `is_default=true` filter on `sys_update_set`, and the
- * `update_setIN…^application…` membership query on `sys_update_xml` (both the
- * resolved `application=<sysId>` form and the dot-walked
- * `application.scope=<name>` fallback).
- */
-function queryFilter(table, rows, params) {
-  const q = params?.sysparm_query ?? "";
-  if (table === "sys_scope") {
-    const wanted = [...q.matchAll(/(?:sys_id|scope)=([^^]+)/g)].map(
-      (m) => m[1],
-    );
-    return rows.filter(
-      (r) => wanted.includes(r.sys_id) || wanted.includes(r.scope),
-    );
-  }
-  if (table === "sys_update_set") {
-    if (/(?:^|\^)is_default=true(?:$|\^)/.test(q)) {
-      return rows.filter((r) => String(r.is_default) === "true");
-    }
-    return rows;
-  }
-  if (table === "sys_update_xml") {
-    const inMatch = /update_setIN([^^]+)/.exec(q);
-    const setIds = inMatch ? new Set(inMatch[1].split(",")) : null;
-    const appEq = /(?:^|\^)application=([^^]+)/.exec(q);
-    const appScope = /(?:^|\^)application\.scope=([^^]+)/.exec(q);
-    return rows.filter((r) => {
-      if (setIds && !setIds.has(r.update_set)) return false;
-      if (appEq && r.application !== appEq[1]) return false;
-      if (appScope && r["application.scope"] !== appScope[1]) return false;
-      return true;
-    });
-  }
-  return rows;
-}
-
 /** Assemble a fake client from scope / update-set / update fixtures. */
 function makeHttp({
   scopes = [scopeRow()],
@@ -98,7 +59,6 @@ function makeHttp({
       sys_update_set: sets,
       sys_update_xml: updates,
     },
-    queryFilter,
     totalCounts,
     fail,
   });

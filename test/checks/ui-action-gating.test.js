@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { uiActionGating } from "../../build/checks/ui-action-gating.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
@@ -13,26 +14,13 @@ function sid(n) {
   return n.toString(16).padStart(32, "0");
 }
 
-/**
- * Route the fake's single global query filter by table name: the role lookup
- * arrives as `sys_ui_actionIN<id>,<id>,…` in chunked batches.
- */
-function queryFilter(table, rows, params) {
-  if (table === "sys_ui_action_role") {
-    const q = params?.sysparm_query ?? "";
-    const inMatch = /sys_ui_actionIN([^^]+)/.exec(q);
-    if (!inMatch) return rows;
-    const ids = new Set(inMatch[1].split(","));
-    return rows.filter((r) => ids.has(String(r.sys_ui_action)));
-  }
-  return rows;
-}
-
 /** Assemble a fake client from UI Action / role-link fixtures plus options. */
 function makeHttp({ actions = [], links = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sys_ui_action: actions, sys_ui_action_role: links },
-    queryFilter,
+    tables: {
+      sys_ui_action: inScope(actions, SCOPE, { active: "true" }),
+      sys_ui_action_role: links,
+    },
     totalCounts,
     fail,
   });

@@ -11,6 +11,7 @@ import {
 import { instanceUrlConfigured } from "../build/api/checks.js";
 import { resolveScope } from "../build/api/http.js";
 import { createFakeSnClient } from "../build/http/fake.js";
+import { tracked } from "./helpers/seed.js";
 
 /** A minimal context with the injected (fake) client every run requires. */
 function ctx(extra = {}) {
@@ -548,14 +549,11 @@ test("runPreflight rejects a budget that is not a positive finite number", async
 });
 
 test("the scope lookup is shared across checks, but redone after a cancelled check", async () => {
-  let reads = 0;
-  const http = createFakeSnClient({
-    tables: { sys_scope: [{ sys_id: "a".repeat(32), scope: "x_app" }] },
-    queryFilter: (table, rows) => {
-      if (table === "sys_scope") reads += 1;
-      return rows;
-    },
-  });
+  const { http, calls } = tracked(
+    createFakeSnClient({
+      tables: { sys_scope: [{ sys_id: "a".repeat(32), scope: "x_app" }] },
+    }),
+  );
   const usesScope = (id) => ({
     name: id,
     description: id,
@@ -569,18 +567,15 @@ test("the scope lookup is shared across checks, but redone after a cancelled che
     usesScope("two"),
   ]);
   assert.equal(report.ok, true);
-  assert.equal(reads, 1);
+  assert.equal(calls.length, 1);
 
   // A check that starts the lookup and then times out poisons nothing: the
   // next check resolves the scope afresh rather than reusing the aborted entry.
-  reads = 0;
-  const slowHttp = createFakeSnClient({
-    tables: { sys_scope: [{ sys_id: "b".repeat(32), scope: "x_app" }] },
-    queryFilter: (table, rows) => {
-      if (table === "sys_scope") reads += 1;
-      return rows;
-    },
-  });
+  const slow = tracked(
+    createFakeSnClient({
+      tables: { sys_scope: [{ sys_id: "b".repeat(32), scope: "x_app" }] },
+    }),
+  );
   const starter = {
     name: "starter",
     description: "starter",
@@ -590,12 +585,12 @@ test("the scope lookup is shared across checks, but redone after a cancelled che
     },
   };
   const second = await runPreflight(
-    { http: slowHttp },
+    { http: slow.http },
     [starter, usesScope("next")],
     { timeoutMs: 20 },
   );
   assert.equal(second.results[1].status, "pass");
-  assert.equal(reads, 2);
+  assert.equal(slow.calls.length, 2);
 });
 
 // F-X-3: bounded concurrent check execution.

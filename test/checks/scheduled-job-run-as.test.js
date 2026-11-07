@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { scheduledJobRunAs } from "../../build/checks/scheduled-job-run-as.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
@@ -10,7 +11,7 @@ const INSTANCE = "https://dev12345.service-now.com";
 /** Assemble a fake client from Scheduled Job fixtures plus options. */
 function makeHttp({ jobs = [], fail, totalCounts, referenceFields } = {}) {
   return createFakeSnClient({
-    tables: { sysauto_script: jobs },
+    tables: { sysauto_script: inScope(jobs, SCOPE) },
     totalCounts,
     referenceFields,
     fail,

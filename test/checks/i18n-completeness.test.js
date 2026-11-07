@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { i18nCompleteness } from "../../build/checks/i18n-completeness.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const INSTANCE = "https://dev12345.service-now.com";
 const SCOPE = "x_acme_app";
@@ -10,29 +11,28 @@ const SCOPE = "x_acme_app";
 /**
  * Build a fake whose per-language coverage is driven by explicit KEY lists (not
  * row counts). Coverage is measured per key now, so each language maps to the
- * set of `sys_ui_message.key` values it translates. The queryFilter parses the
- * language out of the `sys_scope=...^language=...` query and yields one row per
- * key; the other translation tables return nothing.
+ * set of `sys_ui_message.key` values it translates, seeded as one in-scope row
+ * per key; the other translation tables stay empty.
  *
  *   keyClient({ fr: ["a", "b", "c"], de: ["a", "b"] })
  */
 function keyClient(perLanguage) {
   return createFakeSnClient({
-    // A schema row so `key` is a known column the fake will project.
     tables: {
-      sys_ui_message: [{ sys_id: "seed", key: "seed", language: "seed" }],
-    },
-    queryFilter(table, _rows, params) {
-      if (table !== "sys_ui_message") return [];
-      const query = params?.sysparm_query ?? "";
-      const match = /language=([^^]+)/.exec(query);
-      const language = match ? match[1] : "";
-      const keys = perLanguage[language] ?? [];
-      return keys.map((k, i) => ({
-        sys_id: `${language}-${i}`,
-        key: k,
-        language,
-      }));
+      sys_ui_message: inScope(
+        [
+          // A schema row so `key` is a known column the fake will project.
+          { sys_id: "seed", key: "seed", language: "seed" },
+          ...Object.entries(perLanguage).flatMap(([language, keys]) =>
+            keys.map((key, i) => ({
+              sys_id: `${language}-${i}`,
+              key,
+              language,
+            })),
+          ),
+        ],
+        SCOPE,
+      ),
     },
   });
 }
@@ -48,22 +48,20 @@ function keyClient(perLanguage) {
 function docClient(perLanguage) {
   return createFakeSnClient({
     tables: {
-      sys_documentation: [
-        { sys_id: "seed", name: "seed", element: "seed", language: "seed" },
-      ],
-    },
-    queryFilter(table, _rows, params) {
-      if (table !== "sys_documentation") return [];
-      const query = params?.sysparm_query ?? "";
-      const match = /language=([^^]+)/.exec(query);
-      const language = match ? match[1] : "";
-      const units = perLanguage[language] ?? [];
-      return units.map(([name, element], i) => ({
-        sys_id: `${language}-${i}`,
-        name,
-        element,
-        language,
-      }));
+      sys_documentation: inScope(
+        [
+          { sys_id: "seed", name: "seed", element: "seed", language: "seed" },
+          ...Object.entries(perLanguage).flatMap(([language, units]) =>
+            units.map(([name, element], i) => ({
+              sys_id: `${language}-${i}`,
+              name,
+              element,
+              language,
+            })),
+          ),
+        ],
+        SCOPE,
+      ),
     },
   });
 }

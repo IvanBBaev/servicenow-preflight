@@ -3,30 +3,18 @@ import assert from "node:assert/strict";
 
 import { mobileMenuHygiene } from "../../build/checks/mobile-menu-hygiene.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
-
-/**
- * The check queries `device_type=mobile` on both tables, so the filter honours
- * it — proving a browser-device menu seeded alongside never becomes a finding.
- */
-function queryFilter(table, rows, params) {
-  const q = params?.sysparm_query ?? "";
-  if (/device_type=mobile/.test(q)) {
-    return rows.filter((r) => r.device_type === "mobile");
-  }
-  return rows;
-}
 
 /** Assemble a fake client from menu / module fixtures plus options. */
 function makeHttp({ menus = [], modules = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
     tables: {
-      sys_app_application: menus,
-      sys_app_module: modules,
+      sys_app_application: inScope(menus, SCOPE),
+      sys_app_module: inScope(modules, SCOPE),
     },
-    queryFilter,
     totalCounts,
     fail,
   });

@@ -15,6 +15,9 @@
  *   via `sysparm_fields`, and only when the fixture seeded that exact key.
  * - **Unknown `sysparm_fields` names are dropped** (ServiceNow silently
  *   ignores column names it does not recognise).
+ * - **`sysparm_query` is evaluated** by the strict interpreter in
+ *   `fake-query.ts`: a row is returned only if it matches, a column the row
+ *   did not seed reads empty, and an operator outside the model throws.
  *
  * @example
  * ```js
@@ -44,6 +47,7 @@
  */
 
 import { diagnoseAuthFailure } from "./diagnose.js";
+import { applyEncodedQuery } from "./fake-query.js";
 import {
   SnAuthError,
   SnError,
@@ -119,10 +123,11 @@ export interface ForcedFailure {
 export interface FakeFixtures {
   /**
    * Seed rows per table name. Each row SHOULD carry a `sys_id`; `table().get`
-   * matches on it, `table().query` returns rows (optionally filtered — see
-   * `queryFilter`). Values are seeded in their "plain" form; the fake applies
-   * the Table API shape (reference wrapping, `""` empties, field projection)
-   * on the way out — see the file header.
+   * matches on it, `table().query` returns the rows `sysparm_query` selects
+   * (see `src/http/fake-query.ts`), so a row must seed every column the query
+   * under test filters on. Values are seeded in their "plain" form; the fake
+   * applies the Table API shape (reference wrapping, `""` empties, field
+   * projection) on the way out — see the file header.
    */
   tables?: Record<string, Record<string, unknown>[]>;
   /** Canned CI/CD responses. */
@@ -136,10 +141,10 @@ export interface FakeFixtures {
    */
   requests?: Record<string, SnRawResponse>;
   /**
-   * Optional per-table query filter. Given the `sysparm_*` params, return the
-   * rows to yield. It runs on the **raw** seeded rows (before the Table API
-   * shape is applied), so it can match on plain string fields. Defaults to
-   * returning all seeded rows for the table.
+   * Fault injection only: rewrite the rows of a read, for a condition seeding
+   * cannot express (a row appearing between two reads, a page coming back
+   * different). It runs on the **raw** rows `sysparm_query` already selected,
+   * before the Table API shape is applied. Do not use it to model a query.
    */
   queryFilter?: (
     table: string,
@@ -160,6 +165,8 @@ export interface FakeFixtures {
    * shape without editing the fake.
    */
   referenceFields?: Record<string, string[]>;
+  /** The instant relative date operators resolve against; defaults to now. */
+  now?: Date;
   /** Force failures — globally or scoped to a table / cicd op. */
   fail?: ForcedFailure & {
     table?: Record<string, ForcedFailure>;
@@ -254,6 +261,19 @@ function wrapReference(table: string, raw: unknown): unknown {
 function coerceScalar(raw: unknown): unknown {
   if (raw === undefined || raw === null) return "";
   return raw;
+}
+
+/**
+ * The plain string an encoded query compares for `field`: a reference by its
+ * `value`, a dot-walked field by its seeded key. An unseeded column reads `""`,
+ * so a row only matches a filter on a column it really seeded.
+ */
+function fieldValue(row: Record<string, unknown>, field: string): string {
+  const raw = row[field];
+  if (raw && typeof raw === "object") {
+    return primitiveToString((raw as { value?: unknown }).value);
+  }
+  return primitiveToString(raw);
 }
 
 /**
@@ -402,13 +422,21 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
     table(name: string): SnTable {
       const refs = referenceFieldsFor(name, fixtures.referenceFields);
       const tablePath = `/api/now/table/${name}`;
-      // Raw seeded rows for this query — narrowed by `queryFilter` when one is
-      // supplied. The filter sees the un-shaped rows so it can match plain
-      // string fields (e.g. `sys_scope`), the way a real query encodes them.
+      // Raw seeded rows for this query: `sysparm_query` selects them the way an
+      // instance would, then `queryFilter` may inject a fault. Both see the
+      // un-shaped rows, so references compare by their plain value.
       const rawRows = (
         params?: Record<string, string>,
       ): Record<string, unknown>[] => {
-        const rows = tableRows(name);
+        const query = params?.sysparm_query;
+        const rows = paramPresent(query)
+          ? applyEncodedQuery(
+              query,
+              tableRows(name),
+              fieldValue,
+              (fixtures.now ?? new Date()).getTime(),
+            )
+          : tableRows(name);
         return fixtures.queryFilter
           ? fixtures.queryFilter(name, rows, params)
           : rows;

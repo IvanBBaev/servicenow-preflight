@@ -4,19 +4,11 @@ import assert from "node:assert/strict";
 import { aclOutOfScope } from "../../build/checks/acl-out-of-scope.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const SCOPE_SYS_ID = "b".repeat(32);
 const INSTANCE = "https://dev12345.service-now.com";
-
-/** Filter ACLs by the `type=` term the check sends, like the real query. */
-function queryFilter(table, rows, params) {
-  if (table === "sys_security_acl") {
-    const type = /(?:^|\^)type=([^^]+)/.exec(params?.sysparm_query ?? "")?.[1];
-    return type === undefined ? rows : rows.filter((r) => r.type === type);
-  }
-  return rows;
-}
 
 /** Assemble a fake client from ACL / table / scope fixtures plus options. */
 function makeHttp({
@@ -28,11 +20,10 @@ function makeHttp({
 } = {}) {
   return createFakeSnClient({
     tables: {
-      sys_security_acl: acls,
-      sys_db_object: tables,
+      sys_security_acl: inScope(acls, SCOPE, { sys_scope: SCOPE_SYS_ID }),
+      sys_db_object: inScope(tables, SCOPE, { sys_scope: SCOPE_SYS_ID }),
       sys_scope: scopes,
     },
-    queryFilter,
     totalCounts,
     fail,
   });

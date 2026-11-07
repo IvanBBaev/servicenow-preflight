@@ -8,9 +8,21 @@ const INSTANCE = "https://dev12345.service-now.com";
 
 /** Build a context around a fake client with the given fixtures + options. */
 function ctx({ fixtures = {}, options } = {}) {
+  // Test rows hang off the run the single-suite fixture reports.
+  const resultId = fixtures.cicd?.runTestSuite?.resultId;
+  const results = fixtures.tables?.sys_atf_test_result?.map((row) => ({
+    test_suite_result: resultId,
+    ...row,
+  }));
   return {
     instanceUrl: INSTANCE,
-    http: createFakeSnClient(fixtures),
+    http: createFakeSnClient({
+      ...fixtures,
+      tables: {
+        ...fixtures.tables,
+        ...(results ? { sys_atf_test_result: results } : {}),
+      },
+    }),
     options,
   };
 }
@@ -145,10 +157,24 @@ test("warns when the run is still pending", async () => {
 });
 
 test("evaluates every suite in a multi-suite list; one red => fail", async () => {
-  // queryFilter lets us return per-suite rows keyed off the scoped query.
   const rowsBySuite = {
-    "run-1": [{ sys_id: "a", test: "T1", status: "success" }],
-    "run-2": [{ sys_id: "b", test: "T2", status: "failure", output: "boom" }],
+    "run-1": [
+      {
+        sys_id: "a",
+        test: "T1",
+        status: "success",
+        test_suite_result: "run-1",
+      },
+    ],
+    "run-2": [
+      {
+        sys_id: "b",
+        test: "T2",
+        status: "failure",
+        output: "boom",
+        test_suite_result: "run-2",
+      },
+    ],
   };
   const result = await atfRun.run({
     instanceUrl: INSTANCE,
@@ -162,12 +188,6 @@ test("evaluates every suite in a multi-suite list; one red => fail", async () =>
       },
       tables: {
         sys_atf_test_result: [...rowsBySuite["run-1"], ...rowsBySuite["run-2"]],
-      },
-      queryFilter: (table, rows, params) => {
-        const q = params?.sysparm_query ?? "";
-        const match = q.match(/test_suite_result=(\S+)/);
-        const runId = match ? match[1] : undefined;
-        return runId && rowsBySuite[runId] ? rowsBySuite[runId] : rows;
       },
     }),
   });
@@ -382,13 +402,21 @@ test("SN-8 — a red test in a nested child suite fails the run", async () => {
   // suite (linked via sys_atf_test_suite_result.parent) holds a red test. The
   // run must union the child result ids, not scope only to the root.
   const testRows = {
-    "run-root": [{ sys_id: "t-root", test: "Root smoke", status: "success" }],
+    "run-root": [
+      {
+        sys_id: "t-root",
+        test: "Root smoke",
+        status: "success",
+        test_suite_result: "run-root",
+      },
+    ],
     "run-child": [
       {
         sys_id: "t-child",
         test: "Nested assertion",
         status: "failure",
         output: "nested boom",
+        test_suite_result: "run-child",
       },
     ],
   };
@@ -405,18 +433,6 @@ test("SN-8 — a red test in a nested child suite fails the run", async () => {
           ...testRows["run-root"],
           ...testRows["run-child"],
         ],
-      },
-      queryFilter: (table, rows, params) => {
-        const q = params?.sysparm_query ?? "";
-        if (table === "sys_atf_test_suite_result") {
-          const m = /parent=(\S+)/.exec(q);
-          return m ? rows.filter((r) => String(r.parent ?? "") === m[1]) : [];
-        }
-        if (table === "sys_atf_test_result") {
-          const m = /test_suite_result=(\S+)/.exec(q);
-          return m ? (testRows[m[1]] ?? []) : rows;
-        }
-        return rows;
       },
     }),
   });

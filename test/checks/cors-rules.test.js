@@ -5,6 +5,7 @@ import { corsRules } from "../../build/checks/cors-rules.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { RULE_TITLES } from "../../build/catalogue.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
@@ -13,7 +14,7 @@ const SENTINEL = "SENTINEL_9f3a";
 /** Assemble a fake client from CORS rule fixtures plus options. */
 function makeHttp({ rules = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sys_cors_rule: rules },
+    tables: { sys_cors_rule: inScope(rules, SCOPE, { active: "true" }) },
     totalCounts,
     fail,
   });

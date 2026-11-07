@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { atfEnablement } from "../../build/checks/atf-enablement.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { tracked } from "../helpers/seed.js";
 
 const INSTANCE = "https://dev12345.service-now.com";
 const AUTH = { kind: "basic", user: "admin", pass: "secret" };
@@ -49,29 +50,25 @@ test("normalises the property value (case / whitespace) before comparing", async
 });
 
 test("queries sys_properties by name through the validated builder", async () => {
-  // The fake ignores sysparm_query unless a queryFilter enforces it; this
-  // mirrors the real filter, so an unrelated property row is excluded by the
-  // query itself and only the sn_atf.runner.enabled row decides the verdict.
-  const result = await atfEnablement.run({
-    instanceUrl: INSTANCE,
-    auth: AUTH,
-    http: createFakeSnClient({
+  // An unrelated property row is excluded by the query itself, so only the
+  // sn_atf.runner.enabled row decides the verdict.
+  const { http, calls } = tracked(
+    createFakeSnClient({
       tables: {
         sys_properties: [
           { sys_id: "other", name: "some.other.property", value: "false" },
           enabledProperty("true"),
         ],
       },
-      queryFilter(table, rows, params) {
-        if (table === "sys_properties") {
-          assert.equal(params?.sysparm_query, "name=sn_atf.runner.enabled");
-          return rows.filter((r) => r.name === "sn_atf.runner.enabled");
-        }
-        return rows;
-      },
     }),
+  );
+  const result = await atfEnablement.run({
+    instanceUrl: INSTANCE,
+    auth: AUTH,
+    http,
   });
   assert.equal(result.status, "pass");
+  assert.equal(calls[0].params.sysparm_query, "name=sn_atf.runner.enabled");
 });
 
 test("fails when the property is explicitly false and a suite is configured", async () => {
@@ -170,21 +167,18 @@ test("warns (unverified) when sys_properties is security-trimmed (OPP-2)", async
 });
 
 test("does not query sys_atf_agent when the client-runner gate is not configured", async () => {
-  const queried = [];
-  const http = createFakeSnClient({
-    tables: { sys_properties: [enabledProperty("true")], sys_atf_agent: [] },
-    queryFilter(table, rows) {
-      queried.push(table);
-      return rows;
-    },
-  });
+  const { http, calls } = tracked(
+    createFakeSnClient({
+      tables: { sys_properties: [enabledProperty("true")], sys_atf_agent: [] },
+    }),
+  );
   const result = await atfEnablement.run({
     instanceUrl: INSTANCE,
     auth: AUTH,
     http,
   });
   assert.equal(result.status, "pass");
-  assert.ok(!queried.includes("sys_atf_agent"));
+  assert.ok(!calls.some((c) => c.table === "sys_atf_agent"));
 });
 
 test("skips the client-runner gate when requireClientTestRunner is false", async () => {
@@ -257,11 +251,9 @@ test("fails when the gate is required and no scheduled runner is online", async 
 
 test("filters agents to type=scheduled AND status=online via the query", async () => {
   // An offline scheduled runner and an online manual one must not satisfy the
-  // gate; the queryFilter enforces the exact encoded query the check sends.
-  const result = await atfEnablement.run({
-    instanceUrl: INSTANCE,
-    auth: AUTH,
-    http: createFakeSnClient({
+  // gate.
+  const { http, calls } = tracked(
+    createFakeSnClient({
       tables: {
         sys_properties: [enabledProperty("true")],
         sys_atf_agent: [
@@ -269,18 +261,18 @@ test("filters agents to type=scheduled AND status=online via the query", async (
           agent("a2", "manual", "online"),
         ],
       },
-      queryFilter(table, rows, params) {
-        if (table === "sys_atf_agent") {
-          assert.equal(params?.sysparm_query, "type=scheduled^status=online");
-          return rows.filter(
-            (r) => r.type === "scheduled" && r.status === "online",
-          );
-        }
-        return rows;
-      },
     }),
+  );
+  const result = await atfEnablement.run({
+    instanceUrl: INSTANCE,
+    auth: AUTH,
+    http,
     options: { atfEnablement: { requireClientTestRunner: true } },
   });
+  assert.equal(
+    calls.find((c) => c.table === "sys_atf_agent").params.sysparm_query,
+    "type=scheduled^status=online",
+  );
   assert.equal(result.status, "fail");
   assert.match(result.message, /no scheduled client test runner is online/);
 });

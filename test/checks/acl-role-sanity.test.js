@@ -3,32 +3,10 @@ import assert from "node:assert/strict";
 
 import { aclRoleSanity } from "../../build/checks/acl-role-sanity.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
-
-/**
- * Route the fake's single global query filter by table name. `sys_security_acl`
- * and `sys_user_role` return all seeded rows; the m2m `sys_security_acl_role`
- * is now read in ONE batched query per chunk of ACL ids (SN-6), so it is
- * filtered by the `sys_security_aclIN<id1>,<id2>,…` membership clause the check
- * queries with — yielding every seeded link whose ACL is in the batch. (The
- * legacy per-ACL `sys_security_acl=<id>` form is still honoured for safety.)
- */
-function queryFilter(table, rows, params) {
-  if (table === "sys_security_acl_role") {
-    const q = params?.sysparm_query ?? "";
-    const inMatch = /sys_security_aclIN([^^]+)/.exec(q);
-    if (inMatch) {
-      const ids = new Set(inMatch[1].split(","));
-      return rows.filter((r) => ids.has(r.sys_security_acl));
-    }
-    const match = /sys_security_acl=([^^]+)/.exec(q);
-    const aclId = match ? match[1] : "";
-    return rows.filter((r) => r.sys_security_acl === aclId);
-  }
-  return rows;
-}
 
 /** Assemble a fake client from ACL / link / role fixtures plus optional fail. */
 function makeHttp({
@@ -40,11 +18,10 @@ function makeHttp({
 } = {}) {
   return createFakeSnClient({
     tables: {
-      sys_security_acl: acls,
+      sys_security_acl: inScope(acls, SCOPE),
       sys_security_acl_role: links,
       sys_user_role: roles,
     },
-    queryFilter,
     totalCounts,
     fail,
   });

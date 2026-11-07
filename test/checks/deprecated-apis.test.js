@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { deprecatedApis } from "../../build/checks/deprecated-apis.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { tablesInScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
@@ -29,7 +30,11 @@ function makeHttp({ tables = {}, totalCounts = {}, fail } = {}) {
     if (override === null) continue;
     counts[t] = override ?? tables[t]?.length ?? 0;
   }
-  return createFakeSnClient({ tables, totalCounts: counts, fail });
+  return createFakeSnClient({
+    tables: tablesInScope(tables, SCOPE, { active: "true" }),
+    totalCounts: counts,
+    fail,
+  });
 }
 
 function run(http, extra = {}) {

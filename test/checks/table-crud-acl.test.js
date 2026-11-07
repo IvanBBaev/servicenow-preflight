@@ -4,39 +4,16 @@ import assert from "node:assert/strict";
 import { tableCrudAcl } from "../../build/checks/table-crud-acl.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
 const CRUD = ["create", "read", "write", "delete"];
 
-/**
- * Route the fake's single global query filter by table name. The ACL lookup
- * arrives as `type=record^nameIN<a>,<b>,…` in chunked batches, so
- * `sys_security_acl` is filtered by type and by the batch's name membership —
- * case-insensitively, the way the real encoded-query `IN` matches.
- */
-function queryFilter(table, rows, params) {
-  if (table === "sys_security_acl") {
-    const q = params?.sysparm_query ?? "";
-    const inMatch = /nameIN([^^]+)/.exec(q);
-    const type = /(?:^|\^)type=([^^]+)/.exec(q)?.[1];
-    const names = inMatch
-      ? new Set(inMatch[1].split(",").map((n) => n.toLowerCase()))
-      : undefined;
-    return rows.filter(
-      (r) =>
-        (type === undefined || r.type === type) &&
-        (!names || names.has(String(r.name).toLowerCase())),
-    );
-  }
-  return rows;
-}
-
 /** Assemble a fake client from table / ACL fixtures plus options. */
 function makeHttp({ tables = [], acls = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sys_db_object: tables, sys_security_acl: acls },
-    queryFilter,
+    tables: { sys_db_object: inScope(tables, SCOPE), sys_security_acl: acls },
     totalCounts,
     fail,
   });

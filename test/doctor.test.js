@@ -151,7 +151,9 @@ test("doctor passes the basic-auth and account rows when the role is present", a
     tables: {
       sys_properties: restrictionOn(),
       sys_user: account(),
-      sys_user_has_role: [{ sys_id: ROLE_ROW }],
+      sys_user_has_role: [
+        { sys_id: ROLE_ROW, user: USER_ID, "role.name": BASIC_AUTH_ROLE },
+      ],
     },
   });
   const { row } = await doctor({ http });
@@ -413,7 +415,9 @@ test("CLI doctor --json prints a well-formed envelope and makes only GETs", asyn
   const instance = await startInstance({
     sys_properties: restrictionOn(),
     sys_user: account(),
-    sys_user_has_role: [{ sys_id: ROLE_ROW }],
+    sys_user_has_role: [
+      { sys_id: ROLE_ROW, user: USER_ID, "role.name": BASIC_AUTH_ROLE },
+    ],
   });
   try {
     const res = await runCliAsync(

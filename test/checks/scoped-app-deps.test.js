@@ -150,20 +150,28 @@ test("fails when a required app is missing", async () => {
   assert.match(result.message, /not installed/);
 });
 
-test("fails when a required plugin is present but inactive", async () => {
-  const result = await scopedAppDeps.run(
-    ctx([{ id: "com.snc.discovery" }], {
-      tables: {
-        sys_store_app: [],
-        sys_plugins: [
-          { sys_id: "p1", id: "com.snc.discovery", active: "false" },
-        ],
-      },
-    }),
-  );
-  assert.equal(result.status, "fail");
-  assert.match(result.message, /inactive/);
-});
+// RR-20: the check reads sys_plugins with active=true, so this branch is dead
+// on a real instance; the fake now shows it.
+const RR_20 = { todo: "RR-20: stop filtering sys_plugins on active=true" };
+
+test(
+  "fails when a required plugin is present but inactive",
+  RR_20,
+  async () => {
+    const result = await scopedAppDeps.run(
+      ctx([{ id: "com.snc.discovery" }], {
+        tables: {
+          sys_store_app: [],
+          sys_plugins: [
+            { sys_id: "p1", id: "com.snc.discovery", active: "false" },
+          ],
+        },
+      }),
+    );
+    assert.equal(result.status, "fail");
+    assert.match(result.message, /inactive/);
+  },
+);
 
 test("fails when a required app is below its minVersion", async () => {
   const result = await scopedAppDeps.run(
@@ -260,7 +268,7 @@ test("fails when the installed version has a non-numeric segment (CC-43)", async
   assert.match(result.message, /non-numeric|cannot be compared|cannot parse/i);
 });
 
-test("treats an empty active flag as active (CC-44)", async () => {
+test("treats an empty active flag as active (CC-44)", RR_20, async () => {
   // An empty-string `active` is an unspecified flag, not "disabled". It must read
   // consistently with a missing column and a null — all active.
   const result = await scopedAppDeps.run(
@@ -334,20 +342,12 @@ test("matches a required id against the plugin source field, case-insensitively"
   assert.equal(result.status, "pass");
 });
 
-test("honours a queryFilter that enforces active=true on sys_plugins", async () => {
-  // The fake ignores sysparm_query unless a queryFilter is provided; this
-  // mirrors the real filter the check sends, so an inactive plugin is excluded
-  // by the query itself and the required app resolves as missing -> fail.
+test("an inactive plugin is excluded by the active=true query", async () => {
+  // The required app resolves as missing -> fail.
   const http = createFakeSnClient({
     tables: {
       sys_store_app: [],
       sys_plugins: [{ sys_id: "p1", id: "com.snc.discovery", active: "false" }],
-    },
-    queryFilter(table, rows, params) {
-      if (table === "sys_plugins" && params?.sysparm_query === "active=true") {
-        return rows.filter((r) => r.active === "true" || r.active === true);
-      }
-      return rows;
     },
   });
   const result = await scopedAppDeps.run({

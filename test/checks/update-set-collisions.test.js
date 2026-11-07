@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { updateSetCollisions } from "../../build/checks/update-set-collisions.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { tracked } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const SCOPE_SYS_ID = "a".repeat(32);
@@ -39,20 +40,6 @@ const other = set(OTHER, "Acme hotfix", "in progress");
 const done = set(DONE, "Acme sprint 11", "complete");
 const dflt = set(DEFAULT, "Default", "in progress", { is_default: "true" });
 
-/** Evaluate the simple queries this check emits (`f=v`, `fIN a,b`, `^`, `^OR`). */
-function matches(row, query) {
-  if (!query) return true;
-  if (query.includes("^OR")) {
-    return query.split("^OR").some((q) => matches(row, q));
-  }
-  return query.split("^").every((clause) => {
-    const inMatch = /^([\w.]+)IN(.*)$/.exec(clause);
-    if (inMatch) return inMatch[2].split(",").includes(String(row[inMatch[1]]));
-    const [field, value] = clause.split("=");
-    return String(row[field] ?? "") === value;
-  });
-}
-
 /**
  * Run the check. `sets` / `xmls` seed the two tables; `totalCounts` and
  * `fail` pass straight to the fake.
@@ -65,20 +52,17 @@ async function run({
   scope = SCOPE,
   updateSetId,
 } = {}) {
-  const calls = [];
-  const http = createFakeSnClient({
-    tables: {
-      sys_update_set: sets,
-      sys_update_xml: xmls,
-      sys_scope: [{ sys_id: SCOPE_SYS_ID, scope: SCOPE }],
-    },
-    totalCounts,
-    queryFilter: (t, rows, params) => {
-      calls.push({ table: t, params });
-      return rows.filter((r) => matches(r, params?.sysparm_query));
-    },
-    fail,
-  });
+  const { http, calls } = tracked(
+    createFakeSnClient({
+      tables: {
+        sys_update_set: sets,
+        sys_update_xml: xmls,
+        sys_scope: [{ sys_id: SCOPE_SYS_ID, scope: SCOPE }],
+      },
+      totalCounts,
+      fail,
+    }),
+  );
   const result = await updateSetCollisions.run({
     instanceUrl: INSTANCE,
     http,

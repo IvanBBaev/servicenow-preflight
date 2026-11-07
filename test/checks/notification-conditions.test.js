@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { notificationConditions } from "../../build/checks/notification-conditions.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope, tracked } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
@@ -14,11 +15,12 @@ function sid(n) {
 }
 
 /** Assemble a fake client from `sysevent_email_action` fixtures plus options. */
-function makeHttp({ notifications = [], fail, totalCounts, queryFilter } = {}) {
+function makeHttp({ notifications = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sysevent_email_action: notifications },
+    tables: {
+      sysevent_email_action: inScope(notifications, SCOPE, { active: "true" }),
+    },
     totalCounts,
-    queryFilter,
     fail,
   });
 }
@@ -187,17 +189,11 @@ test("passes when every active notification is event-driven or conditioned", asy
 });
 
 test("queries only active notifications in scope with the metadata columns", async () => {
-  const seen = [];
-  const http = makeHttp({
-    notifications: [CONDITIONED],
-    queryFilter: (table, rows, params) => {
-      if (table === "sysevent_email_action") seen.push(params);
-      return rows;
-    },
-  });
+  const { http, calls } = tracked(makeHttp({ notifications: [CONDITIONED] }));
   await run(http);
-  assert.equal(seen.length, 1);
-  const [params] = seen;
+  const reads = calls.filter((c) => c.table === "sysevent_email_action");
+  assert.equal(reads.length, 1);
+  const [{ params }] = reads;
   assert.match(params.sysparm_query, /sys_scope(\.scope)?=/);
   assert.match(params.sysparm_query, /(^|\^)active=true($|\^)/);
   const fields = params.sysparm_fields.split(",");

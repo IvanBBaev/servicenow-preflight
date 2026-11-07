@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { tableNamespace } from "../../build/checks/table-namespace.js";
 import { defaultChecks } from "../../build/checks/index.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { inScope } from "../helpers/seed.js";
 
 const SCOPE = "x_acme_app";
 const SCOPE_SYS_ID = "a".repeat(32);
@@ -12,7 +13,10 @@ const INSTANCE = "https://dev12345.service-now.com";
 /** Assemble a fake client: `scopes` seed sys_scope, `tables` seed sys_db_object. */
 function makeHttp({ tables = [], scopes = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sys_db_object: tables, sys_scope: scopes },
+    tables: {
+      sys_db_object: inScope(tables, SCOPE, { sys_scope: SCOPE_SYS_ID }),
+      sys_scope: scopes,
+    },
     totalCounts,
     fail,
   });
