@@ -1,4 +1,5 @@
 import type { Check, CheckResult, PreflightReport } from "../types.js";
+import { errorTail } from "../summary.js";
 import type { NamedReport } from "./junit.js";
 
 /** Options for the Markdown reporter. */
@@ -54,14 +55,16 @@ function escapeMarkdownCell(value: string): string {
 function icon(status: string): string {
   if (status === "pass") return "✅";
   if (status === "warn") return "⚠️";
+  if (status === "error") return "🛑";
   return "❌";
 }
 
-/** Sort rank: fail (and unknown) first, then warn, then pass. */
+/** Sort rank: error, then fail (and unknown), then warn, then pass. */
 function rank(status: string): number {
-  if (status === "pass") return 2;
-  if (status === "warn") return 1;
-  return 0;
+  if (status === "pass") return 3;
+  if (status === "warn") return 2;
+  if (status === "error") return 0;
+  return 1;
 }
 
 function plural(n: number, word: string): string {
@@ -71,7 +74,11 @@ function plural(n: number, word: string): string {
 function table(rows: readonly CheckResult[], fixes: RemediationIndex): string {
   const lines = ["| | Check | Result |", "|---|---|---|"];
   for (const r of rows) {
-    const fix = r.status === "pass" ? undefined : fixes.get(r.name);
+    // A read that failed found nothing, so a finding's remediation does not apply.
+    const fix =
+      r.status === "pass" || r.status === "error"
+        ? undefined
+        : fixes.get(r.name);
     const hint =
       fix === undefined ? "" : `<br><sub>Fix: ${escapeMarkdownCell(fix)}</sub>`;
     lines.push(
@@ -93,7 +100,7 @@ function block(
   const { pass, warn, fail } = report.summary;
   const parts = [
     `### ${title} — ${target} — ${verdict}`,
-    `**${pass} passed, ${plural(warn, "warning")}, ${fail} failed**`,
+    `**${pass} passed, ${plural(warn, "warning")}, ${fail} failed${errorTail(report.summary)}**`,
   ];
 
   if (report.results.length === 0) {
@@ -124,7 +131,7 @@ function block(
 
 /**
  * Format a report as GitHub-flavoured Markdown, suitable for a pull-request
- * comment (`gh pr comment --body-file`). Rows are ordered fail → warn → pass;
+ * comment (`gh pr comment --body-file`). Rows are ordered error → fail → warn → pass;
  * more than five pass rows are folded into a `<details>` element. With
  * `opts.checks`, fail and warn rows also carry the check's remediation hint.
  */

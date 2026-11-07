@@ -7,12 +7,13 @@ type SarifLevel = "error" | "warning";
 /**
  * Map a non-pass {@link CheckStatus} to its SARIF result level.
  *
- * `fail` -> `"error"`, `warn` -> `"warning"`. `pass` has no SARIF result
+ * `fail` and `error` -> `"error"`, `warn` -> `"warning"`. `pass` has no SARIF result
  * (passing checks are omitted from `results[]`), so it is not mappable here.
  */
 const LEVEL_BY_STATUS: Record<Exclude<CheckStatus, "pass">, SarifLevel> = {
   fail: "error",
   warn: "warning",
+  error: "error",
 };
 
 /** A SARIF `reportingDescriptor` as this reporter emits it. */

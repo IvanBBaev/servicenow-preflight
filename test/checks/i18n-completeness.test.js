@@ -313,7 +313,7 @@ test("catches a gap in a sys_documentation label (SN-7)", async () => {
   assert.match(result.message, /1 missing/);
 });
 
-test("warns (degraded) on an authentication error", async () => {
+test("reports error on an authentication error", async () => {
   const http = createFakeSnClient({ fail: { auth: true } });
   const result = await i18nCompleteness.run({
     instanceUrl: INSTANCE,
@@ -321,11 +321,11 @@ test("warns (degraded) on an authentication error", async () => {
     scope: SCOPE,
     options: { languages: ["fr", "de"] },
   });
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /authentication/i);
 });
 
-test("warns (degraded) on a network error", async () => {
+test("reports error on a network error", async () => {
   const http = createFakeSnClient({ fail: { network: true } });
   const result = await i18nCompleteness.run({
     instanceUrl: INSTANCE,
@@ -333,11 +333,11 @@ test("warns (degraded) on a network error", async () => {
     scope: SCOPE,
     options: { languages: ["fr", "de"] },
   });
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /unreachable/i);
 });
 
-test("fails on an HTTP error from the instance", async () => {
+test("reports error on an HTTP error from the instance", async () => {
   const http = createFakeSnClient({ fail: { http: 500 } });
   const result = await i18nCompleteness.run({
     instanceUrl: INSTANCE,
@@ -345,7 +345,7 @@ test("fails on an HTTP error from the instance", async () => {
     scope: SCOPE,
     options: { languages: ["fr", "de"] },
   });
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /500/);
 });
 
@@ -358,7 +358,7 @@ test("never throws — always returns a well-formed CheckResult", async () => {
     options: { languages: ["fr", "de"] },
   });
   assert.equal(result.name, "i18n-completeness");
-  assert.ok(["pass", "warn", "fail"].includes(result.status));
+  assert.ok(["pass", "warn", "fail", "error"].includes(result.status));
   assert.equal(typeof result.message, "string");
   assert.ok(result.message.length > 0);
 });

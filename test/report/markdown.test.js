@@ -8,7 +8,7 @@ import {
 import * as api from "../../build/api/report.js";
 
 function summarize(results) {
-  const summary = { pass: 0, warn: 0, fail: 0 };
+  const summary = { pass: 0, warn: 0, fail: 0, error: 0 };
   for (const r of results) {
     if (r.status === "pass") summary.pass += 1;
     else if (r.status === "warn") summary.warn += 1;

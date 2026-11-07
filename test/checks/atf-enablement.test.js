@@ -335,23 +335,23 @@ test("a disabled property outranks a malformed option (fail wins)", async () => 
   assert.match(result.message, /disabled/);
 });
 
-test("maps SnAuthError to fail (never throws)", async () => {
+test("maps SnAuthError to error (never throws)", async () => {
   const result = await atfEnablement.run(
     ctx({ tables: { sys_properties: [] }, fail: { auth: true } }),
   );
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /uthentication/);
 });
 
-test("maps SnNetworkError to fail (never throws)", async () => {
+test("maps SnNetworkError to error (never throws)", async () => {
   const result = await atfEnablement.run(
     ctx({ tables: { sys_properties: [] }, fail: { network: true } }),
   );
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Could not reach/);
 });
 
-test("maps an agent-read auth failure to fail (gate path)", async () => {
+test("maps an agent-read auth failure to error (gate path)", async () => {
   const result = await atfEnablement.run(
     ctx(
       {
@@ -361,15 +361,15 @@ test("maps an agent-read auth failure to fail (gate path)", async () => {
       { atfEnablement: { requireClientTestRunner: true } },
     ),
   );
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /uthentication/);
 });
 
-test("maps an unexpected SnHttpError to warn (enablement unverified)", async () => {
+test("maps an unexpected SnHttpError to error", async () => {
   const result = await atfEnablement.run(
     ctx({ tables: { sys_properties: [] }, fail: { http: 500 } }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /unverified/);
 });
 

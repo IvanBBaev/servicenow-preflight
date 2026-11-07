@@ -296,20 +296,20 @@ export const atfEnablement: Check = {
     } catch (err) {
       if (err instanceof SnAuthError) {
         return result(
-          "fail",
+          "error",
           `Authentication failed while reading ${PROPERTY_TABLE} / ${AGENT_TABLE}; cannot verify ATF enablement.`,
         );
       }
       if (err instanceof SnNetworkError) {
         return result(
-          "fail",
+          "error",
           `Could not reach the instance to verify ATF enablement: ${err.message}`,
         );
       }
       if (err instanceof SnHttpError) {
-        // The tables may be unavailable to this account — advisory.
+        // An unreadable table verified nothing: error, never a demotable warn.
         return result(
-          "warn",
+          "error",
           `Could not read ${PROPERTY_TABLE} / ${AGENT_TABLE} (HTTP ${err.status}); ATF enablement is unverified.`,
         );
       }

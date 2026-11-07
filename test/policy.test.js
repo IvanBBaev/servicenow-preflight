@@ -42,7 +42,7 @@ function withTempDir(fn) {
 }
 
 function report(results) {
-  const summary = { pass: 0, warn: 0, fail: 0 };
+  const summary = { pass: 0, warn: 0, fail: 0, error: 0 };
   for (const r of results) summary[r.status] += 1;
   return { ok: summary.fail === 0, results, summary };
 }
@@ -57,7 +57,7 @@ test("applyPolicy promotes a warn to fail and flips ok", () => {
     "table-namespace": "fail",
   });
   assert.equal(out.ok, false);
-  assert.deepEqual(out.summary, { pass: 1, warn: 0, fail: 1 });
+  assert.deepEqual(out.summary, { pass: 1, warn: 0, fail: 1, error: 0 });
   assert.deepEqual(out.results[0], {
     name: "scheduled-job-run-as",
     status: "fail",

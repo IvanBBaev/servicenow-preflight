@@ -330,20 +330,20 @@ export const scopedAppDeps: Check = {
     } catch (err) {
       if (err instanceof SnAuthError) {
         return result(
-          "fail",
+          "error",
           "Authentication failed while reading sys_plugins / sys_store_app; cannot verify dependencies.",
         );
       }
       if (err instanceof SnNetworkError) {
         return result(
-          "fail",
+          "error",
           `Could not reach the instance to verify dependencies: ${err.message}`,
         );
       }
       if (err instanceof SnHttpError) {
-        // The tables may be unavailable (e.g. store not activated) — advisory.
+        // An unreadable table verified nothing: error, never a demotable warn.
         return result(
-          "warn",
+          "error",
           `Could not read dependency tables (HTTP ${err.status}); dependencies are unverified.`,
         );
       }

@@ -1,4 +1,5 @@
 import type { CheckResult, PreflightReport } from "../types.js";
+import { errorTail } from "../summary.js";
 import type { NamedReport } from "./junit.js";
 
 /**
@@ -25,7 +26,8 @@ function annotation(
   instance: string | undefined,
 ): string | undefined {
   if (result.status === "pass") return undefined;
-  // An unknown status is annotated as an error: the runner counts it as a fail.
+  // `fail`, `error` and an unknown status (the runner counts it as a fail) are
+  // all annotated as errors.
   const command = result.status === "warn" ? "warning" : "error";
   const title = instance ? `${result.name} (${instance})` : result.name;
   return `::${command} title=${escapeProperty(title)}::${escapeData(result.message)}`;
@@ -39,7 +41,7 @@ function annotations(report: PreflightReport, instance?: string): string[] {
 
 function summaryLine(report: PreflightReport): string {
   const { pass, warn, fail } = report.summary;
-  return `${pass} passed, ${warn} warnings, ${fail} failed`;
+  return `${pass} passed, ${warn} warnings, ${fail} failed${errorTail(report.summary)}`;
 }
 
 /**

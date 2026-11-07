@@ -207,18 +207,18 @@ test("no credentials → warn without reading", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("auth → fail; forbidden → fail; network → warn; HTTP → warn", async () => {
+test("auth, forbidden, network and HTTP failures are all errors", async () => {
   const auth = await run([], { fail: { auth: true } });
-  assert.equal(auth.result.status, "fail");
+  assert.equal(auth.result.status, "error");
   assert.match(auth.result.message, /Authentication failed/);
   // A 403 is an SnAuthError in production, so it fails like a 401 (QA-1).
   const forbidden = await run([], { fail: { http: 403 } });
-  assert.equal(forbidden.result.status, "fail");
+  assert.equal(forbidden.result.status, "error");
   assert.match(forbidden.result.message, /Authentication failed .*\(403\)/);
   const network = await run([], { fail: { network: true } });
-  assert.equal(network.result.status, "warn");
+  assert.equal(network.result.status, "error");
   const http = await run([], { fail: { http: 500 } });
-  assert.equal(http.result.status, "warn");
+  assert.equal(http.result.status, "error");
   assert.match(http.result.message, /HTTP 500/);
 });
 

@@ -5,7 +5,7 @@ import { formatSarif } from "../../build/report/sarif.js";
 
 /** Build a PreflightReport from a list of results (summary derived). */
 function report(results) {
-  const summary = { pass: 0, warn: 0, fail: 0 };
+  const summary = { pass: 0, warn: 0, fail: 0, error: 0 };
   for (const r of results) summary[r.status] += 1;
   return { ok: summary.fail === 0, results, summary };
 }

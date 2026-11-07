@@ -316,31 +316,31 @@ test("an ambiguous zero-row read warns", async () => {
   );
 });
 
-test("an auth error fails", async () => {
+test("an auth error is an error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Authentication failed/);
 });
 
-test("a network error warns", async () => {
+test("a network error is an error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Could not reach the instance/);
 });
 
-test("an HTTP error warns", async () => {
+test("an HTTP error is an error", async () => {
   const result = await run(makeHttp({ fail: { http: 503 } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 503/);
 });
 
 for (const [table, kind, status] of [
-  ["discovery_credentials", { auth: true }, "fail"],
-  // A 403 is an auth failure in production (SnAuthError), so it fails (QA-1).
-  ["discovery_credentials", { http: 403 }, "fail"],
-  ["sys_rest_message", { network: true }, "warn"],
-  ["sys_rest_message_fn", { http: 500 }, "warn"],
-  ["sys_alias", { forbidden: true }, "fail"],
+  ["discovery_credentials", { auth: true }, "error"],
+  // A 403 is an auth failure in production (SnAuthError): an error row (QA-1).
+  ["discovery_credentials", { http: 403 }, "error"],
+  ["sys_rest_message", { network: true }, "error"],
+  ["sys_rest_message_fn", { http: 500 }, "error"],
+  ["sys_alias", { forbidden: true }, "error"],
   ["sys_alias", { response: true }, "fail"],
 ]) {
   test(`a forced ${Object.keys(kind)[0]} failure on ${table} → ${status}, other reads still run`, async () => {
@@ -367,7 +367,7 @@ test("a per-table failure does not hide a credential finding", async () => {
       fail: { table: { sys_rest_message: { network: true } } },
     }),
   );
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /^1 credential record\(s\) ship in the app/);
   assert.match(result.message, /Not fully inspected: .*sys_rest_message/);
 });

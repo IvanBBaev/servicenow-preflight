@@ -322,21 +322,21 @@ test("rejects an operator-bearing scope before ANY query is issued (SR-1)", asyn
   assert.deepEqual(calls, []);
 });
 
-test("fails hard on an authentication error", async () => {
+test("reports error on an authentication error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /authentication/i);
 });
 
-test("fails hard on a network error", async () => {
+test("reports error on a network error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /reach/i);
 });
 
-test("warns (unverified) on an HTTP error reading the tables", async () => {
+test("reports error on an HTTP error reading the tables", async () => {
   const result = await run(makeHttp({ fail: { http: 503 } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 503/);
   assert.match(result.message, /unverified/i);
 });
@@ -352,7 +352,7 @@ test("warns (unverified) on an unexpected non-JSON response error", async () => 
 test("never throws — always returns a well-formed CheckResult", async () => {
   const result = await run(makeHttp({ fail: { http: 500 } }));
   assert.equal(result.name, "default-set-leakage");
-  assert.ok(["pass", "warn", "fail"].includes(result.status));
+  assert.ok(["pass", "warn", "fail", "error"].includes(result.status));
   assert.equal(typeof result.message, "string");
   assert.ok(result.message.length > 0);
 });

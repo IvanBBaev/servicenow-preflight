@@ -289,26 +289,26 @@ test("reads record ACLs and tables with the scope filter, unpaged", async () => 
   assert.equal(tableRead.params.sysparm_limit, undefined);
 });
 
-test("fails hard on an authentication error", async () => {
+test("reports error on an authentication error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Authentication failed/);
 });
 
-test("warns (degraded) on a network error", async () => {
+test("reports error on a network error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Could not reach the instance/);
 });
 
-test("warns (degraded) on an HTTP error reading the table list", async () => {
+test("reports error on an HTTP error reading the table list", async () => {
   const result = await run(
     makeHttp({
       acls: [acl("incident")],
       fail: { table: { sys_db_object: { http: 500 } } },
     }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 500/);
 });
 

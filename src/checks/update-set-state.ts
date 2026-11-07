@@ -175,14 +175,16 @@ function describeStates(sets: BatchSet[]): string {
  *   least one change (a pure container parent with changed children is not
  *   "empty").
  * - **warn** — no update set was specified, some set is in an unrecognised
- *   state, the instance was transiently unreachable, or a set is a merged/base
+ *   state, or a set is a merged/base
  *   set (deployable, but merges can carry collisions — review it).
  * - **fail** — the set does not exist; any set is still `in progress`; any set
- *   is `ignore` (explicitly do-not-migrate); the batch is `complete` but empty;
- *   or the read failed for auth/HTTP reasons.
+ *   is `ignore` (explicitly do-not-migrate); or the batch is `complete` but
+ *   empty.
+ * - **error** — the read failed (auth, HTTP 4xx/5xx or network): nothing was
+ *   verified.
  *
- * A check must never throw: transport/API errors are caught and mapped to a
- * result (auth/HTTP → `fail`, network → `warn`).
+ * A check must never throw: transport/API errors are caught and mapped to an
+ * `error` result.
  */
 export const updateSetState: Check = {
   name: NAME,
@@ -197,8 +199,8 @@ export const updateSetState: Check = {
       "Mark the target update set (and every batched child set) Complete once it carries the intended changes; do not ship a set that is In progress, set to Ignore, or empty. Set updateSetId to the sys_id of the set you deploy.",
     verdicts: {
       pass: "Complete and carries at least one change.",
-      warn: "No update set id configured, or the instance is unreachable.",
-      fail: "Missing, still in progress, marked ignore, complete but with zero changes, or the read failed.",
+      warn: "No update set id configured, an unrecognised state, or a merged/base set.",
+      fail: "Missing, still in progress, marked ignore, or complete but with zero changes.",
     },
   },
   async run(ctx) {
@@ -241,7 +243,7 @@ export const updateSetState: Check = {
     } catch (err) {
       if (err instanceof SnAuthError) {
         return result(
-          "fail",
+          "error",
           `Not authorized to read the update set${
             err.status ? ` (HTTP ${err.status})` : ""
           }: ${err.message}`,
@@ -249,13 +251,13 @@ export const updateSetState: Check = {
       }
       if (err instanceof SnNetworkError) {
         return result(
-          "warn",
+          "error",
           `Could not reach the instance to read the update set (transient): ${err.message}`,
         );
       }
       if (err instanceof SnHttpError) {
         return result(
-          "fail",
+          "error",
           `Failed to read the update set (HTTP ${err.status}): ${err.message}`,
         );
       }

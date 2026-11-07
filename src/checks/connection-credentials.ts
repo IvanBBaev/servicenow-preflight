@@ -36,7 +36,13 @@ const FIELDS = {
 
 type Table = keyof typeof FIELDS;
 
-const RANK: Record<CheckStatus, number> = { pass: 0, warn: 1, fail: 2 };
+const RANK: Record<CheckStatus, number> = {
+  pass: 0,
+  warn: 1,
+  fail: 2,
+  // A read that failed outranks a finding: the row must stay undemotable.
+  error: 3,
+};
 
 /** Build a well-formed result for this check. */
 function result(status: CheckStatus, message: string): CheckResult {
@@ -149,8 +155,8 @@ function credentialLabel(row: Record<string, unknown>): string {
  *
  * Only `sys_id`, names and classes are requested: credential values are never
  * read, and endpoint URLs are never echoed. A trimmed credential read fails;
- * any other trimmed or ambiguous read warns; errors map per read (auth fails,
- * network / HTTP warn).
+ * any other trimmed or ambiguous read warns; a failed read (auth, HTTP,
+ * network) makes the row `error`, which outranks every other verdict.
  */
 export const connectionCredentials: Check = {
   name: NAME,
@@ -167,8 +173,8 @@ export const connectionCredentials: Check = {
       "Remove credential records from the app (each customer creates their own), and point REST messages at a Connection & Credential alias instead of a literal endpoint.",
     verdicts: {
       pass: "No credential records and no hard-coded REST endpoints in scope.",
-      warn: "A REST message or function uses a hard-coded endpoint, the scope is unset, or a REST/alias read was trimmed, ambiguous or unreachable.",
-      fail: "A credential record ships in the app, the credential read was security-trimmed, or authentication failed.",
+      warn: "A REST message or function uses a hard-coded endpoint, the scope is unset, or a REST/alias read was trimmed or ambiguous.",
+      fail: "A credential record ships in the app, or the credential read was security-trimmed.",
     },
   },
   async run(ctx): Promise<CheckResult> {

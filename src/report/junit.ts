@@ -43,6 +43,14 @@ function renderTestcase(result: CheckResult): string {
         `      <failure message="${message}">${message}</failure>\n` +
         `    </testcase>`
       );
+    case "error":
+      // A read that failed verified nothing: JUnit's `<error>` (the test could
+      // not run), kept apart from a `<failure>` (the test ran and found a gap).
+      return (
+        `    <testcase name="${name}" classname="servicenow-preflight">\n` +
+        `      <error message="${message}">${message}</error>\n` +
+        `    </testcase>`
+      );
     case "warn":
       // A warning is a pass-with-note: the testcase is not a failure, but the
       // note is surfaced on stdout so CI shows it.
@@ -66,25 +74,36 @@ function countFailures(report: PreflightReport): number {
   return report.results.filter((r) => r.status === "fail").length;
 }
 
+/** Number of `error` testcases, derived from `results` like {@link countFailures}. */
+function countErrors(report: PreflightReport): number {
+  return report.results.filter((r) => r.status === "error").length;
+}
+
 /** Render one `<testsuite>` (name + testcases) for a report. */
 function renderSuite(name: string, report: PreflightReport): string {
   const results = report.results;
   const tests = results.length;
   const failures = countFailures(report);
+  const errors = countErrors(report);
   const testcases = results.map(renderTestcase).join("\n");
   const body = testcases.length > 0 ? `\n${testcases}\n` : "";
   return (
-    `  <testsuite name="${escapeXml(name)}" tests="${tests}" failures="${failures}">` +
+    `  <testsuite name="${escapeXml(name)}" tests="${tests}" failures="${failures}" errors="${errors}">` +
     `${body}` +
     `  </testsuite>`
   );
 }
 
 /** Wrap one or more rendered `<testsuite>` blocks in a `<testsuites>` document. */
-function wrapSuites(suites: string, tests: number, failures: number): string {
+function wrapSuites(
+  suites: string,
+  tests: number,
+  failures: number,
+  errors: number,
+): string {
   return (
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<testsuites tests="${tests}" failures="${failures}">\n` +
+    `<testsuites tests="${tests}" failures="${failures}" errors="${errors}">\n` +
     `${suites}\n` +
     `</testsuites>\n`
   );
@@ -96,18 +115,19 @@ function wrapSuites(suites: string, tests: number, failures: number): string {
  *
  * Each {@link CheckResult} becomes one `<testcase>`. Status mapping:
  * - `fail` -> `<testcase>` carrying a `<failure>` (counts toward `failures`).
+ * - `error` -> `<testcase>` carrying an `<error>` (counts toward `errors`).
  * - `warn` -> passing `<testcase>` with the note in `<system-out>`.
  * - `pass` -> plain, empty `<testcase>`.
  *
- * The single `<testsuite>` reports `tests` (total) and `failures` counts.
+ * The single `<testsuite>` reports `tests` (total), `failures` and `errors`.
  */
 export function formatJUnit(report: PreflightReport): string {
   const tests = report.results.length;
-  const failures = countFailures(report);
   return wrapSuites(
     renderSuite("servicenow-preflight", report),
     tests,
-    failures,
+    countFailures(report),
+    countErrors(report),
   );
 }
 
@@ -120,7 +140,7 @@ export interface NamedReport {
 /**
  * Format several instance reports as ONE JUnit document: a single
  * `<testsuites>` with one `<testsuite>` per instance (named after it). The
- * document-level `tests` / `failures` are the sums across every suite. Used by
+ * document-level `tests` / `failures` / `errors` are the sums across every suite. Used by
  * the CLI's `--all --format junit`, so CI ingesters see a single well-formed
  * report rather than concatenated documents.
  */
@@ -128,5 +148,6 @@ export function formatJUnitSuites(reports: NamedReport[]): string {
   const suites = reports.map((r) => renderSuite(r.name, r.report)).join("\n");
   const tests = reports.reduce((n, r) => n + r.report.results.length, 0);
   const failures = reports.reduce((n, r) => n + countFailures(r.report), 0);
-  return wrapSuites(suites, tests, failures);
+  const errors = reports.reduce((n, r) => n + countErrors(r.report), 0);
+  return wrapSuites(suites, tests, failures, errors);
 }

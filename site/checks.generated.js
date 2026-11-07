@@ -24,8 +24,8 @@ window.PREFLIGHT_CHECKS = [
     "name": "update-set-state",
     "tag": "updateSetId",
     "desc": "The target update set, and any batched child sets, are complete and carry changes.",
-    "fail": "Missing, still in progress, marked ignore, complete but with zero changes, or the read failed.",
-    "warn": "No update set id configured, or the instance is unreachable.",
+    "fail": "Missing, still in progress, marked ignore, or complete but with zero changes.",
+    "warn": "No update set id configured, an unrecognised state, or a merged/base set.",
     "pass": "Complete and carries at least one change."
   },
   {
@@ -33,7 +33,7 @@ window.PREFLIGHT_CHECKS = [
     "name": "default-set-leakage",
     "tag": "scope",
     "desc": "No captured work for the target scope is stranded in a Default-flagged update set.",
-    "fail": "In-scope changes sit in a Default set and will not ship, or the read failed.",
+    "fail": "In-scope changes sit in a Default set and will not ship.",
     "warn": "No target scope configured, the list is security-trimmed, or an unexpected error.",
     "pass": "Every in-scope change is recorded in a deployable update set."
   },
@@ -61,7 +61,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "atfSuites",
     "desc": "The configured ATF test suites run green — no failing or errored tests.",
     "fail": "Any test is red — the message carries the failing assertion text.",
-    "warn": "No suite configured, a run still pending, or a transient unreachable error.",
+    "warn": "No suite configured, or a run still pending.",
     "pass": "Every configured suite settled green."
   },
   {
@@ -78,8 +78,8 @@ window.PREFLIGHT_CHECKS = [
     "name": "i18n-completeness",
     "tag": "scope · languages",
     "desc": "Every configured language has full translation coverage for the target scope.",
-    "fail": "One or more languages have gaps, or the instance returned an error.",
-    "warn": "No scope / languages set, a language with no baseline, or unreachable.",
+    "fail": "One or more languages have gaps, or the base language holds no strings while targets do.",
+    "warn": "No scope / languages set, or a language with no baseline.",
     "pass": "Every required language is fully covered."
   },
   {
@@ -88,7 +88,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "No wide-open mutating ACLs, and no ACLs that reference non-existent roles.",
     "fail": "A mutating ACL is public-write, or references a role that does not exist.",
-    "warn": "No scope, a public-read ACL, inactive shipped ACLs, or unreadable tables.",
+    "warn": "No scope, a public-read ACL, inactive shipped ACLs, or a trimmed read.",
     "pass": "Every ACL is gated and every referenced role resolves."
   },
   {
@@ -124,7 +124,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "Scheduled Jobs leave 'Run as' empty so they run as system. Advisory — never fails.",
     "fail": "Never — install hygiene stays advisory.",
-    "warn": "A job pins 'Run as' to a named user, no scope set, or an unreadable table.",
+    "warn": "A job pins 'Run as' to a named user, no scope set, or a trimmed read.",
     "pass": "Every scheduled job in scope runs as system, or the scope ships none."
   },
   {
@@ -133,7 +133,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "No mobile Application Menus or Modules ship in a non-mobile app. Advisory — never fails.",
     "fail": "Never — packaging hygiene stays advisory.",
-    "warn": "Mobile menus or modules found in scope, no scope set, or an unreadable table.",
+    "warn": "Mobile menus or modules found in scope, no scope set, or a trimmed read.",
     "pass": "The instance reports the scope ships no mobile menus or modules."
   },
   {
@@ -241,7 +241,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "The app ships no inactive script, UI or notification artifacts — dead code that still lands on every install. Advisory — never fails.",
     "fail": "Never — install hygiene stays advisory.",
-    "warn": "Inactive artifacts ship with the app, no scope set, or an unreadable table.",
+    "warn": "Inactive artifacts ship with the app, no scope set, or a trimmed read.",
     "pass": "No inactive artifacts in any of the swept tables in scope."
   },
   {
@@ -250,7 +250,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "Every active 'send on update' Notification in scope is tied to an event or carries a condition, so none fires on every record update. Advisory — never fails.",
     "fail": "Never — install hygiene stays advisory.",
-    "warn": "A Notification fires on every update of its table, no scope set, or an unreadable table.",
+    "warn": "A Notification fires on every update of its table, no scope set, or a trimmed read.",
     "pass": "Every active Notification in scope is event-driven or conditioned, or the scope ships none."
   },
   {
@@ -321,8 +321,8 @@ window.PREFLIGHT_CHECKS = [
     "name": "connection-credentials",
     "tag": "scope",
     "desc": "No credential records ship in the scope; REST messages and functions reach their endpoints through Connection & Credential aliases rather than a hard-coded URL.",
-    "fail": "A credential record ships in the app, the credential read was security-trimmed, or authentication failed.",
-    "warn": "A REST message or function uses a hard-coded endpoint, the scope is unset, or a REST/alias read was trimmed, ambiguous or unreachable.",
+    "fail": "A credential record ships in the app, or the credential read was security-trimmed.",
+    "warn": "A REST message or function uses a hard-coded endpoint, the scope is unset, or a REST/alias read was trimmed or ambiguous.",
     "pass": "No credential records and no hard-coded REST endpoints in scope."
   },
   {

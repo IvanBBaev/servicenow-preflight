@@ -462,21 +462,21 @@ test("warns 'unverified' when preview-problem rows are security-trimmed", async 
 // Transport error mapping (never throws)
 // ---------------------------------------------------------------------------
 
-test("maps SnAuthError to fail", async () => {
+test("maps SnAuthError to error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Authentication failed/);
 });
 
-test("maps SnNetworkError to fail", async () => {
+test("maps SnNetworkError to error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Could not reach/);
 });
 
-test("maps SnHttpError to warn (gate unverified)", async () => {
+test("maps SnHttpError to error", async () => {
   const result = await run(makeHttp({ fail: { http: 503 } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 503/);
   assert.match(result.message, /unverified/);
 });
@@ -505,7 +505,7 @@ test("a failing problems read is mapped, not thrown", async () => {
       fail: { table: { sys_update_preview_problem: { auth: true } } },
     }),
   );
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Authentication failed/);
 });
 

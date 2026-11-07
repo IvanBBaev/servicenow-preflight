@@ -212,23 +212,23 @@ test("queries only active notifications in scope with the metadata columns", asy
   assert.ok(!fields.includes("message_html"));
 });
 
-test("fails on an authentication error", async () => {
+test("reports error on an authentication error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /authentication failed/i);
 });
 
-test("warns on a network error", async () => {
+test("reports error on a network error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /could not reach/i);
 });
 
-test("warns on an HTTP error reading sysevent_email_action", async () => {
+test("reports error on an HTTP error reading sysevent_email_action", async () => {
   const result = await run(
     makeHttp({ fail: { table: { sysevent_email_action: { http: 500 } } } }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /500/);
 });
 

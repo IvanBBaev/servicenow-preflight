@@ -35,12 +35,12 @@ const NOW = new Date("2026-10-24T08:00:00.000Z");
 const PASSING = {
   ok: true,
   results: [{ name: "a", status: "pass", message: "fine" }],
-  summary: { pass: 1, warn: 0, fail: 0 },
+  summary: { pass: 1, warn: 0, fail: 0, error: 0 },
 };
 const FAILING = {
   ok: false,
   results: [{ name: "b", status: "fail", message: "bad" }],
-  summary: { pass: 0, warn: 0, fail: 1 },
+  summary: { pass: 0, warn: 0, fail: 1, error: 0 },
 };
 
 function loadSchema(file) {

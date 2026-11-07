@@ -20,7 +20,7 @@ function mixedReport() {
         message: 'update set "prod" is closed',
       },
     ],
-    summary: { pass: 1, warn: 1, fail: 1 },
+    summary: { pass: 1, warn: 1, fail: 1, error: 0 },
   };
 }
 
@@ -81,7 +81,7 @@ test("formatJUnit escapes special characters in the check name too", () => {
   const xml = formatJUnit({
     ok: false,
     results: [{ name: 'check <a> & "b"', status: "fail", message: "boom" }],
-    summary: { pass: 0, warn: 0, fail: 1 },
+    summary: { pass: 0, warn: 0, fail: 1, error: 0 },
   });
   assert.match(xml, /name="check &lt;a&gt; &amp; &quot;b&quot;"/);
 });
@@ -98,7 +98,7 @@ test("formatJUnit strips XML-1.0-illegal control characters from messages", () =
         message: "line1\u0000\u0001\u000Bline2\tkept\nkept",
       },
     ],
-    summary: { pass: 0, warn: 0, fail: 1 },
+    summary: { pass: 0, warn: 0, fail: 1, error: 0 },
   });
   for (const ch of ["\u0000", "\u0001", "\u000B"]) {
     assert.ok(
@@ -124,7 +124,7 @@ test("formatJUnit strips noncharacters and unpaired surrogates", () => {
         message: "before\uFFFF\uD83D middle \uDE00\uFFFEafter",
       },
     ],
-    summary: { pass: 0, warn: 0, fail: 1 },
+    summary: { pass: 0, warn: 0, fail: 1, error: 0 },
   });
   for (const ch of ["\uFFFE", "\uFFFF", "\uD83D", "\uDE00"]) {
     assert.ok(
@@ -144,7 +144,7 @@ test("formatJUnit keeps a well-formed surrogate pair intact", () => {
     results: [
       { name: "atfRun", status: "fail", message: "boom \u{1F600} done" },
     ],
-    summary: { pass: 0, warn: 0, fail: 1 },
+    summary: { pass: 0, warn: 0, fail: 1, error: 0 },
   });
   assert.match(xml, /boom \u{1F600} done/u);
 });
@@ -153,7 +153,7 @@ test("formatJUnit handles an empty report", () => {
   const xml = formatJUnit({
     ok: true,
     results: [],
-    summary: { pass: 0, warn: 0, fail: 0 },
+    summary: { pass: 0, warn: 0, fail: 0, error: 0 },
   });
   assert.match(xml, /<testsuite[^>]*\btests="0"/);
   assert.match(xml, /<testsuite[^>]*\bfailures="0"/);
@@ -171,7 +171,7 @@ test("formatJUnit derives failures from results, not summary.fail (CC-47)", () =
       { name: "a", status: "pass", message: "ok" },
       { name: "b", status: "fail", message: "boom" },
     ],
-    summary: { pass: 2, warn: 0, fail: 0 },
+    summary: { pass: 2, warn: 0, fail: 0, error: 0 },
   });
   assert.match(xml, /<testsuites[^>]*\bfailures="1"/);
   assert.match(xml, /<testsuite[^>]*\bfailures="1"/);
@@ -187,7 +187,7 @@ test("formatJUnitSuites emits one document with a testsuite per instance (CC-20)
   const devReport = {
     ok: true,
     results: [{ name: "a", status: "pass", message: "ok" }],
-    summary: { pass: 1, warn: 0, fail: 0 },
+    summary: { pass: 1, warn: 0, fail: 0, error: 0 },
   };
   const prodReport = {
     ok: false,
@@ -195,7 +195,7 @@ test("formatJUnitSuites emits one document with a testsuite per instance (CC-20)
       { name: "a", status: "pass", message: "ok" },
       { name: "b", status: "fail", message: "boom" },
     ],
-    summary: { pass: 1, warn: 0, fail: 1 },
+    summary: { pass: 1, warn: 0, fail: 1, error: 0 },
   };
   const xml = formatJUnitSuites([
     { name: "dev", report: devReport },

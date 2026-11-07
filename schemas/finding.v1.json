@@ -32,11 +32,12 @@
   ],
   "$defs": {
     "CheckStatus": {
-      "description": "Outcome of a single preflight check.",
+      "description": "Outcome of a single preflight check. `error` means the check could not verify anything because a read failed (HTTP 4xx/5xx, network, auth): it fails the run exactly like `fail`, is counted in its own summary bucket and is never demoted by a baseline or a severity policy.",
       "enum": [
         "pass",
         "warn",
-        "fail"
+        "fail",
+        "error"
       ]
     },
     "FindingLocation": {

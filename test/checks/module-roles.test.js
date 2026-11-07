@@ -251,26 +251,26 @@ test("findings under a trimmed module read carry the note", async () => {
   );
 });
 
-test("fails hard on an authentication error", async () => {
+test("reports error on an authentication error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Authentication failed/);
 });
 
-test("warns (degraded) on a network error", async () => {
+test("reports error on a network error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Could not reach the instance/);
 });
 
-test("warns (degraded) on an HTTP error reading the menus", async () => {
+test("reports error on an HTTP error reading the menus", async () => {
   const result = await run(
     makeHttp({
       modules: [mod("Assets")],
       fail: { table: { sys_app_application: { http: 500 } } },
     }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 500/);
 });
 

@@ -218,7 +218,7 @@ test("a request that was not recorded fails its check with a re-record hint", as
     ],
   );
   assert.equal(report.ok, false);
-  assert.equal(report.results[0].status, "fail");
+  assert.equal(report.results[0].status, "error");
   assert.match(
     report.results[0].message,
     /No recorded response for GET \/api\/now\/table\/sys_user\?.*re-record with --record/,

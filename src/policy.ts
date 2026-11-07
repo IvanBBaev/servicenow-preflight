@@ -12,8 +12,9 @@ import type { CheckResult, PreflightReport } from "./types.js";
  *   "nothing was verified" guard still applies).
  *
  * A rewritten row's message gets a ` [severity: <level> by policy]` suffix so
- * a reader knows why it differs from the catalogue. `pass` rows are never
- * touched and a row's `name` never changes.
+ * a reader knows why it differs from the catalogue. `pass` and `error` rows
+ * are never touched (a failed read is not a severity a policy can lower) and
+ * a row's `name` never changes.
  */
 
 /** One check's override. */
@@ -74,7 +75,7 @@ export function policySkips(policy: SeverityPolicy): string[] {
 }
 
 /**
- * Apply a severity policy to a report (pure). Non-pass rows of a check mapped
+ * Apply a severity policy to a report (pure). `fail` / `warn` rows of a check mapped
  * to `"fail"` or `"warn"` take that status; a row whose status changes gets the
  * ` [severity: <level> by policy]` suffix. Summary and `ok` are recomputed.
  */
@@ -83,7 +84,7 @@ export function applyPolicy(
   policy: SeverityPolicy,
 ): PreflightReport {
   const results = report.results.map((r): CheckResult => {
-    if (r.status === "pass") return r;
+    if (r.status === "pass" || r.status === "error") return r;
     const level = Object.prototype.hasOwnProperty.call(policy, r.name)
       ? policy[r.name]
       : undefined;

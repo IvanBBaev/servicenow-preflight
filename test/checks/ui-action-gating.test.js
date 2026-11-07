@@ -254,26 +254,26 @@ test("an ungated action under a trimmed action read notes the incomplete view", 
   assert.match(result.message, /may be incomplete/);
 });
 
-test("fails hard on an authentication error", async () => {
+test("reports error on an authentication error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Authentication failed/);
 });
 
-test("warns (degraded) on a network error", async () => {
+test("reports error on a network error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Could not reach the instance/);
 });
 
-test("warns (degraded) on an HTTP error reading the role table", async () => {
+test("reports error on an HTTP error reading the role table", async () => {
   const result = await run(
     makeHttp({
       actions: [action(1)],
       fail: { table: { sys_ui_action_role: { http: 500 } } },
     }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 500/);
 });
 

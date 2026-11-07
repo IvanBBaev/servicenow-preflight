@@ -77,6 +77,7 @@ test("outputs map to the run step's outputs", () => {
     "pass",
     "warn",
     "fail",
+    "error",
     "sarif-file",
     "report-json",
     "exit-code",
@@ -134,5 +135,5 @@ test("the committed replay sample replays green without credentials", () => {
   );
   assert.equal(res.status, 0, res.stderr);
   const [{ report }] = JSON.parse(res.stdout).runs;
-  assert.deepEqual(report.summary, { pass: 2, warn: 1, fail: 0 });
+  assert.deepEqual(report.summary, { pass: 2, warn: 1, fail: 0, error: 0 });
 });

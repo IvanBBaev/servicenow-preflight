@@ -173,7 +173,7 @@ export const defaultSetLeakage: Check = {
     verdicts: {
       pass: "Every in-scope change is recorded in a deployable update set.",
       warn: "No target scope configured, the list is security-trimmed, or an unexpected error.",
-      fail: "In-scope changes sit in a Default set and will not ship, or the read failed.",
+      fail: "In-scope changes sit in a Default set and will not ship.",
     },
   },
   async run(ctx): Promise<CheckResult> {
@@ -293,20 +293,20 @@ export const defaultSetLeakage: Check = {
     } catch (err) {
       if (err instanceof SnAuthError) {
         return result(
-          "fail",
+          "error",
           "Authentication failed while reading sys_update_set / sys_update_xml; cannot verify Default-set leakage.",
         );
       }
       if (err instanceof SnNetworkError) {
         return result(
-          "fail",
+          "error",
           `Could not reach the instance to verify Default-set leakage: ${err.message}`,
         );
       }
       if (err instanceof SnHttpError) {
-        // The tables may be unavailable to this account — advisory.
+        // An unreadable table verified nothing: error, never a demotable warn.
         return result(
-          "warn",
+          "error",
           `Could not read the update-set tables (HTTP ${err.status}); Default-set leakage is unverified.`,
         );
       }

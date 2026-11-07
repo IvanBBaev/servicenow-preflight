@@ -50,7 +50,7 @@ export const notificationConditions: Check = {
       "Give the Notification a condition (or an advanced condition script), or trigger it from a specific event instead of 'Updated' on the whole table.",
     verdicts: {
       pass: "Every active Notification in scope is event-driven or conditioned, or the scope ships none.",
-      warn: "A Notification fires on every update of its table, no scope set, or an unreadable table.",
+      warn: "A Notification fires on every update of its table, no scope set, or a trimmed read.",
       fail: "Never — install hygiene stays advisory.",
     },
   },

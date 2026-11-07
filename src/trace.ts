@@ -42,7 +42,7 @@ export type RunMessage =
   | {
       phase: "end";
       ms: number;
-      summary: { pass: number; warn: number; fail: number };
+      summary: { pass: number; warn: number; fail: number; error: number };
     };
 
 /** Channel names, for subscribers outside this package. */
@@ -203,7 +203,7 @@ function checkEvent(m: Record<string, unknown>, ts: string) {
     ["type", `check.${phase}`],
     ["ts", ts],
     ["check", str(m.check, NAME)],
-    ["status", oneOf(m.status, ["pass", "warn", "fail"] as const)],
+    ["status", oneOf(m.status, ["pass", "warn", "fail", "error"] as const)],
     ["ms", num(m.ms)],
   ]);
 }
@@ -235,6 +235,7 @@ function runEvent(
                   pass: num(summary.pass) ?? 0,
                   warn: num(summary.warn) ?? 0,
                   fail: num(summary.fail) ?? 0,
+                  error: num(summary.error) ?? 0,
                 }
               : undefined,
           ],

@@ -236,23 +236,23 @@ test("findings under a trimmed read note what was not inspected", async () => {
   assert.match(result.message, /Not fully inspected: sys_script_fix/);
 });
 
-test("fails hard on an authentication error", async () => {
+test("reports error on an authentication error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Authentication failed/);
 });
 
-test("warns (degraded) on a network error", async () => {
+test("reports error on a network error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Could not reach the instance/);
 });
 
-test("warns (degraded) on an HTTP error reading Fix Scripts", async () => {
+test("reports error on an HTTP error reading Fix Scripts", async () => {
   const result = await run(
     makeHttp({ fail: { table: { sys_script_fix: { http: 500 } } } }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 500/);
 });
 

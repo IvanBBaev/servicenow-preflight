@@ -48,7 +48,7 @@ function tempDir() {
 const NOW = new Date("2026-10-22T12:00:00Z");
 
 function report(results) {
-  const summary = { pass: 0, warn: 0, fail: 0 };
+  const summary = { pass: 0, warn: 0, fail: 0, error: 0 };
   for (const r of results) summary[r.status] += 1;
   return { ok: summary.fail === 0, results, summary };
 }
@@ -78,7 +78,7 @@ test("applyBaseline demotes a matched fail to warn with the prefix", () => {
     NOW,
   );
   assert.equal(out.ok, true);
-  assert.deepEqual(out.summary, { pass: 1, warn: 1, fail: 0 });
+  assert.deepEqual(out.summary, { pass: 1, warn: 1, fail: 0, error: 0 });
   assert.equal(out.results[0].status, "warn");
   assert.equal(
     out.results[0].message,
@@ -132,7 +132,7 @@ test("applyBaseline ignores an expired entry and appends a baseline warn row", (
     NOW,
   );
   assert.equal(out.ok, false);
-  assert.deepEqual(out.summary, { pass: 0, warn: 1, fail: 1 });
+  assert.deepEqual(out.summary, { pass: 0, warn: 1, fail: 1, error: 0 });
   assert.equal(out.results[0].status, "fail");
   assert.equal(out.results[0].message, ACL_MSG);
   assert.deepEqual(out.results[1], {

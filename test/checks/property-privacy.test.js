@@ -212,23 +212,23 @@ test("queries only active properties in scope and never asks for the value", asy
   assert.doesNotMatch(params.sysparm_fields, /\bvalue\b/);
 });
 
-test("fails on an authentication error", async () => {
+test("reports error on an authentication error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /authentication failed/i);
 });
 
-test("warns on a network error", async () => {
+test("reports error on a network error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /could not reach/i);
 });
 
-test("warns on an HTTP error reading sys_properties", async () => {
+test("reports error on an HTTP error reading sys_properties", async () => {
   const result = await run(
     makeHttp({ fail: { table: { sys_properties: { http: 500 } } } }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /500/);
 });
 

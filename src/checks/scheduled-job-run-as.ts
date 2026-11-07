@@ -46,7 +46,7 @@ export const scheduledJobRunAs: Check = {
       "Clear the Run as field on each Scheduled Script Execution so it runs as system; a pinned user breaks on install when that user does not exist.",
     verdicts: {
       pass: "Every scheduled job in scope runs as system, or the scope ships none.",
-      warn: "A job pins 'Run as' to a named user, no scope set, or an unreadable table.",
+      warn: "A job pins 'Run as' to a named user, no scope set, or a trimmed read.",
       fail: "Never — install hygiene stays advisory.",
     },
   },

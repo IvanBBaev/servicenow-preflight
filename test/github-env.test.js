@@ -9,7 +9,7 @@ import { appendOutputs, appendSummary } from "../build/ci/github-env.js";
 const report = (ok, pass, warn, fail) => ({
   ok,
   results: [],
-  summary: { pass, warn, fail },
+  summary: { pass, warn, fail, error: 0 },
 });
 
 test("github-env helpers do nothing outside GitHub Actions", () => {
@@ -37,7 +37,7 @@ test("github-env helpers append a summary and summed outputs", () => {
     );
     assert.equal(
       readFileSync(env.GITHUB_OUTPUT, "utf8"),
-      "ok=false\npass=5\nwarn=1\nfail=4\n",
+      "ok=false\npass=5\nwarn=1\nfail=4\nerror=0\n",
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

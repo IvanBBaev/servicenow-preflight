@@ -224,8 +224,8 @@ export const i18nCompleteness: Check = {
       "Add the missing translations for each required language (UI messages, field labels, choice labels and translated text) in the app scope, or remove the language from the languages list if it is not supported.",
     verdicts: {
       pass: "Every required language is fully covered.",
-      warn: "No scope / languages set, a language with no baseline, or unreachable.",
-      fail: "One or more languages have gaps, or the instance returned an error.",
+      warn: "No scope / languages set, or a language with no baseline.",
+      fail: "One or more languages have gaps, or the base language holds no strings while targets do.",
     },
   },
   async run(ctx: PreflightContext): Promise<CheckResult> {
@@ -273,19 +273,19 @@ export const i18nCompleteness: Check = {
     } catch (err) {
       if (err instanceof SnAuthError) {
         return result(
-          "warn",
+          "error",
           "Could not read translations: authentication failed or credentials are missing.",
         );
       }
       if (err instanceof SnNetworkError) {
         return result(
-          "warn",
+          "error",
           "Could not read translations: the instance was unreachable.",
         );
       }
       if (err instanceof SnHttpError) {
         return result(
-          "fail",
+          "error",
           `Could not read translations: the instance returned HTTP ${err.status}.`,
         );
       }

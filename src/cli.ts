@@ -82,7 +82,7 @@ import {
 } from "./registry.js";
 import { loadManifest, writeManifest } from "./state/manifest.js";
 import { syncManifest } from "./state/sync.js";
-import { summarizeResults } from "./summary.js";
+import { errorTail, summarizeResults } from "./summary.js";
 import {
   DEFAULT_STALE_WARN_MS,
   stalenessResults,
@@ -1067,6 +1067,7 @@ const STATUS_ICON: Record<CheckStatus, string> = {
   pass: "✓",
   warn: "!",
   fail: "✗",
+  error: "E",
 };
 
 /**
@@ -1124,7 +1125,9 @@ function render(
       );
       const { pass, warn, fail } = report.summary;
       lines.push("");
-      lines.push(`${pass} passed, ${warn} warnings, ${fail} failed`);
+      lines.push(
+        `${pass} passed, ${warn} warnings, ${fail} failed${errorTail(report.summary)}`,
+      );
       return `${lines.join("\n")}\n`;
     }
   }
@@ -1848,7 +1851,8 @@ function writeFailOnNote(
   runs: readonly { name?: string; report: PreflightReport }[],
 ): void {
   for (const { name, report } of runs) {
-    if (report.ok || report.summary.fail > 0) continue;
+    if (report.ok || report.summary.fail > 0 || report.summary.error > 0)
+      continue;
     const where = name ? ` on ${name}` : "";
     process.stderr.write(
       `Failing${where}: ${report.summary.warn} warning(s) with --fail-on warn.\n`,

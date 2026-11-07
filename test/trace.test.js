@@ -170,7 +170,12 @@ test("a traced run emits run, check and http events with cache marks", async () 
     concurrency: 1,
   });
   assert.equal(list.at(-1).type, "run.end");
-  assert.deepEqual(list.at(-1).summary, { pass: 2, warn: 0, fail: 0 });
+  assert.deepEqual(list.at(-1).summary, {
+    pass: 2,
+    warn: 0,
+    fail: 0,
+    error: 0,
+  });
   assert.deepEqual(
     list.map((e) => `${e.type}:${e.check ?? ""}:${e.cache ?? ""}`),
     [

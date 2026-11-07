@@ -137,7 +137,7 @@ for (const { label, real, fake } of CASES) {
   });
 }
 
-test("parity: 401 and 403 are auth failures (fail), other statuses degrade (warn)", async () => {
+test("parity: 401/403 are auth failures, other statuses HTTP errors — all error rows", async () => {
   const verdict = async (fake) =>
     errorResult(
       "c",
@@ -148,11 +148,11 @@ test("parity: 401 and 403 are auth failures (fail), other statuses degrade (warn
           .query(),
       ),
     ).status;
-  assert.equal(await verdict({ http: 401 }), "fail");
-  assert.equal(await verdict({ http: 403 }), "fail");
-  assert.equal(await verdict({ forbidden: true }), "fail");
-  assert.equal(await verdict({ http: 404 }), "warn");
-  assert.equal(await verdict({ http: 500 }), "warn");
+  assert.equal(await verdict({ http: 401 }), "error");
+  assert.equal(await verdict({ http: 403 }), "error");
+  assert.equal(await verdict({ forbidden: true }), "error");
+  assert.equal(await verdict({ http: 404 }), "error");
+  assert.equal(await verdict({ http: 500 }), "error");
 });
 
 test("parity: a 403 diagnosis names the table, on every fake entry point", async () => {

@@ -94,11 +94,12 @@
       ]
     },
     "CheckStatus": {
-      "description": "Outcome of a single preflight check.",
+      "description": "Outcome of a single preflight check. `error` means the check could not verify anything because a read failed (HTTP 4xx/5xx, network, auth): it fails the run exactly like `fail`, is counted in its own summary bucket and is never demoted by a baseline or a severity policy.",
       "enum": [
         "pass",
         "warn",
-        "fail"
+        "fail",
+        "error"
       ]
     },
     "CheckTiming": {
@@ -198,7 +199,7 @@
       "type": "object",
       "properties": {
         "ok": {
-          "description": "`true` when no check returned a `fail` status.",
+          "description": "`true` when no check returned a `fail` or `error` status.",
           "type": "boolean"
         },
         "results": {
@@ -218,12 +219,16 @@
             },
             "fail": {
               "type": "number"
+            },
+            "error": {
+              "type": "number"
             }
           },
           "required": [
             "pass",
             "warn",
-            "fail"
+            "fail",
+            "error"
           ]
         }
       },

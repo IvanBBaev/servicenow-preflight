@@ -18,6 +18,10 @@ import type { CheckResult, CheckStatus, PreflightReport } from "./types.js";
  * message says `Baselined but CHANGED since …`, so a reviewer sees that the
  * finding moved (for example a new table joined the list). That is the only
  * defence against a baseline silently hiding new findings.
+ *
+ * An `error` row (a read failed, so the check verified nothing) is never
+ * recorded and never demoted: accepting a finding must not also accept a
+ * revoked credential or an unreachable table.
  */
 
 /** One accepted finding. */
@@ -25,7 +29,7 @@ export interface BaselineEntry {
   /** The check name the entry applies to. */
   check: string;
   /** The status the finding was recorded with. */
-  status: Exclude<CheckStatus, "pass">;
+  status: Exclude<CheckStatus, "pass" | "error">;
   /** The result message at the time the finding was accepted. */
   message: string;
   /** Why the finding is accepted (a ticket, a justification). */
@@ -158,7 +162,10 @@ export function writeBaseline(
   writeFileSync(path, `${JSON.stringify(b, null, 2)}\n`, "utf8");
 }
 
-/** Build a baseline from every non-pass result of a report. */
+/**
+ * Build a baseline from every `fail` / `warn` result of a report. `error`
+ * rows are left out: a failed read is not a finding a team can accept.
+ */
 export function baselineFromReport(
   report: PreflightReport,
   instance: string | undefined,
@@ -166,7 +173,7 @@ export function baselineFromReport(
 ): Baseline {
   const entries: BaselineEntry[] = [];
   for (const r of report.results) {
-    if (r.status === "pass") continue;
+    if (r.status === "pass" || r.status === "error") continue;
     entries.push({
       check: r.name,
       status: r.status,
@@ -192,9 +199,9 @@ function isExpired(entry: BaselineEntry, now: Date): boolean {
 
 /** Recompute a report's summary and `ok` from its results. */
 export function summarize(results: CheckResult[]): PreflightReport {
-  const summary = { pass: 0, warn: 0, fail: 0 };
+  const summary = { pass: 0, warn: 0, fail: 0, error: 0 };
   for (const r of results) summary[r.status] += 1;
-  return { ok: summary.fail === 0, results, summary };
+  return { ok: summary.fail === 0 && summary.error === 0, results, summary };
 }
 
 /** The message prefix {@link applyBaseline} gives a row a baseline accepted. */
@@ -206,7 +213,8 @@ const BASELINED = "Baselined";
  * `Baselined but CHANGED since …` prefix when its message differs from the
  * recorded one. An expired entry is ignored and adds a `warn` row named
  * {@link BASELINE_ROW}. Entries matching no result are ignored (the check may
- * be skipped this run). Summary and `ok` are recomputed.
+ * be skipped this run). `pass` and `error` rows are never touched. Summary and
+ * `ok` are recomputed.
  */
 export function applyBaseline(
   report: PreflightReport,
@@ -215,7 +223,7 @@ export function applyBaseline(
 ): PreflightReport {
   const live = b.entries.filter((e) => !isExpired(e, now));
   const results: CheckResult[] = report.results.map((r) => {
-    if (r.status === "pass") return r;
+    if (r.status === "pass" || r.status === "error") return r;
     const entry = live.find((e) => e.check === r.name && e.status === r.status);
     if (!entry) return r;
     const prefix =

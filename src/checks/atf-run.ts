@@ -326,8 +326,8 @@ function describeRedTests(red: RedTest[]): string {
  *   run(s) settled with no red tests but some tests were skipped.
  * - `pass`  — every configured suite settled green with no red or skipped tests.
  *
- * A check must never throw: `SnAuthError`/`SnHttpError` map to `fail`, and a
- * transient `SnNetworkError` maps to `warn` (advisory/degraded).
+ * A check must never throw: `SnAuthError`, `SnHttpError` and `SnNetworkError`
+ * map to `error` (nothing was verified).
  */
 export const atfRun: Check = {
   name: NAME,
@@ -345,7 +345,7 @@ export const atfRun: Check = {
       "Open the failing test results on the instance, fix the application or the test until every configured suite runs green, then re-run. Configure the suites with atfSuites or a synced state manifest.",
     verdicts: {
       pass: "Every configured suite settled green.",
-      warn: "No suite configured, a run still pending, or a transient unreachable error.",
+      warn: "No suite configured, or a run still pending.",
       fail: "Any test is red — the message carries the failing assertion text.",
     },
   },
@@ -413,19 +413,19 @@ export const atfRun: Check = {
     } catch (err) {
       if (err instanceof SnAuthError) {
         return makeResult(
-          "fail",
+          "error",
           `Authentication failed while running the ATF suite: ${err.message}`,
         );
       }
       if (err instanceof SnNetworkError) {
         return makeResult(
-          "warn",
+          "error",
           `Could not reach the instance to run the ATF suite: ${err.message}`,
         );
       }
       if (err instanceof SnHttpError) {
         return makeResult(
-          "fail",
+          "error",
           `The ATF run API returned an error (HTTP ${err.status}): ${err.message}`,
         );
       }

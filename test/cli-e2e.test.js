@@ -1605,6 +1605,7 @@ test("CLI --fail-on: a lone warn exits 0 by default and 1 with warn", async () =
       pass: 0,
       warn: 1,
       fail: 0,
+      error: 0,
     });
 
     const strict = await runCliAsync([...base, "--fail-on", "warn"], {
@@ -1916,7 +1917,7 @@ test("CLI appends a step summary and outputs inside GitHub Actions", async () =>
     assert.match(md, /instance-url-configured/);
     assert.equal(
       readFileSync(output, "utf8"),
-      "ok=true\npass=0\nwarn=1\nfail=0\n",
+      "ok=true\npass=0\nwarn=1\nfail=0\nerror=0\n",
     );
 
     for (const [args, extra] of [
@@ -1931,9 +1932,79 @@ test("CLI appends a step summary and outputs inside GitHub Actions", async () =>
       assert.equal(readFileSync(summary, "utf8"), md);
     }
     // Outputs are still appended when the summary is off.
-    assert.equal(readFileSync(output, "utf8").split("\n").length - 1, 12);
+    assert.equal(readFileSync(output, "utf8").split("\n").length - 1, 15);
   } finally {
     instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: a baselined finding whose read later fails is an error and exits 1 (RR-3)", async () => {
+  // Phase 1 serves a wildcard CORS rule (a blocker finding) so the baseline
+  // records it; phase 2 answers 403. The read failure must not ride the
+  // baseline entry: it is an `error` row and the run fails.
+  let forbidden = false;
+  const server = createHttpServer((req, res) => {
+    if (forbidden) {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "User Not Authorized" } }));
+      return;
+    }
+    const table = new URL(req.url, "http://127.0.0.1").pathname.replace(
+      "/api/now/table/",
+      "",
+    );
+    const rows =
+      table === "sys_cors_rule"
+        ? [
+            {
+              sys_id: "r1",
+              name: "Open Door",
+              domain: "*",
+              active: "true",
+              "sys_scope.scope": "x_acme_app",
+            },
+          ]
+        : [];
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "x-total-count": String(rows.length),
+    });
+    res.end(JSON.stringify({ result: rows }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const dir = projectDir("snpf-rr3-");
+  try {
+    const base = ["run", "--instance", url, "--only", "cors-rules"];
+    const first = await runCliAsync([...base, "--write-baseline"], {
+      cwd: dir,
+      env: CREDS,
+    });
+    assert.equal(first.status, 1, first.stderr);
+    assert.match(first.stderr, /Wrote baseline with 1 entry/);
+
+    const accepted = await runCliAsync([...base, "--baseline", "--json"], {
+      cwd: dir,
+      env: CREDS,
+    });
+    assert.equal(accepted.status, 0, accepted.stderr);
+
+    forbidden = true;
+    const res = await runCliAsync([...base, "--baseline", "--json"], {
+      cwd: dir,
+      env: CREDS,
+    });
+    assert.equal(res.status, 1, res.stderr);
+    const out = JSON.parse(res.stdout).runs[0].report;
+    assert.equal(out.ok, false);
+    assert.equal(out.results[0].status, "error");
+    assert.doesNotMatch(out.results[0].message, /^Baselined/);
+    assert.deepEqual(out.summary, { pass: 0, warn: 0, fail: 0, error: 1 });
+  } finally {
+    server.closeAllConnections();
+    server.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

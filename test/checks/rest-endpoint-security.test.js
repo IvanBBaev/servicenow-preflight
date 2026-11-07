@@ -210,23 +210,23 @@ test("fails on a trimmed backing-ACL read rather than calling the ACL missing", 
   assert.match(result.message, /security-trimmed/i);
 });
 
-test("fails (not passes) when authentication is rejected", async () => {
+test("reports error (not passes) when authentication is rejected", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /authentication failed/i);
 });
 
-test("warns when the instance is unreachable", async () => {
+test("reports error when the instance is unreachable", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /could not reach/i);
 });
 
-test("warns on an HTTP error from the table read", async () => {
+test("reports error on an HTTP error from the table read", async () => {
   const result = await run(
     makeHttp({ fail: { table: { sys_ws_operation: { http: 502 } } } }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /502/);
 });
 

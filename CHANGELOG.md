@@ -482,6 +482,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Read failures are an `error` status** (RR-3, OD-12; **breaking** for
+  library consumers of `CheckStatus` and `summary`) — an HTTP 4xx/5xx, network
+  or auth failure while a check reads the instance (and such an error thrown
+  out of a check into the runner) is now an `error` row instead of a `fail`.
+  It fails the run (exit `1`, `ok: false`), is counted in a new
+  `summary.error` bucket, and is never demoted: a baseline neither records nor
+  matches it and a severity policy leaves it alone, so a baselined finding
+  whose read later returns 403 no longer reads as accepted. JUnit renders it
+  as `<error>` with an `errors=` count, SARIF at level `error`, markdown with
+  🛑 sorted first, text with `E`, the action gains an `error` output and the
+  trace carries the status and bucket. Unexpected errors (an unparsable
+  response, a bad encoded query, a crash) stay `fail`.
+
 - **Script scanner lexer** (behaviour narrowing) — the pattern checks now
   lex each script field into a code view (comments blanked, string, template
   and regex bodies replaced by spaces), a string view (only string and

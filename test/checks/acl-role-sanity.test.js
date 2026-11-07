@@ -494,21 +494,21 @@ test("handles reference fields delivered as {value} objects", async () => {
   assert.equal(result.status, "pass");
 });
 
-test("fails hard on an authentication error", async () => {
+test("reports error on an authentication error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /authentication/i);
 });
 
-test("warns (degraded) on a network error", async () => {
+test("reports error on a network error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /reach/i);
 });
 
-test("warns (degraded) on an HTTP error reading ACL tables", async () => {
+test("reports error on an HTTP error reading ACL tables", async () => {
   const result = await run(makeHttp({ fail: { http: 500 } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 500/);
 });
 
@@ -516,7 +516,7 @@ test("never throws — always returns a well-formed CheckResult", async () => {
   const result = await run(makeHttp({ fail: { http: 403 } }));
   // A 403 surfaces as SnAuthError, in the fake exactly as in the real client.
   assert.equal(result.name, "acl-role-sanity");
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.equal(typeof result.message, "string");
   assert.ok(result.message.length > 0);
 });

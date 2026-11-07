@@ -177,23 +177,23 @@ test("reads only active=false rows in scope and never a script body", async () =
   );
 });
 
-test("fails on an authentication error", async () => {
+test("reports error on an authentication error", async () => {
   const result = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /authentication failed/i);
 });
 
-test("warns on a network error", async () => {
+test("reports error on a network error", async () => {
   const result = await run(makeHttp({ fail: { network: true } }));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /could not reach/i);
 });
 
-test("warns on an HTTP error reading one of the tables", async () => {
+test("reports error on an HTTP error reading one of the tables", async () => {
   const result = await run(
     makeHttp({ fail: { table: { sys_ui_action: { http: 500 } } } }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /500/);
 });
 

@@ -215,36 +215,36 @@ test("passes when every suite in a multi-suite list is green", async () => {
   assert.match(result.message, /2 suite/);
 });
 
-test("fails on an auth error from the CI/CD API", async () => {
+test("reports error on an auth error from the CI/CD API", async () => {
   const result = await atfRun.run(
     ctx({
       options: { atfSuiteId: "suite-1" },
       fixtures: { fail: { cicd: { auth: true } } },
     }),
   );
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /authentication failed/i);
 });
 
-test("warns on a network error (advisory / degraded)", async () => {
+test("reports error on a network error", async () => {
   const result = await atfRun.run(
     ctx({
       options: { atfSuiteId: "suite-1" },
       fixtures: { fail: { cicd: { network: true } } },
     }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /could not reach/i);
 });
 
-test("fails on an HTTP error from the CI/CD API", async () => {
+test("reports error on an HTTP error from the CI/CD API", async () => {
   const result = await atfRun.run(
     ctx({
       options: { atfSuiteId: "suite-1" },
       fixtures: { fail: { cicd: { http: 500 } } },
     }),
   );
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 500/);
 });
 
@@ -468,7 +468,7 @@ test("never throws — always returns a well-formed CheckResult", async () => {
     }),
   );
   assert.equal(typeof result.name, "string");
-  assert.ok(["pass", "warn", "fail"].includes(result.status));
+  assert.ok(["pass", "warn", "fail", "error"].includes(result.status));
   assert.equal(typeof result.message, "string");
 });
 

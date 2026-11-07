@@ -22,7 +22,7 @@ export function appendSummary(env: GitHubEnv, markdown: string): boolean {
 }
 
 /**
- * Append `ok=`, `pass=`, `warn=` and `fail=` lines (summed over `reports`) to
+ * Append `ok=`, `pass=`, `warn=`, `fail=` and `error=` lines (summed over `reports`) to
  * the file `GITHUB_OUTPUT` names, in GitHub's `key=value` env-file format.
  * Returns whether it wrote anything.
  */
@@ -32,16 +32,17 @@ export function appendOutputs(
 ): boolean {
   const path = env.GITHUB_OUTPUT?.trim();
   if (!path) return false;
-  const total = { pass: 0, warn: 0, fail: 0 };
+  const total = { pass: 0, warn: 0, fail: 0, error: 0 };
   for (const { summary } of reports) {
     total.pass += summary.pass;
     total.warn += summary.warn;
     total.fail += summary.fail;
+    total.error += summary.error;
   }
   const ok = reports.every((r) => r.ok);
   appendFileSync(
     path,
-    `ok=${ok}\npass=${total.pass}\nwarn=${total.warn}\nfail=${total.fail}\n`,
+    `ok=${ok}\npass=${total.pass}\nwarn=${total.warn}\nfail=${total.fail}\nerror=${total.error}\n`,
   );
   return true;
 }

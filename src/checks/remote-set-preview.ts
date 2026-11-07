@@ -529,20 +529,20 @@ export const remoteSetPreview: Check = {
     } catch (err) {
       if (err instanceof SnAuthError) {
         return result(
-          "fail",
+          "error",
           "Authentication failed while reading sys_remote_update_set / sys_update_preview_problem; cannot verify the preview gate.",
         );
       }
       if (err instanceof SnNetworkError) {
         return result(
-          "fail",
+          "error",
           `Could not reach the instance to verify retrieved update set previews: ${err.message}`,
         );
       }
       if (err instanceof SnHttpError) {
-        // The tables may be unavailable to this account — advisory.
+        // An unreadable table verified nothing: error, never a demotable warn.
         return result(
-          "warn",
+          "error",
           `Could not read the retrieved update set tables (HTTP ${err.status}); the preview gate is unverified.`,
         );
       }

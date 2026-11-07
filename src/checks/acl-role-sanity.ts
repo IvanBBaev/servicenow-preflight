@@ -126,7 +126,7 @@ export const aclRoleSanity: Check = {
       "Gate every create, write and delete ACL with a role, condition or script instead of leaving it public, and point each ACL role entry at a role that exists (create the role in the app or remove the stale reference).",
     verdicts: {
       pass: "Every ACL is gated and every referenced role resolves.",
-      warn: "No scope, a public-read ACL, inactive shipped ACLs, or unreadable tables.",
+      warn: "No scope, a public-read ACL, inactive shipped ACLs, or a trimmed read.",
       fail: "A mutating ACL is public-write, or references a role that does not exist.",
     },
   },
@@ -305,20 +305,20 @@ export const aclRoleSanity: Check = {
     } catch (err) {
       if (err instanceof SnAuthError) {
         return result(
-          "fail",
+          "error",
           `Authentication failed while reading ACLs${err.status ? ` (${err.status})` : ""}: ${err.message}`,
         );
       }
       if (err instanceof SnNetworkError) {
         return result(
-          "warn",
+          "error",
           `Could not reach the instance to check ACLs: ${err.message}`,
         );
       }
       if (err instanceof SnHttpError) {
-        // Missing table / insufficient rights to read ACLs — degraded, warn.
+        // An unreadable table verified nothing: error, never a demotable warn.
         return result(
-          "warn",
+          "error",
           `Could not read ACL/role tables (HTTP ${err.status}): ${err.message}`,
         );
       }

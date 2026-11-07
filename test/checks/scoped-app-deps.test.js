@@ -359,7 +359,7 @@ test("an inactive plugin is excluded by the active=true query", async () => {
   assert.match(result.message, /not installed/);
 });
 
-test("maps SnAuthError to fail (never throws)", async () => {
+test("maps SnAuthError to error (never throws)", async () => {
   const http = createFakeSnClient({
     tables: { sys_plugins: [], sys_store_app: [] },
     fail: { auth: true },
@@ -369,11 +369,11 @@ test("maps SnAuthError to fail (never throws)", async () => {
     http,
     options: { requiredApps: [{ id: "x_acme_core" }] },
   });
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /uthentication/);
 });
 
-test("maps SnNetworkError to fail (never throws)", async () => {
+test("maps SnNetworkError to error (never throws)", async () => {
   const http = createFakeSnClient({
     tables: { sys_plugins: [], sys_store_app: [] },
     fail: { network: true },
@@ -383,10 +383,10 @@ test("maps SnNetworkError to fail (never throws)", async () => {
     http,
     options: { requiredApps: [{ id: "x_acme_core" }] },
   });
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
 });
 
-test("maps an unexpected SnHttpError to warn (dependencies unverified)", async () => {
+test("maps an unexpected SnHttpError to error", async () => {
   const http = createFakeSnClient({
     tables: { sys_plugins: [], sys_store_app: [] },
     fail: { http: 500 },
@@ -396,7 +396,7 @@ test("maps an unexpected SnHttpError to warn (dependencies unverified)", async (
     http,
     options: { requiredApps: [{ id: "x_acme_core" }] },
   });
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /unverified/);
 });
 

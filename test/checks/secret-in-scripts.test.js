@@ -286,17 +286,17 @@ test("warns when a zero-row read is ambiguous; a hit still fails", async () => {
 
 test("maps auth, network and HTTP errors", async () => {
   const auth = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(auth.status, "fail");
+  assert.equal(auth.status, "error");
 
   const network = await run(
     makeHttp({ fail: { table: { sys_ui_script: { network: true } } } }),
   );
-  assert.equal(network.status, "warn");
+  assert.equal(network.status, "error");
 
   const http = await run(
     makeHttp({ fail: { table: { sys_ws_operation: { http: 500 } } } }),
   );
-  assert.equal(http.status, "warn");
+  assert.equal(http.status, "error");
   for (const r of [auth, network, http]) {
     assert.equal(r.name, "secret-in-scripts");
     assert.match(r.message, /hard-coded secrets in scripts/);

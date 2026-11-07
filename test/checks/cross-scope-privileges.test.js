@@ -258,24 +258,24 @@ test("warns when a zero-row read is ambiguous", async () => {
   assert.match(result.message, /no pre-trim count arrived/);
 });
 
-test("fails on an auth error", async () => {
+test("reports error on an auth error", async () => {
   const { http } = makeHttp({ fail: { table: { [TABLE]: { auth: true } } } });
   const result = await run(http);
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
 });
 
-test("warns on a network error", async () => {
+test("reports error on a network error", async () => {
   const { http } = makeHttp({
     fail: { table: { [TABLE]: { network: true } } },
   });
   const result = await run(http);
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
 });
 
-test("warns on an HTTP error", async () => {
+test("reports error on an HTTP error", async () => {
   const { http } = makeHttp({ fail: { table: { [TABLE]: { http: 500 } } } });
   const result = await run(http);
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
 });
 
 test("falls back to the sys_id when a row has no target_name", async () => {

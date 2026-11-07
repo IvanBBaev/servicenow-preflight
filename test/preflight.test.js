@@ -193,9 +193,9 @@ test("runPreflight handles a check that throws a non-Error value (CC-5)", async 
 test("runPreflight treats an unrecognised status as fail (CC-6, fail-closed)", async () => {
   const bogus = {
     name: "bogus-status",
-    description: "returns a status outside pass/warn/fail",
+    description: "returns a status outside pass/warn/fail/error",
     run() {
-      return { name: "bogus-status", status: "error", message: "weird" };
+      return { name: "bogus-status", status: "skipped", message: "weird" };
     },
   };
   const report = await runPreflight(ctx(), [bogus]);

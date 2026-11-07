@@ -2,8 +2,13 @@ import type { SnAuth, SnClient, SnTls } from "./http/client.js";
 import type { StateManifest } from "./state/manifest.js";
 import type { ObjectSchema } from "./options/dsl.js";
 
-/** Outcome of a single preflight check. */
-export type CheckStatus = "pass" | "warn" | "fail";
+/**
+ * Outcome of a single preflight check. `error` means the check could not
+ * verify anything because a read failed (HTTP 4xx/5xx, network, auth): it
+ * fails the run exactly like `fail`, is counted in its own summary bucket and
+ * is never demoted by a baseline or a severity policy.
+ */
+export type CheckStatus = "pass" | "warn" | "fail" | "error";
 
 /**
  * How a preflight run authenticates to the target instance. Aliased to the
@@ -222,7 +227,7 @@ export interface Check {
 
 /** Aggregate outcome of a full preflight run. */
 export interface PreflightReport {
-  /** `true` when no check returned a `fail` status. */
+  /** `true` when no check returned a `fail` or `error` status. */
   ok: boolean;
   results: CheckResult[];
   summary: Record<CheckStatus, number>;

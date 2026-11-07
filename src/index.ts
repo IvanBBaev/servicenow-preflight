@@ -18,7 +18,12 @@
 import { defaultChecks } from "./checks/index.js";
 import { sanitizeFindings } from "./findings.js";
 import { anySignal } from "./http/abort.js";
-import { withSignal } from "./http/client.js";
+import {
+  SnAuthError,
+  SnHttpError,
+  SnNetworkError,
+  withSignal,
+} from "./http/client.js";
 import { linkRunContext } from "./http/query.js";
 import { concurrencyProblem, runPool } from "./runner/pool.js";
 import { summarizeResults } from "./summary.js";
@@ -257,9 +262,15 @@ async function runCheck(
       );
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
+      // A read that failed (HTTP 4xx/5xx, network, auth) verified nothing:
+      // `error`, which fails the run and no baseline or policy can demote.
+      const readFailed =
+        err instanceof SnAuthError ||
+        err instanceof SnHttpError ||
+        err instanceof SnNetworkError;
       return {
         name: check.name,
-        status: "fail",
+        status: readFailed ? "error" : "fail",
         message: `Check threw an error: ${detail}`,
       };
     }
@@ -286,7 +297,7 @@ async function runCheck(
 /**
  * Run a set of preflight checks against a target ServiceNow instance and
  * return an aggregate report. The run is considered failing (`ok: false`)
- * if any check returns a `fail` status.
+ * if any check returns a `fail` or `error` status.
  *
  * `ctx.select` (only / skip by check name) filters the supplied `checks`
  * before they run.
@@ -348,7 +359,7 @@ export async function runPreflight(
           kind: "runner",
         },
       ],
-      summary: { pass: 0, warn: 0, fail: 1 },
+      summary: { pass: 0, warn: 0, fail: 1, error: 0 },
     };
   }
 
@@ -366,7 +377,7 @@ export async function runPreflight(
     return {
       ok: false,
       results: [{ name: "preflight", status: "fail", message, kind: "runner" }],
-      summary: { pass: 0, warn: 0, fail: 1 },
+      summary: { pass: 0, warn: 0, fail: 1, error: 0 },
     };
   }
 

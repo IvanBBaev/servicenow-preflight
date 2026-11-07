@@ -164,12 +164,17 @@ checks ship in the default suite; the CLI is a thin wrapper over that function.
 Checks whose only need is credentials always run once credentials are present;
 the rest `warn` (and explain what's missing) until you supply their inputs —
 they never silently pass. Each check returns one status —
-`pass` (`✓`, holds), `warn` (`!`, advisory), or `fail` (`✗`, blocks). **Only a
-`fail` fails the run**; warnings do not, unless you pass `--fail-on warn`. Checks never throw (transport/auth/API
+`pass` (`✓`, holds), `warn` (`!`, advisory), `fail` (`✗`, blocks), or `error`
+(`E`, the check could not read the instance: an HTTP 4xx/5xx, network or auth
+failure). **A `fail` or an `error` fails the run**; warnings do not, unless you
+pass `--fail-on warn`. An `error` row has its own summary bucket and is never
+demoted by a baseline or a severity policy — an unreadable instance is not
+evidence that a finding went away. Checks never throw (transport/auth/API
 errors map to a result), and are read-mostly (the sole write is running the ATF
 suites you configure).
 
-**Exit codes:** `0` when no check `fail`ed; `1` when a check `fail`ed (or, under
+**Exit codes:** `0` when no check `fail`ed or `error`ed; `1` when a check `fail`ed
+or `error`ed (or, under
 `--fail-on warn`, when a row `warn`ed that no baseline accepted), when a
 selection matched zero checks (nothing verified — treated as a failure, never a
 vacuous pass); `2` for a usage
@@ -960,7 +965,7 @@ steps. Each file is written atomically and its folders are created.
 
 Inside GitHub Actions the run also appends the markdown report to the job's
 step summary (`GITHUB_STEP_SUMMARY`; turn it off with `--no-summary` or
-`SNPF_SUMMARY=0`) and writes `ok`, `pass`, `warn` and `fail` to the step
+`SNPF_SUMMARY=0`) and writes `ok`, `pass`, `warn`, `fail` and `error` to the step
 outputs (`GITHUB_OUTPUT`), summed over every instance:
 
 ```yaml

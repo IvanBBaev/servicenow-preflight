@@ -273,30 +273,30 @@ test("a trimmed read with only advisories still fails and keeps the findings", a
   assert.equal(result.findings.length, 1);
 });
 
-test("maps an auth error to fail", async () => {
+test("maps an auth error to error", async () => {
   const { result } = await run([], {
     fail: { table: { sys_db_object: { auth: true } } },
   });
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(
     result.message,
     /Authentication failed while checking table access settings/,
   );
 });
 
-test("maps a network error to warn", async () => {
+test("maps a network error to error", async () => {
   const { result } = await run([], {
     fail: { table: { sys_db_object: { network: true } } },
   });
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Could not reach the instance/);
 });
 
-test("maps an HTTP error to warn", async () => {
+test("maps an HTTP error to error", async () => {
   const { result } = await run([], {
     fail: { table: { sys_db_object: { http: 500 } } },
   });
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 500/);
 });
 

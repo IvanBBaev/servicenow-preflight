@@ -80,6 +80,11 @@ outputs:
   fail:
     description: Number of failing checks.
     value: ${{ steps.run.outputs.fail }}
+  error:
+    description: >-
+      Number of checks whose instance read failed (HTTP, network or auth
+      error); any error fails the run regardless of baseline or policy.
+    value: ${{ steps.run.outputs.error }}
   sarif-file:
     description: Path of the SARIF report (empty when `sarif` is false).
     value: ${{ steps.run.outputs.sarif-file }}

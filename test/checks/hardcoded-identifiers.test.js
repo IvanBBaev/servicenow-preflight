@@ -219,19 +219,19 @@ test("warns when a zero-row read is ambiguous", async () => {
 
 test("maps auth, network and HTTP errors", async () => {
   const auth = await run(makeHttp({ fail: { auth: true } }));
-  assert.equal(auth.status, "fail");
+  assert.equal(auth.status, "error");
   assert.match(auth.message, /Authentication failed/);
 
   const network = await run(
     makeHttp({ fail: { table: { sys_script: { network: true } } } }),
   );
-  assert.equal(network.status, "warn");
+  assert.equal(network.status, "error");
   assert.match(network.message, /Could not reach/);
 
   const http = await run(
     makeHttp({ fail: { table: { sys_ui_policy: { http: 500 } } } }),
   );
-  assert.equal(http.status, "warn");
+  assert.equal(http.status, "error");
   assert.match(http.message, /HTTP 500/);
 });
 

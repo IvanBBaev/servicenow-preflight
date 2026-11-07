@@ -83,7 +83,7 @@ export const inactiveArtifacts: Check = {
       "Delete inactive artifacts the app no longer needs before packaging; if one must stay (e.g. a feature toggle), document why in its description.",
     verdicts: {
       pass: "No inactive artifacts in any of the swept tables in scope.",
-      warn: "Inactive artifacts ship with the app, no scope set, or an unreadable table.",
+      warn: "Inactive artifacts ship with the app, no scope set, or a trimmed read.",
       fail: "Never — install hygiene stays advisory.",
     },
   },

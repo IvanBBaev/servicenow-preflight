@@ -374,32 +374,32 @@ test("an unresolved scope filters by application.scope", async () => {
   assert.equal(appRead.params.sysparm_query, "application.scope=x_other_app");
 });
 
-test("maps an auth error to fail", async () => {
+test("maps an auth error to error", async () => {
   const { result } = await run({
     updateSetId: TARGET,
     fail: { table: { sys_update_set: { auth: true } } },
   });
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(
     result.message,
     /Authentication failed while checking update set collisions/,
   );
 });
 
-test("maps a network error to warn", async () => {
+test("maps a network error to error", async () => {
   const { result } = await run({
     updateSetId: TARGET,
     fail: { table: { sys_update_xml: { network: true } } },
   });
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /Could not reach the instance/);
 });
 
-test("maps an HTTP error to warn", async () => {
+test("maps an HTTP error to error", async () => {
   const { result } = await run({
     updateSetId: TARGET,
     fail: { table: { sys_update_xml: { http: 500 } } },
   });
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 500/);
 });

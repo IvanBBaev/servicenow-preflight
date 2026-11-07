@@ -304,33 +304,33 @@ test("update-set-state: batch form — an unrecognised child state warns and is 
   assert.match(result.message, /BogusChild/);
 });
 
-test("update-set-state: fails on an auth error", async () => {
+test("update-set-state: reports error on an auth error", async () => {
   const http = createFakeSnClient({
     tables: { sys_update_set: [], sys_update_xml: [] },
     fail: { auth: true },
   });
   const result = await updateSetState.run(ctx(http));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /authoriz/i);
 });
 
-test("update-set-state: warns on a transient network error", async () => {
+test("update-set-state: reports error on a transient network error", async () => {
   const http = createFakeSnClient({
     tables: { sys_update_set: [], sys_update_xml: [] },
     fail: { network: true },
   });
   const result = await updateSetState.run(ctx(http));
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "error");
   assert.match(result.message, /reach|transient/i);
 });
 
-test("update-set-state: fails on an HTTP error", async () => {
+test("update-set-state: reports error on an HTTP error", async () => {
   const http = createFakeSnClient({
     tables: { sys_update_set: [], sys_update_xml: [] },
     fail: { http: 500 },
   });
   const result = await updateSetState.run(ctx(http));
-  assert.equal(result.status, "fail");
+  assert.equal(result.status, "error");
   assert.match(result.message, /HTTP 500/);
 });
 

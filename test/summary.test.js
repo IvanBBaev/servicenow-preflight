@@ -8,7 +8,7 @@ test("summarizeResults counts pass/warn/fail and is ok without failures", () => 
     { name: "b", status: "warn", message: "hmm" },
   ]);
   assert.equal(report.ok, true);
-  assert.deepEqual(report.summary, { pass: 1, warn: 1, fail: 0 });
+  assert.deepEqual(report.summary, { pass: 1, warn: 1, fail: 0, error: 0 });
   assert.equal(report.results.length, 2);
 });
 
@@ -21,7 +21,7 @@ test("summarizeResults treats an unrecognised status as fail (P1-1, fail-closed)
     { name: "missing", status: undefined, message: "no status" },
   ]);
   assert.equal(report.ok, false);
-  assert.deepEqual(report.summary, { pass: 1, warn: 0, fail: 2 });
+  assert.deepEqual(report.summary, { pass: 1, warn: 0, fail: 2, error: 0 });
   assert.equal(report.results[1].status, "fail");
   assert.match(
     report.results[1].message,
@@ -34,5 +34,5 @@ test("summarizeResults treats an unrecognised status as fail (P1-1, fail-closed)
 test("summarizeResults on no results is ok with an empty summary", () => {
   const report = summarizeResults([]);
   assert.equal(report.ok, true);
-  assert.deepEqual(report.summary, { pass: 0, warn: 0, fail: 0 });
+  assert.deepEqual(report.summary, { pass: 0, warn: 0, fail: 0, error: 0 });
 });

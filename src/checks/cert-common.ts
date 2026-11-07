@@ -128,12 +128,13 @@ export function withFindings(
 }
 
 /**
- * Map a thrown error to the shared certification-check verdict: auth failures
- * fail (the gate could not prove anything and the run itself is broken),
- * network / HTTP errors warn (degraded — the instance or table was not
- * reachable), and anything else — including an {@link EncodedQueryError} from
- * the injection-safe query builders — fails closed. `subject` names what was
- * being inspected so the message stays actionable per check.
+ * Map a thrown error to the shared certification-check verdict. A failed read
+ * — an auth failure (401/403), any other HTTP 4xx/5xx or a network error — is
+ * `error`: the check verified nothing, so the run fails, the row is counted in
+ * its own bucket and no baseline or severity policy can demote it (OD-12).
+ * Anything else — including an {@link EncodedQueryError} from the
+ * injection-safe query builders — fails closed as `fail`. `subject` names
+ * what was being inspected so the message stays actionable per check.
  */
 export function errorResult(
   name: string,
@@ -147,19 +148,19 @@ export function errorResult(
   });
   if (err instanceof SnAuthError) {
     return result(
-      "fail",
+      "error",
       `Authentication failed while checking ${subject}${err.status ? ` (${err.status})` : ""}: ${err.message}`,
     );
   }
   if (err instanceof SnNetworkError) {
     return result(
-      "warn",
+      "error",
       `Could not reach the instance to check ${subject}: ${err.message}`,
     );
   }
   if (err instanceof SnHttpError) {
     return result(
-      "warn",
+      "error",
       `Could not read the tables behind ${subject} (HTTP ${err.status}): ${err.message}`,
     );
   }

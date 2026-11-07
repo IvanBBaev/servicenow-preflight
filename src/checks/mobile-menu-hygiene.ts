@@ -56,7 +56,7 @@ export const mobileMenuHygiene: Check = {
       "Delete the mobile Application Menus and Modules the app does not use (they are created by default with each table) before publishing a non-mobile app.",
     verdicts: {
       pass: "The instance reports the scope ships no mobile menus or modules.",
-      warn: "Mobile menus or modules found in scope, no scope set, or an unreadable table.",
+      warn: "Mobile menus or modules found in scope, no scope set, or a trimmed read.",
       fail: "Never — packaging hygiene stays advisory.",
     },
   },
