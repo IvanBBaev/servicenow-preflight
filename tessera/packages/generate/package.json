@@ -24,6 +24,6 @@
     "@tessera/impact": "*",
     "@tessera/specs": "*",
     "@tessera/types": "*",
-    "acorn": "8.18.0"
+    "acorn": "8.19.0"
   }
 }
