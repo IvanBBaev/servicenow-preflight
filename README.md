@@ -224,6 +224,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--changed-since <dur\|date>` | `run`: only the checks whose tables changed since `<dur>` ago (`24h`, `7d`) or an ISO date; see below.                        |
 | `--with-last-run`             | `sync`: also pull each test's most recent result.                                                                             |
 | `--allow-empty`               | `sync`: commit an empty snapshot over a non-empty manifest.                                                                   |
+| `--allow-no-auth`             | `run`/`sync`: under `CI`, accept a run with no credentials (anonymous instance); without it that is exit `2`.                 |
 | `--max-age <dur>`             | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                                |
 | `--allow-stage-skip`          | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                                   |
 | `--format <fmt>`              | `pretty` (default), `json`, `junit`, `sarif`, `markdown`, `github` (`list`/`explain`: `pretty` or `json`).                    |
@@ -956,6 +957,17 @@ jobs:
 
 Store credentials as CI secrets — the tool only ever reads them from the
 environment.
+
+A missing secret fails closed. When `CI` is set and no credentials resolve,
+`run` and `sync` stop with exit `2` before any request:
+
+```text
+No credentials resolved for https://acme.service-now.com and CI is set. Set SNPF_USER and SNPF_PASS (basic), SNPF_TOKEN (bearer), SNPF_API_KEY, SNPF_OAUTH_CLIENT_ID and SNPF_OAUTH_CLIENT_SECRET (OAuth), or SNPF_MTLS_CERT and SNPF_MTLS_KEY (mTLS); a missing or renamed CI secret reads as unset. Pass --allow-no-auth for an anonymous instance.
+```
+
+Half a credential set is exit `2` everywhere, CI or not, and names the missing
+variable (`SNPF_USER is set but SNPF_PASS is not.`). Pass `--allow-no-auth`
+only for an instance that really needs no credentials.
 
 ### Several formats in one run, step summary and outputs
 

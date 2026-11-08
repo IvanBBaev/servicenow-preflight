@@ -31,6 +31,7 @@ import { runPreflight, selectChecks } from "./index.js";
 import { doctorChecks, type InstanceSource } from "./doctor.js";
 import {
   loadConfig,
+  type LoadedConfig,
   parseConcurrency,
   parseFailOn,
   parseSwitch,
@@ -177,6 +178,8 @@ interface ParsedArgs {
   withLastRun: boolean;
   /** `sync`: permit committing an all-empty snapshot over a non-empty manifest. */
   allowEmpty: boolean;
+  /** `run`/`sync`: accept a CI run with no credentials (anonymous instance). */
+  allowNoAuth: boolean;
   only?: string[];
   skip?: string[];
   format: OutputFormat;
@@ -391,6 +394,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     all: false,
     withLastRun: false,
     allowEmpty: false,
+    allowNoAuth: false,
     noCache: false,
     timings: false,
     recordRaw: false,
@@ -481,6 +485,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--allow-empty":
         args.allowEmpty = true;
+        break;
+      case "--allow-no-auth":
+        args.allowNoAuth = true;
         break;
       case "--allow-stage-skip":
         args.allowStageSkip = true;
@@ -945,6 +952,8 @@ Multi-instance (registry at .preflight/instances.json):
                          a given path must exist (else exit 2)
       --with-last-run    sync: also pull each test's most recent result
       --allow-empty      sync: commit an empty snapshot over a non-empty manifest
+      --allow-no-auth    run/sync: under CI, accept a run with no credentials
+                         (an anonymous instance); without it that is exit 2
                          (refused by default as likely ACL security-trimming;
                          cannot override a proven security-trimmed pull)
 
@@ -1566,6 +1575,34 @@ function warnConfigIssues(config: unknown): void {
   }
 }
 
+/** `CI` is set to anything but an empty, `0` or `false` value. */
+function isCi(env: NodeJS.ProcessEnv): boolean {
+  const v = env.CI?.trim().toLowerCase();
+  return !!v && v !== "0" && v !== "false";
+}
+
+/**
+ * RR-4 (DX-1): under CI, a target instance with no credentials at all is a
+ * config error (exit 2), not an all-warn green run — a renamed or expired CI
+ * secret must fail the gate. Locally the run proceeds and the checks warn.
+ * `--allow-no-auth` opts out for an anonymous instance. Partial credential sets
+ * already failed in `loadConfig`.
+ */
+function assertCredentialsUnderCi(
+  loaded: LoadedConfig,
+  instanceUrl: string | undefined,
+  args: ParsedArgs,
+  envPrefix?: string,
+): void {
+  if (!instanceUrl || loaded.auth || loaded.tls) return;
+  if (args.allowNoAuth || !isCi(loaded.env)) return;
+  const p = envPrefix?.trim().toUpperCase();
+  const names = p ? ` (or the SNPF_${p}_* forms)` : "";
+  throw new UsageError(
+    `No credentials resolved for ${instanceUrl} and CI is set. Set SNPF_USER and SNPF_PASS (basic), SNPF_TOKEN (bearer), SNPF_API_KEY, SNPF_OAUTH_CLIENT_ID and SNPF_OAUTH_CLIENT_SECRET (OAuth), or SNPF_MTLS_CERT and SNPF_MTLS_KEY (mTLS)${names}; a missing or renamed CI secret reads as unset. Pass --allow-no-auth for an anonymous instance.`,
+  );
+}
+
 async function runOneInstance(
   target: RunTarget,
   args: ParsedArgs,
@@ -1589,6 +1626,8 @@ async function runOneInstance(
     target.instanceUrl ??
     loaded.config.instanceUrl ??
     (replay ? PLACEHOLDER_ORIGIN : undefined);
+  if (!replay)
+    assertCredentialsUnderCi(loaded, instanceUrl, args, target.envPrefix);
   const scope = target.scope ?? loaded.config.scope;
   const manifest = target.name
     ? await loadManifest(target.name, cwd)
@@ -1995,6 +2034,7 @@ async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
     envPrefix: inst.envPrefix,
     onWarning: warnConfigOnce,
   });
+  assertCredentialsUnderCi(loaded, inst.url, args, inst.envPrefix);
 
   const http = createSnClient({
     instanceUrl: inst.url,

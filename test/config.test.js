@@ -36,8 +36,11 @@ test("resolveAuthFromEnv returns undefined when no creds are present", () => {
   assert.equal(resolveAuthFromEnv({}), undefined);
 });
 
-test("resolveAuthFromEnv ignores a user without a pass", () => {
-  assert.equal(resolveAuthFromEnv({ SNPF_USER: "alice" }), undefined);
+test("resolveAuthFromEnv rejects a user without a pass (RR-4)", () => {
+  assert.throws(
+    () => resolveAuthFromEnv({ SNPF_USER: "alice" }),
+    (err) => err instanceof UsageError && /SNPF_PASS is not/.test(err.message),
+  );
 });
 
 test("loadConfig returns an empty config when no file is present", async () => {
@@ -388,8 +391,12 @@ test("resolveAuthFromEnv honours an explicit SNPF_AUTH selector over auto-detect
   assert.deepEqual(auth, { kind: "apikey", apiKey: "key-abc" });
 });
 
-test("resolveAuthFromEnv yields undefined when SNPF_AUTH names a method whose inputs are absent", () => {
-  assert.equal(resolveAuthFromEnv({ SNPF_AUTH: "apikey" }), undefined);
+test("resolveAuthFromEnv rejects an SNPF_AUTH method whose inputs are absent (RR-4)", () => {
+  assert.throws(
+    () => resolveAuthFromEnv({ SNPF_AUTH: "apikey" }),
+    (err) =>
+      err instanceof UsageError && /SNPF_API_KEY is not set/.test(err.message),
+  );
 });
 
 test("resolveAuthFromEnv reads an '@path' JWT key from a file", () => {
@@ -432,9 +439,8 @@ test("resolveAuthFromEnv throws when an '@path' value points at a missing file",
   );
 });
 
-test("resolveTlsFromEnv returns undefined without both cert and key", () => {
+test("resolveTlsFromEnv returns undefined when neither cert nor key is set", () => {
   assert.equal(resolveTlsFromEnv({}), undefined);
-  assert.equal(resolveTlsFromEnv({ SNPF_MTLS_CERT: "certpem" }), undefined);
 });
 
 test("resolveTlsFromEnv reads inline cert/key plus optional CA and passphrase", () => {

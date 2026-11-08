@@ -482,6 +482,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Missing or partial credentials fail closed** (RR-4; **breaking** for CI
+  runs without credentials) — a half-set credential pair is a config error
+  (exit `2`) naming the missing variable, never values: `SNPF_USER` without
+  `SNPF_PASS` (or the reverse), an OAuth client id without its secret (or the
+  reverse), a refresh token or JWT key without the OAuth client, a known
+  `SNPF_AUTH` kind whose inputs are incomplete, and `SNPF_MTLS_CERT` without
+  `SNPF_MTLS_KEY` (or the reverse). `resolveAuthFromEnv` / `resolveTlsFromEnv`
+  throw `UsageError` for these instead of returning `undefined`. When `CI` is
+  set (anything but empty, `0` or `false`), a `run` or `sync` against an
+  instance with no credentials at all is exit `2` instead of an all-warn green
+  run, so a renamed or expired CI secret fails the gate; `--allow-no-auth`
+  opts out for an anonymous instance. Locally the run still proceeds and the
+  checks warn; `--replay` needs no credentials.
+
 - **Read failures are an `error` status** (RR-3, OD-12; **breaking** for
   library consumers of `CheckStatus` and `summary`) — an HTTP 4xx/5xx, network
   or auth failure while a check reads the instance (and such an error thrown

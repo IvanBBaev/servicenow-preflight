@@ -659,12 +659,108 @@ function buildAuthByKind(
  * 4. `SNPF_USER` + `SNPF_PASS` → `basic`, carrying an MFA one-time password
  *    when `SNPF_MFA_TOTP_SECRET` (or `SNPF_MFA_CODE`) is set (F-X-11).
  * 5. otherwise no header auth (mutual TLS may still identify the caller).
+ *
+ * Throws a {@link UsageError} naming the missing variable when a credential set
+ * is only half there (RR-4) — e.g. `SNPF_USER` without `SNPF_PASS`, an OAuth
+ * client id without its secret, or a known `SNPF_AUTH` kind whose inputs are
+ * incomplete — instead of silently resolving to no auth.
  */
 export function resolveAuthFromEnv(
   env: NodeJS.ProcessEnv = process.env,
   prefix?: string,
 ): PreflightAuth | undefined {
-  const src = namespacedEnv(env, prefix);
+  const auth = detectAuth(namespacedEnv(env, prefix));
+  if (!auth) {
+    // RR-4 (DX-1): half a credential set is a config error, not "no auth" —
+    // a renamed CI secret must not turn the gate into a silent pass.
+    const gap = authGap(namespacedEnv(env, prefix), prefix);
+    if (gap) throw new UsageError(gap);
+  }
+  return auth;
+}
+
+/** Inputs each auth kind needs; an inner array means "one of these". */
+const KIND_INPUTS: Readonly<Record<string, readonly (string | string[])[]>> = {
+  basic: [ENV.user, ENV.pass],
+  token: [ENV.token],
+  oauth: [ENV.token],
+  apikey: [ENV.apiKey],
+  "oauth-password": [
+    ENV.oauthClientId,
+    ENV.oauthClientSecret,
+    ENV.user,
+    ENV.pass,
+  ],
+  "oauth-client": [ENV.oauthClientId, ENV.oauthClientSecret],
+  "oauth-refresh": [
+    ENV.oauthClientId,
+    ENV.oauthClientSecret,
+    ENV.oauthRefreshToken,
+  ],
+  "oauth-jwt": [ENV.oauthClientId, [ENV.jwtKey, ENV.jwtAssertion]],
+};
+
+/** A credential variable counts as set when it holds a non-blank value. */
+function isSet(env: NodeJS.ProcessEnv, name: string): boolean {
+  return (env[name]?.trim() ?? "") !== "";
+}
+
+/** Spell a variable for a message: `SNPF_DEV_PASS (or SNPF_PASS)` under a prefix. */
+function varLabel(name: string, prefix?: string): string {
+  const p = prefix?.trim().toUpperCase();
+  return p ? `SNPF_${p}_${name.slice("SNPF_".length)} (or ${name})` : name;
+}
+
+function joinLabels(names: readonly string[], prefix?: string): string {
+  return names.map((n) => varLabel(n, prefix)).join(" and ");
+}
+
+/**
+ * Describe a partial credential set (RR-4): an auth selector whose inputs are
+ * incomplete, or — when auto-detection resolved nothing — a variable whose
+ * partner is missing. `undefined` when nothing is half-set. Names variables,
+ * never values.
+ */
+function authGap(env: NodeJS.ProcessEnv, prefix?: string): string | undefined {
+  const selector = env[ENV.auth]?.trim();
+  if (selector) {
+    const inputs = KIND_INPUTS[selector];
+    // An unknown selector is RR-5's concern; nothing to name here.
+    if (!inputs) return undefined;
+    const missing = inputs
+      .filter((i) =>
+        Array.isArray(i) ? !i.some((n) => isSet(env, n)) : !isSet(env, i),
+      )
+      .map((i) =>
+        Array.isArray(i)
+          ? i.map((n) => varLabel(n, prefix)).join(" or ")
+          : varLabel(i, prefix),
+      );
+    if (missing.length === 0) return undefined;
+    return `${varLabel(ENV.auth, prefix)} is "${selector}" but ${missing.join(" and ")} ${missing.length > 1 ? "are" : "is"} not set.`;
+  }
+  const pair = (a: string, b: string): string | undefined =>
+    isSet(env, a) && !isSet(env, b)
+      ? `${varLabel(a, prefix)} is set but ${varLabel(b, prefix)} is not.`
+      : undefined;
+  const oauthExtras = [ENV.oauthRefreshToken, ENV.jwtKey, ENV.jwtAssertion];
+  const strayOauth = oauthExtras.find((n) => isSet(env, n));
+  const missingClient = [ENV.oauthClientId, ENV.oauthClientSecret].filter(
+    (n) => !isSet(env, n),
+  );
+  return (
+    pair(ENV.oauthClientId, ENV.oauthClientSecret) ??
+    pair(ENV.oauthClientSecret, ENV.oauthClientId) ??
+    (strayOauth && missingClient.length > 0
+      ? `${varLabel(strayOauth, prefix)} is set but ${joinLabels(missingClient, prefix)} ${missingClient.length > 1 ? "are" : "is"} not.`
+      : undefined) ??
+    pair(ENV.user, ENV.pass) ??
+    pair(ENV.pass, ENV.user)
+  );
+}
+
+/** Auto-detect (or build the selected) auth; `undefined` when none resolves. */
+function detectAuth(src: NodeJS.ProcessEnv): PreflightAuth | undefined {
   const selector = src[ENV.auth]?.trim();
   if (selector) return buildAuthByKind(selector, src);
 
@@ -692,7 +788,8 @@ export function resolveAuthFromEnv(
  * Resolve a mutual-TLS client certificate from the environment. Requires both
  * `SNPF_MTLS_CERT` and `SNPF_MTLS_KEY` (each a PEM value or an `@path`); the CA
  * bundle and key passphrase are optional. Resolves independently of the header
- * auth — a client cert may accompany any method or stand alone.
+ * auth — a client cert may accompany any method or stand alone. Throws a
+ * {@link UsageError} when only one of the certificate and key is set (RR-4).
  */
 export function resolveTlsFromEnv(
   env: NodeJS.ProcessEnv = process.env,
@@ -701,7 +798,17 @@ export function resolveTlsFromEnv(
   const src = namespacedEnv(env, prefix);
   const cert = readMaybeFile(src[ENV.mtlsCert]);
   const key = readMaybeFile(src[ENV.mtlsKey]);
-  if (!cert || !key) return undefined;
+  if (!cert && !key) return undefined;
+  if (!cert || !key) {
+    // RR-4: a client certificate without its key (or the reverse) is a
+    // config error, not a silent fall-back to no client certificate.
+    const [have, lack] = cert
+      ? [ENV.mtlsCert, ENV.mtlsKey]
+      : [ENV.mtlsKey, ENV.mtlsCert];
+    throw new UsageError(
+      `${varLabel(have, prefix)} is set but ${varLabel(lack, prefix)} is not.`,
+    );
+  }
   const tls: SnTls = { cert, key };
   const ca = readMaybeFile(src[ENV.mtlsCa]);
   if (ca) tls.ca = ca;

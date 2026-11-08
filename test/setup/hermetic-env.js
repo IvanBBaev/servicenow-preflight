@@ -19,6 +19,9 @@ for (const name of [
   // summary and outputs.
   "GITHUB_STEP_SUMMARY",
   "GITHUB_OUTPUT",
+  // RR-4: under CI a run with no credentials is exit 2; tests that need CI
+  // set it explicitly.
+  "CI",
 ]) {
   delete process.env[name];
 }
