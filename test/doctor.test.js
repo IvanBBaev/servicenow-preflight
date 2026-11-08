@@ -17,7 +17,6 @@ import {
   tablesOf,
 } from "../build/doctor.js";
 import { createFakeSnClient } from "../build/http/fake.js";
-import { SnAuthError } from "../build/http/client.js";
 import { reportOf } from "./helpers/json-report.js";
 
 const INSTANCE = "https://dev12345.service-now.com";
@@ -43,12 +42,18 @@ function restrictionOn() {
 }
 
 /**
- * Wrap a client so every call is recorded as "METHOD what" and selected
- * tables answer HTTP 403 the way the real client raises it.
+ * A fake `fail` fixture that makes each named table answer HTTP 403 — the
+ * fake raises the same `SnAuthError` the real client does.
  */
-function recording(http, { forbidden = [] } = {}) {
+function denied(...tables) {
+  return {
+    table: Object.fromEntries(tables.map((t) => [t, { forbidden: true }])),
+  };
+}
+
+/** Wrap a client so every call is recorded as "METHOD what". */
+function recording(http) {
   const calls = [];
-  const deny = new Set(forbidden);
   return {
     calls,
     client: {
@@ -61,11 +66,6 @@ function recording(http, { forbidden = [] } = {}) {
             return (...args) => {
               const read = ["get", "query", "queryWithMeta"].includes(prop);
               calls.push(`${read ? "GET" : String(prop)} ${name}`);
-              if (deny.has(name)) {
-                return Promise.reject(
-                  new SnAuthError(`Forbidden reading ${name}`, 403),
-                );
-              }
               return value.apply(target, args);
             };
           },
@@ -88,10 +88,9 @@ async function doctor({
   auth = BASIC,
   instanceUrl = INSTANCE,
   selected = defaultChecks,
-  forbidden,
   nodeVersion,
 }) {
-  const rec = recording(http, { forbidden });
+  const rec = recording(http);
   const checks = doctorChecks({
     selected,
     version: "9.9.9",
@@ -179,11 +178,9 @@ test("doctor treats a Web Service Access Only account as exempt", async () => {
 test("doctor warns (never fails) when sys_properties cannot be read", async () => {
   const http = createFakeSnClient({
     tables: { sys_user: account(), sys_user_has_role: [] },
+    fail: denied("sys_properties"),
   });
-  const { row, report } = await doctor({
-    http,
-    forbidden: ["sys_properties"],
-  });
+  const { row, report } = await doctor({ http });
   const basic = row("doctor-basic-auth");
   assert.equal(basic.status, "warn");
   assert.match(basic.message, /Cannot read sys_properties \(HTTP 403\)/);
@@ -194,18 +191,22 @@ test("doctor warns (never fails) when sys_properties cannot be read", async () =
 test("doctor warns with 'ask an admin' when the role table cannot be read", async () => {
   const http = createFakeSnClient({
     tables: { sys_properties: restrictionOn(), sys_user: account() },
+    fail: denied("sys_user_has_role"),
   });
-  const { row } = await doctor({ http, forbidden: ["sys_user_has_role"] });
+  const { row } = await doctor({ http });
   assert.equal(row("doctor-account").status, "warn");
   assert.match(row("doctor-account").message, /ask an admin to confirm/);
   assert.equal(row("doctor-basic-auth").status, "warn");
 });
 
 test("doctor names the checks a refused table affects", async () => {
-  const http = createFakeSnClient({ tables: { sys_user: account() } });
+  const http = createFakeSnClient({
+    tables: { sys_user: account() },
+    fail: denied("sys_update_set"),
+  });
   const readers = tablesOf(defaultChecks).get("sys_update_set");
   assert.ok(readers && readers.length > 0);
-  const { row } = await doctor({ http, forbidden: ["sys_update_set"] });
+  const { row } = await doctor({ http });
   const access = row("doctor-table-access");
   assert.equal(access.status, "warn");
   assert.match(access.message, /HTTP 403/);
@@ -243,10 +244,10 @@ test("doctor on the fake carries a remediation on every row warning", async () =
   // runner and the fake client has no latency to measure.
   const http = createFakeSnClient({
     tables: { sys_properties: restrictionOn(), sys_user: account() },
+    fail: denied("sys_user_has_role", "sys_update_set"),
   });
   const { report } = await doctor({
     http,
-    forbidden: ["sys_user_has_role", "sys_update_set"],
     nodeVersion: "18.19.0",
   });
   const warns = report.results.filter((r) => r.status === "warn");
