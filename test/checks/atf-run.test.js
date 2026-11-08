@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { atfRun } from "../../build/checks/atf-run.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { parse } from "../../build/options/dsl.js";
 
 const INSTANCE = "https://dev12345.service-now.com";
 
@@ -143,7 +144,7 @@ test("fails a suite that settled red even with no per-test rows to scope", async
   assert.match(result.message, /suite suite-1/);
 });
 
-test("warns when the run is still pending", async () => {
+test("RR-6 — a suite still pending after the poll budget fails by default", async () => {
   const result = await atfRun.run(
     ctx({
       options: { atfSuiteId: "suite-1" },
@@ -152,8 +153,62 @@ test("warns when the run is still pending", async () => {
       },
     }),
   );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /pending/i);
+  assert.match(result.message, /poll budget/);
+  assert.match(result.message, /cicdMaxPolls/);
+});
+
+test('RR-6 — atfPending: "fail" is the explicit default', async () => {
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1", atfPending: "fail" },
+      fixtures: {
+        cicd: { runTestSuite: { status: "running" } },
+      },
+    }),
+  );
+  assert.equal(result.status, "fail");
+});
+
+test('RR-6 — atfPending: "warn" downgrades a pending suite to warn', async () => {
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1", atfPending: "warn" },
+      fixtures: {
+        cicd: { runTestSuite: { status: "pending" } },
+      },
+    }),
+  );
   assert.equal(result.status, "warn");
   assert.match(result.message, /pending/i);
+  assert.match(result.message, /poll budget/);
+});
+
+test('RR-6 — atfPending: "warn" never hides a red suite next to a pending one', async () => {
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuites: ["red", "slow"], atfPending: "warn" },
+      fixtures: {
+        cicd: {
+          runTestSuite: {
+            red: { status: "failed" },
+            slow: { status: "pending" },
+          },
+        },
+      },
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /1 suite\(s\) still pending/);
+});
+
+test("RR-6 — the options schema accepts fail/warn and rejects anything else", () => {
+  const schema = atfRun.optionsSchema;
+  assert.ok(schema);
+  assert.equal(parse(schema, { atfPending: "warn" }).ok, true);
+  assert.equal(parse(schema, { atfPending: "fail" }).ok, true);
+  assert.equal(parse(schema, { atfPending: "ignore" }).ok, false);
 });
 
 test("evaluates every suite in a multi-suite list; one red => fail", async () => {

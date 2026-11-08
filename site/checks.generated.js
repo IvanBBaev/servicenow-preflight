@@ -60,8 +60,8 @@ window.PREFLIGHT_CHECKS = [
     "name": "atf-run",
     "tag": "atfSuites",
     "desc": "The configured ATF test suites run green — no failing or errored tests.",
-    "fail": "Any test is red — the message carries the failing assertion text.",
-    "warn": "No suite configured, or a run still pending.",
+    "fail": "Any test is red (the message carries the failing assertion text), or a suite is still pending after the poll budget.",
+    "warn": "No suite configured, some tests skipped, or a run still pending with atfPending: \"warn\".",
     "pass": "Every configured suite settled green."
   },
   {

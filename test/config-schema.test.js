@@ -25,6 +25,7 @@ test("every check that reads ctx.options declares an options schema", () => {
   ]);
   assert.deepEqual(Object.keys(declaredOptions(ALL)).sort(), [
     "atfEnablement",
+    "atfPending",
     "atfSuiteId",
     "atfSuiteNames",
     "atfSuites",

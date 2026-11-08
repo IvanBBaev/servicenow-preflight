@@ -122,6 +122,14 @@
               "items": {
                 "type": "string"
               }
+            },
+            "atfPending": {
+              "description": "How a suite still pending after the CI/CD poll budget is reported: \"fail\" (default) or \"warn\" for teams that accept async suites.",
+              "type": "string",
+              "enum": [
+                "fail",
+                "warn"
+              ]
             }
           },
           "additionalProperties": false
@@ -378,6 +386,14 @@
           "items": {
             "type": "string"
           }
+        },
+        "atfPending": {
+          "description": "How a suite still pending after the CI/CD poll budget is reported: \"fail\" (default) or \"warn\" for teams that accept async suites.",
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn"
+          ]
         },
         "requiredApps": {
           "description": "Apps and plugins that must be installed and active.",

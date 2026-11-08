@@ -1726,7 +1726,8 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
   /**
    * Follow a CI/CD run's `links.progress` link until the run settles (or we run
    * out of polls). Returns the last payload seen — terminal when possible, the
-   * latest pending snapshot otherwise (the caller maps that to a `warn`).
+   * latest pending snapshot otherwise (atf-run maps that to `fail`, or to
+   * `warn` with `atfPending: "warn"`).
    */
   async function pollCicdRun(
     payload: unknown,

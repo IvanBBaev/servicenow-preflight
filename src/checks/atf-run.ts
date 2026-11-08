@@ -21,7 +21,8 @@ const SUITE_RESULT_TABLE = "sys_atf_test_suite_result";
 
 /**
  * CI/CD suite `status` values that mean "still going" — the run has not settled
- * yet, so we cannot assert pass/fail. Advisory → `warn`.
+ * within the poll budget, so nothing was verified. `fail` by default; `warn`
+ * only when `options.atfPending` is `"warn"` (RR-6).
  */
 const PENDING_STATUSES = new Set([
   "pending",
@@ -115,6 +116,24 @@ export const ATF_SUITE_OPTIONS: Shape = {
     }),
   ),
 };
+
+/** How a suite still pending after the CI/CD poll budget is reported (RR-6). */
+const ATF_PENDING_MODES = ["fail", "warn"] as const;
+
+/** Options read by `atf-run` only: the shared suite keys plus `atfPending`. */
+const ATF_RUN_OPTIONS: Shape = {
+  ...ATF_SUITE_OPTIONS,
+  atfPending: o.optional(
+    o.enumOf(ATF_PENDING_MODES, {
+      description:
+        'How a suite still pending after the CI/CD poll budget is reported: "fail" (default) or "warn" for teams that accept async suites.',
+    }),
+  ),
+};
+
+/** Human-readable CI/CD poll budget, quoted in the pending message. */
+const POLL_BUDGET_NOTE =
+  "the CI/CD poll budget (cicdMaxPolls × cicdPollIntervalMs, default 450 × 2 s ≈ 15 min)";
 
 export function resolveSuiteIds(ctx: PreflightContext): string[] {
   const opts = ctx.options ?? {};
@@ -322,8 +341,11 @@ function describeRedTests(red: RedTest[]): string {
  *   suite settled on a failed terminal status, or a suite settled on an
  *   unrecognised status (`unknown` / `not_found` / `timed_out` / …) — a suite
  *   that did not clearly pass is never counted green.
- * - `warn`  — no suite is configured, a run is still pending/running, or the
- *   run(s) settled with no red tests but some tests were skipped.
+ * - `fail`  — also when a configured suite is still pending after the CI/CD
+ *   poll budget (RR-6): nothing was verified, so the gate must not pass.
+ * - `warn`  — no suite is configured, a run is still pending and
+ *   `options.atfPending` is `"warn"`, or the run(s) settled with no red tests
+ *   but some tests were skipped.
  * - `pass`  — every configured suite settled green with no red or skipped tests.
  *
  * A check must never throw: `SnAuthError`, `SnHttpError` and `SnNetworkError`
@@ -332,7 +354,7 @@ function describeRedTests(red: RedTest[]): string {
 export const atfRun: Check = {
   name: NAME,
   description: "The configured ATF test suite passes.",
-  optionsSchema: o.object(ATF_SUITE_OPTIONS),
+  optionsSchema: o.object(ATF_RUN_OPTIONS),
   meta: {
     requires: "atfSuites",
     // Runs alone: ATF executions contend with every other read on the instance.
@@ -345,8 +367,8 @@ export const atfRun: Check = {
       "Open the failing test results on the instance, fix the application or the test until every configured suite runs green, then re-run. Configure the suites with atfSuites or a synced state manifest.",
     verdicts: {
       pass: "Every configured suite settled green.",
-      warn: "No suite configured, or a run still pending.",
-      fail: "Any test is red — the message carries the failing assertion text.",
+      warn: 'No suite configured, some tests skipped, or a run still pending with atfPending: "warn".',
+      fail: "Any test is red (the message carries the failing assertion text), or a suite is still pending after the poll budget.",
     },
   },
   async run(ctx): Promise<CheckResult> {
@@ -461,9 +483,10 @@ export const atfRun: Check = {
 
     if (pending.length > 0) {
       const skipNote = skippedTotal ? ` (${skippedTotal} test(s) skipped)` : "";
+      const status = ctx.options?.atfPending === "warn" ? "warn" : "fail";
       return makeResult(
-        "warn",
-        `ATF run still pending for ${pending.length} of ${suiteIds.length} suite(s); re-run once it settles.${skipNote}`,
+        status,
+        `ATF run still pending for ${pending.length} of ${suiteIds.length} suite(s) after ${POLL_BUDGET_NOTE}; nothing was verified — raise cicdMaxPolls or re-run once it settles.${skipNote}`,
       );
     }
 
