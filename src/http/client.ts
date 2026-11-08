@@ -1254,7 +1254,7 @@ function tableRows(
   const body = res.body;
   const hasResult =
     body !== null && typeof body === "object" && "result" in body;
-  const result = hasResult ? (body as { result: unknown }).result : undefined;
+  const result = hasResult ? body.result : undefined;
   if (Array.isArray(result)) return result as Record<string, unknown>[];
   const shape = !hasResult
     ? "has no result array"
@@ -1266,7 +1266,7 @@ function tableRows(
       `instead of ServiceNow.` +
       (raw ? ` Body began: ${bodyPreview(raw)}` : ""),
     res.status,
-    raw ?? "",
+    raw,
   );
 }
 
