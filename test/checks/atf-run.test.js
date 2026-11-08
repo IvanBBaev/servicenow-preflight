@@ -159,6 +159,34 @@ test("RR-6 — a suite still pending after the poll budget fails by default", as
   assert.match(result.message, /cicdMaxPolls/);
 });
 
+test("RR-6 — the pending message quotes the default budget when the client reports none", async () => {
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1" },
+      fixtures: { cicd: { runTestSuite: { status: "pending" } } },
+    }),
+  );
+  assert.match(result.message, /default 450 × 2 s ≈ 15 min/);
+});
+
+test("RR-6 — the pending message quotes the client's real poll budget", async () => {
+  const c = ctx({
+    options: { atfSuiteId: "suite-1" },
+    fixtures: { cicd: { runTestSuite: { status: "pending" } } },
+  });
+  c.http = {
+    ...c.http,
+    cicd: {
+      runTestSuite: c.http.cicd.runTestSuite,
+      pollBudget: { maxPolls: 90, intervalMs: 5_000 },
+    },
+  };
+  const result = await atfRun.run(c);
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /cicdPollIntervalMs = 90 × 5 s ≈ 7\.5 min\)/);
+  assert.doesNotMatch(result.message, /default/);
+});
+
 test('RR-6 — atfPending: "fail" is the explicit default', async () => {
   const result = await atfRun.run(
     ctx({

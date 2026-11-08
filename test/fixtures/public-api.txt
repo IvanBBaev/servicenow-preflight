@@ -121,6 +121,7 @@
 ./checks value updateSetCollisions
 ./checks value updateSetState
 ./checks value validatePolicy
+./http type CicdPollBudget
 ./http type CicdTestSuiteResult
 ./http value EncodedQueryError
 ./http value IN_CHUNK_SIZE

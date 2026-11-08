@@ -1945,3 +1945,21 @@ test("F-X-2: an abort while sharing a read rejects as an aborted SnNetworkError"
   assert.deepEqual(await stayer, [{ sys_id: "x" }]);
   assert.equal(calls.length, 1);
 });
+
+test("cicd.pollBudget reports the configured budget, and withSignal keeps it", () => {
+  const client = createSnClient({
+    instanceUrl: "https://dev12345.service-now.com",
+    cicdMaxPolls: 90,
+    cicdPollIntervalMs: 5_000,
+  });
+  assert.deepEqual(client.cicd.pollBudget, { maxPolls: 90, intervalMs: 5_000 });
+  assert.deepEqual(
+    withSignal(client, new AbortController().signal).cicd.pollBudget,
+    { maxPolls: 90, intervalMs: 5_000 },
+  );
+  assert.deepEqual(
+    createSnClient({ instanceUrl: "https://dev12345.service-now.com" }).cicd
+      .pollBudget,
+    { maxPolls: 450, intervalMs: 2_000 },
+  );
+});

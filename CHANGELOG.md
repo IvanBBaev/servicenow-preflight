@@ -486,7 +486,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   suites outlast the poll budget) — `atf-run` reports a configured suite that
   is still pending after the CI/CD poll budget (`cicdMaxPolls` ×
   `cicdPollIntervalMs`, default 450 × 2 s ≈ 15 min) as `fail` instead of
-  `warn`, since nothing was verified; the message names the budget. The new
+  `warn`, since nothing was verified; the message quotes the client's real
+  budget (the new `SnCicd.pollBudget`, typed `CicdPollBudget`; the default when
+  a custom client reports none). The new
   `atf-run` option `atfPending: "warn"` restores the old behaviour for teams
   that accept async suites (`"fail"` is the default). A red suite still fails
   regardless of the option.

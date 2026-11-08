@@ -16,6 +16,7 @@ export type {
   SnRequestOptions,
   SnCallOptions,
   SnClientConfig,
+  CicdPollBudget,
   CicdTestSuiteResult,
   TableQueryResult,
 } from "../http/client.js";

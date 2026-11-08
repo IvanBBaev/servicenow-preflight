@@ -205,12 +205,25 @@ export interface CicdTestSuiteResult {
 }
 
 /** CI/CD (Automated Test Framework) surface. */
+/** How long `runTestSuite` waits for an async CI/CD run to settle. */
+export interface CicdPollBudget {
+  /** Progress polls before the run is reported as still pending. */
+  maxPolls: number;
+  /** Milliseconds between polls. */
+  intervalMs: number;
+}
+
 export interface SnCicd {
   /** Run an ATF test suite by `sys_id` and resolve to its status/results. */
   runTestSuite(
     suiteSysId: string,
     opts?: SnCallOptions,
   ): Promise<CicdTestSuiteResult>;
+  /**
+   * The poll budget `runTestSuite` applies, so a pending verdict can quote it.
+   * Set by the real client; a fake may omit it.
+   */
+  readonly pollBudget?: CicdPollBudget;
 }
 
 /** A raw REST response: the HTTP status, the parsed JSON body, and headers. */
@@ -1951,6 +1964,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         const settled = await pollCicdRun(unwrapResult(res.body), opts?.signal);
         return normalizeCicdRun(settled);
       },
+      pollBudget: { maxPolls, intervalMs: pollIntervalMs },
     },
     request,
   };
@@ -1977,6 +1991,10 @@ export function withSignal(client: SnClient, signal: AbortSignal): SnClient {
     cicd: {
       runTestSuite: (suiteSysId, opts) =>
         client.cicd.runTestSuite(suiteSysId, merge(opts)),
+      // Read lazily: like every other member, `client` is only touched on use.
+      get pollBudget() {
+        return client.cicd.pollBudget;
+      },
     },
     request: (method, path, opts) => client.request(method, path, merge(opts)),
   };

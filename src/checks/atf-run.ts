@@ -1,4 +1,9 @@
-import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
+import {
+  SnAuthError,
+  SnHttpError,
+  SnNetworkError,
+  type CicdPollBudget,
+} from "../http/client.js";
 import { eq } from "../http/query.js";
 import type { CheckResult, Finding, PreflightContext } from "../types.js";
 import type { Check } from "../types.js";
@@ -131,9 +136,31 @@ const ATF_RUN_OPTIONS: Shape = {
   ),
 };
 
-/** Human-readable CI/CD poll budget, quoted in the pending message. */
-const POLL_BUDGET_NOTE =
-  "the CI/CD poll budget (cicdMaxPolls × cicdPollIntervalMs, default 450 × 2 s ≈ 15 min)";
+/** Render milliseconds as "2 s", "1.5 s" or "15 min" for the pending message. */
+function formatSpan(ms: number): string {
+  if (ms >= 60_000) {
+    const min = Math.round((ms / 60_000) * 10) / 10;
+    return `${min} min`;
+  }
+  return `${Math.round((ms / 1_000) * 10) / 10} s`;
+}
+
+/**
+ * The CI/CD poll budget, quoted in the pending message: the client's real
+ * `cicdMaxPolls × cicdPollIntervalMs` when it reports one, the defaults
+ * otherwise (a fake or a custom client).
+ */
+function pollBudgetNote(budget?: CicdPollBudget): string {
+  const { maxPolls, intervalMs } = budget ?? {
+    maxPolls: 450,
+    intervalMs: 2_000,
+  };
+  const total = formatSpan(maxPolls * intervalMs);
+  const span = `${maxPolls} × ${formatSpan(intervalMs)} ≈ ${total}`;
+  return budget
+    ? `the CI/CD poll budget (cicdMaxPolls × cicdPollIntervalMs = ${span})`
+    : `the CI/CD poll budget (cicdMaxPolls × cicdPollIntervalMs, default ${span})`;
+}
 
 export function resolveSuiteIds(ctx: PreflightContext): string[] {
   const opts = ctx.options ?? {};
@@ -486,7 +513,7 @@ export const atfRun: Check = {
       const status = ctx.options?.atfPending === "warn" ? "warn" : "fail";
       return makeResult(
         status,
-        `ATF run still pending for ${pending.length} of ${suiteIds.length} suite(s) after ${POLL_BUDGET_NOTE}; nothing was verified — raise cicdMaxPolls or re-run once it settles.${skipNote}`,
+        `ATF run still pending for ${pending.length} of ${suiteIds.length} suite(s) after ${pollBudgetNote(ctx.http.cicd.pollBudget)}; nothing was verified — raise cicdMaxPolls or re-run once it settles.${skipNote}`,
       );
     }
 
