@@ -1056,6 +1056,8 @@ Authentication (via environment / .env — never the config file, never logged):
   SNPF_AUTH                      Force a method; otherwise it is auto-detected:
                                  basic | token | apikey | oauth-password
                                  | oauth-client | oauth-refresh | oauth-jwt
+                                 (bearer and oauth are aliases of token;
+                                 any other value is a config error, exit 2)
   Basic:        SNPF_USER, SNPF_PASS
                 + SNPF_MFA_TOTP_SECRET (or SNPF_MFA_CODE) → MFA code
                   (SNPF_MFA_TOTP_DIGITS, _PERIOD; experimental)

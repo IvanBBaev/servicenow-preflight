@@ -572,8 +572,7 @@ function buildAuthByKind(
       const pass = env[ENV.pass];
       return user && pass ? basicAuth(env, user, pass) : undefined;
     }
-    case "token":
-    case "oauth": {
+    case "token": {
       const token = env[ENV.token]?.trim();
       return token ? { kind: "oauth", token } : undefined;
     }
@@ -669,21 +668,71 @@ export function resolveAuthFromEnv(
   env: NodeJS.ProcessEnv = process.env,
   prefix?: string,
 ): PreflightAuth | undefined {
-  const auth = detectAuth(namespacedEnv(env, prefix));
+  const src = namespacedEnv(env, prefix);
+  // RR-5 (DEV-6 = DX-2): an explicit selector is canonicalised up front, so a
+  // typo or an unknown method is a config error rather than silently "no auth".
+  const selector = canonicalAuthSelector(src[ENV.auth], prefix);
+  const scoped = selector ? { ...src, [ENV.auth]: selector } : src;
+  const auth = detectAuth(scoped);
   if (!auth) {
     // RR-4 (DX-1): half a credential set is a config error, not "no auth" —
     // a renamed CI secret must not turn the gate into a silent pass.
-    const gap = authGap(namespacedEnv(env, prefix), prefix);
+    const gap = authGap(scoped, prefix);
     if (gap) throw new UsageError(gap);
   }
   return auth;
+}
+
+/** Canonical `SNPF_AUTH` values, in the order help and errors list them. */
+const AUTH_SELECTORS = [
+  "basic",
+  "token",
+  "apikey",
+  "oauth-password",
+  "oauth-client",
+  "oauth-refresh",
+  "oauth-jwt",
+] as const;
+
+/**
+ * Accepted spellings of `SNPF_AUTH` that map onto a canonical value (RR-5):
+ * `bearer` is the `init --auth` name for a static token, `oauth` the legacy one.
+ */
+const AUTH_SELECTOR_ALIASES: Readonly<Record<string, string>> = {
+  bearer: "token",
+  oauth: "token",
+};
+
+/**
+ * Normalise an `SNPF_AUTH` value (trimmed, case-insensitive, aliases applied).
+ * `undefined` when unset or blank; throws a {@link UsageError} listing the
+ * valid values when it names no known method (RR-5).
+ */
+function canonicalAuthSelector(
+  raw: string | undefined,
+  prefix?: string,
+): string | undefined {
+  const value = raw?.trim().toLowerCase();
+  if (!value) return undefined;
+  const canonical = AUTH_SELECTOR_ALIASES[value] ?? value;
+  if ((AUTH_SELECTORS as readonly string[]).includes(canonical))
+    return canonical;
+  const aliases = Object.entries(AUTH_SELECTOR_ALIASES)
+    .map(([alias, target]) => `${alias} = ${target}`)
+    .join(", ");
+  const mtls =
+    value === "mtls" || value === "tls"
+      ? " Mutual TLS is not an SNPF_AUTH method: unset it and set SNPF_MTLS_CERT and SNPF_MTLS_KEY."
+      : "";
+  throw new UsageError(
+    `${varLabel(ENV.auth, prefix)} is "${raw?.trim()}", which is not a known auth method. Use one of: ${AUTH_SELECTORS.join(", ")} (aliases: ${aliases}).${mtls}`,
+  );
 }
 
 /** Inputs each auth kind needs; an inner array means "one of these". */
 const KIND_INPUTS: Readonly<Record<string, readonly (string | string[])[]>> = {
   basic: [ENV.user, ENV.pass],
   token: [ENV.token],
-  oauth: [ENV.token],
   apikey: [ENV.apiKey],
   "oauth-password": [
     ENV.oauthClientId,
@@ -725,7 +774,7 @@ function authGap(env: NodeJS.ProcessEnv, prefix?: string): string | undefined {
   const selector = env[ENV.auth]?.trim();
   if (selector) {
     const inputs = KIND_INPUTS[selector];
-    // An unknown selector is RR-5's concern; nothing to name here.
+    // Unknown selectors were already rejected by canonicalAuthSelector (RR-5).
     if (!inputs) return undefined;
     const missing = inputs
       .filter((i) =>

@@ -414,7 +414,9 @@ config file is refused.
 
 Beyond the matrix inputs: `SNPF_INSTANCE`, `SNPF_UPDATE_SET`, `SNPF_PROXY` and
 `SNPF_NO_PROXY` supply `instanceUrl`, `updateSetId`, `proxy` and `noProxy`
-(precedence below); `SNPF_AUTH` forces a method; JWT
+(precedence below); `SNPF_AUTH` forces a method — `basic`, `token`, `apikey`,
+`oauth-password`, `oauth-client`, `oauth-refresh` or `oauth-jwt` (case-insensitive;
+`bearer` and `oauth` are aliases of `token`; any other value exits `2`); JWT
 claims come from `SNPF_OAUTH_JWT_KID`
 / `_SUB` / `_AUD` / `_ISS` (or supply a pre-signed `_ASSERTION`). Any PEM / key /
 assertion variable accepts an **`@path` value** (read from that file, e.g.

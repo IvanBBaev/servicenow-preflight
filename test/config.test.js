@@ -330,8 +330,12 @@ test("resolveAuthFromEnv honours an explicit SNPF_AUTH=token selector", () => {
   assert.deepEqual(auth, { kind: "oauth", token: "tok" });
 });
 
-test("resolveAuthFromEnv yields undefined for an unknown SNPF_AUTH selector", () => {
-  assert.equal(resolveAuthFromEnv({ SNPF_AUTH: "no-such-method" }), undefined);
+test("resolveAuthFromEnv rejects an unknown SNPF_AUTH selector (RR-5)", () => {
+  assert.throws(
+    () => resolveAuthFromEnv({ SNPF_AUTH: "no-such-method" }),
+    (err) =>
+      err instanceof UsageError && /not a known auth method/.test(err.message),
+  );
 });
 
 test("resolveAuthFromEnv detects the JWT-bearer grant from a pre-signed assertion", () => {

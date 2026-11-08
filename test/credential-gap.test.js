@@ -138,10 +138,6 @@ test("resolveAuthFromEnv: a complete method wins over a stray half of another", 
   });
 });
 
-test("resolveAuthFromEnv: an unknown SNPF_AUTH kind is left to its own handling", () => {
-  assert.equal(resolveAuthFromEnv({ SNPF_AUTH: "nope" }), undefined);
-});
-
 test("resolveTlsFromEnv: a cert without its key (and the reverse) is a UsageError", () => {
   throwsUsage(
     () => resolveTlsFromEnv({ SNPF_MTLS_CERT: "certpem" }),

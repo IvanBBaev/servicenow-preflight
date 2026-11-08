@@ -482,6 +482,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Unknown `SNPF_AUTH` is a config error** (RR-5; **breaking** for a
+  misspelled selector) — a value that names no auth method now exits `2` with
+  the list of valid values instead of being silently ignored (which, with
+  RR-4, meant no credentials). The selector is trimmed and case-insensitive;
+  `bearer` (the `init --auth` name) and `oauth` are aliases of `token`.
+  `SNPF_AUTH=mtls` gets a hint that mutual TLS is configured through
+  `SNPF_MTLS_CERT` / `SNPF_MTLS_KEY` instead.
+
 - **Missing or partial credentials fail closed** (RR-4; **breaking** for CI
   runs without credentials) — a half-set credential pair is a config error
   (exit `2`) naming the missing variable, never values: `SNPF_USER` without
