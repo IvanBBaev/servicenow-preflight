@@ -480,3 +480,19 @@ test("applyFailOn warn leaves a failing report as it is", () => {
   const r = report([{ name: "a", status: "fail", message: "bad" }]);
   assert.equal(applyFailOn(r, "warn"), r);
 });
+
+test("applyBaseline fails closed on an unrecognised status (RR-8)", () => {
+  const r = {
+    ok: true,
+    results: [
+      { name: "connectivity-auth", status: "pass", message: "ok" },
+      { name: "table-crud-acl", status: "bogus", message: ACL_MSG },
+    ],
+    summary: { pass: 1, warn: 0, fail: 0, error: 0 },
+  };
+  const out = applyBaseline(r, baseline([]), NOW);
+  assert.equal(out.ok, false);
+  assert.deepEqual(out.summary, { pass: 1, warn: 0, fail: 1, error: 0 });
+  assert.equal(out.results[1].status, "fail");
+  assert.match(out.results[1].message, /unrecognised status "bogus"/);
+});

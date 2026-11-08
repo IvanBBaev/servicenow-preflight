@@ -238,3 +238,21 @@ test("CLI: --severity is refused outside run", () => {
   assert.equal(res.status, 2);
   assert.match(res.stderr, /run only/);
 });
+
+test("applyPolicy fails closed on an unrecognised status (RR-8)", () => {
+  const report = {
+    ok: true,
+    results: [
+      { name: "connectivity-auth", status: "pass", message: "ok" },
+      { name: "table-crud-acl", status: "bogus", message: "x" },
+    ],
+    summary: { pass: 1, warn: 0, fail: 0, error: 0 },
+  };
+  for (const policy of [{}, { "table-crud-acl": "warn" }]) {
+    const out = applyPolicy(report, policy);
+    assert.equal(out.ok, false);
+    assert.deepEqual(out.summary, { pass: 1, warn: 0, fail: 1, error: 0 });
+    assert.equal(out.results[1].status, "fail");
+    assert.match(out.results[1].message, /unrecognised status "bogus"/);
+  }
+});

@@ -1,5 +1,5 @@
 import { UsageError } from "./config.js";
-import { summarize } from "./baseline.js";
+import { summarizeResults } from "./summary.js";
 import type { CheckResult, PreflightReport } from "./types.js";
 
 /**
@@ -84,7 +84,9 @@ export function applyPolicy(
   policy: SeverityPolicy,
 ): PreflightReport {
   const results = report.results.map((r): CheckResult => {
-    if (r.status === "pass" || r.status === "error") return r;
+    // Only fail / warn rows are remapped: pass and error stay, and an
+    // unrecognised status is left for summarizeResults to fail closed.
+    if (r.status !== "fail" && r.status !== "warn") return r;
     const level = Object.prototype.hasOwnProperty.call(policy, r.name)
       ? policy[r.name]
       : undefined;
@@ -96,5 +98,5 @@ export function applyPolicy(
       message: `${r.message} [severity: ${level} by policy]`,
     };
   });
-  return summarize(results);
+  return summarizeResults(results);
 }

@@ -117,7 +117,6 @@ import {
   baselineFromReport,
   baselinePath,
   readBaseline,
-  summarize,
   writeBaseline,
   type Baseline,
 } from "./baseline.js";
@@ -1779,7 +1778,7 @@ async function runOneInstance(
   let raw: PreflightReport;
   try {
     raw = incremental?.empty
-      ? summarize([])
+      ? summarizeResults([])
       : await runPreflight(ctx, defaultChecks, {
           signal: interrupt.signal,
           concurrency:
@@ -1792,7 +1791,8 @@ async function runOneInstance(
   } finally {
     timings = collector?.stop(defaultChecks.map((c) => c.name));
   }
-  if (incremental?.row) raw = summarize([...raw.results, incremental.row]);
+  if (incremental?.row)
+    raw = summarizeResults([...raw.results, incremental.row]);
   recorder?.finish({
     version: readVersion(),
     checks: raw.results.map((r) => r.name),

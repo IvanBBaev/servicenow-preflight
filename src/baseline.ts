@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { UsageError, type FailOn } from "./config.js";
 import { PREFLIGHT_DIR } from "./registry.js";
 import type { CheckResult, CheckStatus, PreflightReport } from "./types.js";
+import { summarizeResults } from "./summary.js";
 
 /**
  * Baseline (accepted findings).
@@ -197,13 +198,6 @@ function isExpired(entry: BaselineEntry, now: Date): boolean {
   return now.getTime() >= end;
 }
 
-/** Recompute a report's summary and `ok` from its results. */
-export function summarize(results: CheckResult[]): PreflightReport {
-  const summary = { pass: 0, warn: 0, fail: 0, error: 0 };
-  for (const r of results) summary[r.status] += 1;
-  return { ok: summary.fail === 0 && summary.error === 0, results, summary };
-}
-
 /** The message prefix {@link applyBaseline} gives a row a baseline accepted. */
 const BASELINED = "Baselined";
 
@@ -245,7 +239,7 @@ export function applyBaseline(
       )}; the finding fails again next run if still present.`,
     });
   }
-  return summarize(results);
+  return summarizeResults(results);
 }
 
 /** Whether a row came from {@link applyBaseline}: an accepted finding or an expiry note. */

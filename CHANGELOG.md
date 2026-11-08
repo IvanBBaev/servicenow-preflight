@@ -626,6 +626,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The post-policy / post-baseline summary fails closed on unknown statuses**
+  (RR-8) — `applyPolicy`, `applyBaseline` and the CLI's incremental path
+  recomputed the summary with a second counter that turned an unrecognised
+  status into a `NaN` bucket and a vacuous `ok: true`. They now use the same
+  `summarizeResults` as `runPreflight`, so such a row is reported as `fail`
+  and the run is not ok. A severity policy no longer remaps an unrecognised
+  status to its level; it only remaps `fail` / `warn` rows, as documented.
+
 - **A 2xx Table API body without a `result` array fails closed** (RR-7) — the
   client used to coerce a missing or non-array `result` into zero rows, so a
   proxy or gateway answering with its own JSON under status 200 read as an
