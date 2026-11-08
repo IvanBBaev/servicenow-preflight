@@ -626,6 +626,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A 2xx Table API body without a `result` array fails closed** (RR-7) — the
+  client used to coerce a missing or non-array `result` into zero rows, so a
+  proxy or gateway answering with its own JSON under status 200 read as an
+  empty table and checks could pass against data they never saw. Table list
+  reads (`query`, `queryWithMeta`, every auto-paginated page) now throw
+  `SnResponseError` naming the table and the body shape; an empty 200 body is
+  treated the same way. A genuine `{"result": []}` is still an empty table.
+
 - **The test fake evaluates `sysparm_query`** (RR-2b) — `createFakeSnClient`
   used to return every seeded row whatever the query said, so a check that
   built a wrong query still passed its tests. It now selects rows through one

@@ -1240,9 +1240,34 @@ function toQueryResult(
   };
 }
 
-/** Coerce a ServiceNow Table API `result` payload into an array of rows. */
-function asRows(result: unknown): Record<string, unknown>[] {
-  return Array.isArray(result) ? (result as Record<string, unknown>[]) : [];
+/**
+ * Pull the rows out of a 2xx Table API list response. RR-7: a body without a
+ * `result` array (a proxy error page served as JSON with status 200, a
+ * Scripted REST answer, a schema change) is not an empty table. Coercing it to
+ * `[]` would let every metadata check read "zero rows" and pass against data it
+ * never saw, so fail closed with an {@link SnResponseError}.
+ */
+function tableRows(
+  res: { status: number; body: unknown },
+  table: string,
+): Record<string, unknown>[] {
+  const body = res.body;
+  const hasResult =
+    body !== null && typeof body === "object" && "result" in body;
+  const result = hasResult ? (body as { result: unknown }).result : undefined;
+  if (Array.isArray(result)) return result as Record<string, unknown>[];
+  const shape = !hasResult
+    ? "has no result array"
+    : `has a non-array result (${result === null ? "null" : typeof result})`;
+  const raw = body === undefined ? "" : JSON.stringify(body);
+  throw new SnResponseError(
+    `Table API response for "${table}" ${shape} (status ${res.status}); ` +
+      `refusing to read it as zero rows. A proxy or gateway may have answered ` +
+      `instead of ServiceNow.` +
+      (raw ? ` Body began: ${bodyPreview(raw)}` : ""),
+    res.status,
+    raw ?? "",
+  );
 }
 
 /**
@@ -1808,7 +1833,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
             signal,
           });
           return toQueryResult(
-            asRows(unwrapResult(res.body)),
+            tableRows(res, name),
             parseTotalCount(res.headers),
           );
         }
@@ -1844,7 +1869,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           if (totalCount === undefined) {
             totalCount = parseTotalCount(res.headers);
           }
-          const rows = asRows(unwrapResult(res.body));
+          const rows = tableRows(res, name);
           all.push(...rows);
           const nextOffset = offset + pageSize;
           if (totalCount !== undefined) {

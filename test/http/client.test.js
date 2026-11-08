@@ -949,6 +949,120 @@ test("no auth configured sends neither Authorization nor x-sn-apikey", async () 
   assert.equal(calls[0].init.headers["x-sn-apikey"], undefined);
 });
 
+// --- RR-7: a 2xx Table API body without a result array is not zero rows -----
+
+/** Assert `fn` rejects with the RR-7 missing/non-array result error. */
+async function rejectsNoResult(fn, shape) {
+  await assert.rejects(fn, (err) => {
+    assert.ok(err instanceof SnResponseError, String(err));
+    assert.equal(err.status, 200);
+    assert.match(err.message, /"incident"/);
+    assert.match(err.message, shape);
+    assert.match(err.message, /refusing to read it as zero rows/);
+    return true;
+  });
+}
+
+test("RR-7: a 200 JSON body without result fails a pinned-limit query", async () => {
+  // A gateway answering with its own JSON error page under status 200.
+  handler = () =>
+    fakeResponse({ body: { error: "upstream unavailable", status: "down" } });
+  await rejectsNoResult(
+    () => client().table("incident").query({ sysparm_limit: "5" }),
+    /has no result array/,
+  );
+});
+
+test("RR-7: a 200 JSON body without result fails an auto-paginated query", async () => {
+  // Even with X-Total-Count: 0 the body is not a Table API answer.
+  handler = () =>
+    fakeResponse({ body: { data: [] }, headers: { "x-total-count": "0" } });
+  await rejectsNoResult(
+    () => client().table("incident").queryWithMeta(),
+    /has no result array/,
+  );
+});
+
+test("RR-7: a non-array result is a response error, not zero rows", async () => {
+  handler = () => fakeResponse({ body: { result: { sys_id: "x" } } });
+  await rejectsNoResult(
+    () => client().table("incident").query(),
+    /non-array result \(object\)/,
+  );
+  handler = () => fakeResponse({ body: { result: null } });
+  await rejectsNoResult(
+    () => client().table("incident").query({ sysparm_limit: "1" }),
+    /non-array result \(null\)/,
+  );
+});
+
+test("RR-7: an empty 200 body on a query is a response error", async () => {
+  handler = () => fakeResponse({ status: 200 });
+  await assert.rejects(
+    () => client().table("incident").query(),
+    (err) => {
+      assert.ok(err instanceof SnResponseError);
+      assert.equal(err.bodySnippet, "");
+      assert.doesNotMatch(err.message, /Body began/);
+      return true;
+    },
+  );
+});
+
+test("RR-7: a later page without result fails the whole paginated read", async () => {
+  let page = 0;
+  handler = () => {
+    page += 1;
+    if (page === 1) {
+      const rows = Array.from({ length: 1000 }, (_, i) => ({
+        sys_id: `r${i}`,
+      }));
+      return fakeResponse({ body: { result: rows } });
+    }
+    return fakeResponse({ body: { message: "maintenance" } });
+  };
+  await rejectsNoResult(
+    () => client().table("incident").query(),
+    /has no result array/,
+  );
+  assert.equal(page, 2);
+});
+
+test("RR-7: an empty result array is still a genuine empty table", async () => {
+  handler = () =>
+    fakeResponse({ body: { result: [] }, headers: { "x-total-count": "0" } });
+  const meta = await client().table("incident").queryWithMeta();
+  assert.deepEqual(meta.rows, []);
+  assert.equal(meta.totalCount, 0);
+});
+
+test("RR-7: over a real local server, a result-less 200 JSON body fails closed", async () => {
+  const { createServer } = await import("node:http");
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "proxy says hi" } }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  globalThis.fetch = realFetch;
+  try {
+    const { port } = server.address();
+    const sn = createSnClient({
+      instanceUrl: `http://127.0.0.1:${port}`,
+      auth: AUTH,
+    });
+    await assert.rejects(
+      () => sn.table("incident").query({ sysparm_limit: "1" }),
+      (err) => {
+        assert.ok(err instanceof SnResponseError, String(err));
+        assert.match(err.bodySnippet, /proxy says hi/);
+        return true;
+      },
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 // --- CC-1: a non-JSON 2xx body fails closed as SnResponseError --------------
 
 test("CC-1: a 200 with a non-JSON body on a query throws SnResponseError", async () => {
