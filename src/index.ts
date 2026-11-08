@@ -16,6 +16,7 @@
  * @packageDocumentation
  */
 import { defaultChecks } from "./checks/index.js";
+import { isMissingTable, missingTableResult } from "./checks/cert-common.js";
 import { sanitizeFindings } from "./findings.js";
 import { anySignal } from "./http/abort.js";
 import {
@@ -268,6 +269,10 @@ async function runCheck(
         err instanceof SnAuthError ||
         err instanceof SnHttpError ||
         err instanceof SnNetworkError;
+      // A missing table (plugin not installed) is the skip warn, not an error.
+      if (isMissingTable(err)) {
+        return missingTableResult(check.name, "this check", err);
+      }
       return {
         name: check.name,
         status: readFailed ? "error" : "fail",

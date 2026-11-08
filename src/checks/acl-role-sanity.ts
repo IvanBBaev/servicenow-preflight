@@ -8,7 +8,14 @@ import {
 } from "../http/client.js";
 import { findingId } from "../findings.js";
 import { chunk, inClause, resolveScope } from "../http/query.js";
-import { isTruthy, rowFinding, str, withFindings } from "./cert-common.js";
+import {
+  isMissingTable,
+  isTruthy,
+  missingTableResult,
+  rowFinding,
+  str,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "acl-role-sanity";
 
@@ -314,6 +321,9 @@ export const aclRoleSanity: Check = {
           "error",
           `Could not reach the instance to check ACLs: ${err.message}`,
         );
+      }
+      if (isMissingTable(err)) {
+        return missingTableResult(NAME, "ACLs", err);
       }
       if (err instanceof SnHttpError) {
         // An unreadable table verified nothing: error, never a demotable warn.

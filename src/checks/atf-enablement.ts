@@ -3,7 +3,12 @@ import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { and, eq } from "../http/query.js";
 import { ATF_SUITE_OPTIONS, resolveSuiteIds } from "./atf-run.js";
 import { o } from "../options/dsl.js";
-import { subjectFinding, withFindings } from "./cert-common.js";
+import {
+  isMissingTable,
+  missingTableResult,
+  subjectFinding,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "atf-enablement";
 
@@ -305,6 +310,9 @@ export const atfEnablement: Check = {
           "error",
           `Could not reach the instance to verify ATF enablement: ${err.message}`,
         );
+      }
+      if (isMissingTable(err)) {
+        return missingTableResult(NAME, "ATF enablement", err);
       }
       if (err instanceof SnHttpError) {
         // An unreadable table verified nothing: error, never a demotable warn.

@@ -524,7 +524,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as `<error>` with an `errors=` count, SARIF at level `error`, markdown with
   🛑 sorted first, text with `E`, the action gains an `error` output and the
   trace carries the status and bucket. Unexpected errors (an unparsable
-  response, a bad encoded query, a crash) stay `fail`.
+  response, a bad encoded query, a crash) stay `fail`. A missing table — HTTP
+  404, or the Table API's HTTP 400 "Invalid table" — is not a read failure:
+  the check is skipped with a `warn` that says the providing plugin is likely
+  not installed, so an instance without an optional plugin does not go red.
 
 - **Script scanner lexer** (behaviour narrowing) — the pattern checks now
   lex each script field into a code view (comments blanked, string, template

@@ -16,7 +16,12 @@ import {
   resolveScope,
   type ResolvedScope,
 } from "../http/query.js";
-import { rowFinding, withFindings } from "./cert-common.js";
+import {
+  isMissingTable,
+  missingTableResult,
+  rowFinding,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "default-set-leakage";
 
@@ -302,6 +307,9 @@ export const defaultSetLeakage: Check = {
           "error",
           `Could not reach the instance to verify Default-set leakage: ${err.message}`,
         );
+      }
+      if (isMissingTable(err)) {
+        return missingTableResult(NAME, "Default-set leakage", err);
       }
       if (err instanceof SnHttpError) {
         // An unreadable table verified nothing: error, never a demotable warn.

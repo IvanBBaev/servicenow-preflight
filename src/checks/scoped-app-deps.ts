@@ -3,7 +3,11 @@ import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { compareVersions } from "../versions.js";
 import { o } from "../options/dsl.js";
 import { makeFinding } from "../findings.js";
-import { withFindings } from "./cert-common.js";
+import {
+  isMissingTable,
+  missingTableResult,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "scoped-app-deps";
 
@@ -339,6 +343,9 @@ export const scopedAppDeps: Check = {
           "error",
           `Could not reach the instance to verify dependencies: ${err.message}`,
         );
+      }
+      if (isMissingTable(err)) {
+        return missingTableResult(NAME, "dependencies", err);
       }
       if (err instanceof SnHttpError) {
         // An unreadable table verified nothing: error, never a demotable warn.

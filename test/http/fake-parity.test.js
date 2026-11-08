@@ -137,7 +137,7 @@ for (const { label, real, fake } of CASES) {
   });
 }
 
-test("parity: 401/403 are auth failures, other statuses HTTP errors — all error rows", async () => {
+test("parity: 401/403 are auth failures, other statuses HTTP errors — error rows, a 404 a skip warn", async () => {
   const verdict = async (fake) =>
     errorResult(
       "c",
@@ -151,7 +151,7 @@ test("parity: 401/403 are auth failures, other statuses HTTP errors — all erro
   assert.equal(await verdict({ http: 401 }), "error");
   assert.equal(await verdict({ http: 403 }), "error");
   assert.equal(await verdict({ forbidden: true }), "error");
-  assert.equal(await verdict({ http: 404 }), "error");
+  assert.equal(await verdict({ http: 404 }), "warn");
   assert.equal(await verdict({ http: 500 }), "error");
 });
 

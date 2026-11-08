@@ -39,7 +39,6 @@ function report(results) {
 
 const READ_ERRORS = [
   ["HTTP 400", new SnHttpError(400, "Bad Request")],
-  ["HTTP 404", new SnHttpError(404, "Not Found")],
   ["HTTP 500", new SnHttpError(500, "Internal Server Error")],
   ["network", new SnNetworkError("ECONNREFUSED")],
   ["401", new SnAuthError("Unauthorized", 401)],
@@ -51,6 +50,25 @@ for (const [label, err] of READ_ERRORS) {
     const r = errorResult("demo", "demo things", err);
     assert.equal(r.status, "error");
     assert.equal(r.name, "demo");
+  });
+}
+
+// RR-3 follow-up: a missing table (plugin not installed) is a skip warn —
+// HTTP 404, or the Table API's 400 "Invalid table" — never an error row.
+const MISSING_TABLE = [
+  ["HTTP 404", new SnHttpError(404, "Not Found")],
+  [
+    'HTTP 400 "Invalid table"',
+    new SnHttpError(400, "ServiceNow API error (400): Invalid table x_missing"),
+  ],
+];
+
+for (const [label, err] of MISSING_TABLE) {
+  test(`errorResult maps a ${label} read to a skip warn`, () => {
+    const r = errorResult("demo", "demo things", err);
+    assert.equal(r.status, "warn");
+    assert.match(r.message, /^Skipped demo things: .*not found/);
+    assert.match(r.message, /plugin .* likely not installed/);
   });
 }
 
@@ -67,7 +85,6 @@ test("errorResult keeps an unexpected error a fail", () => {
 // advisory check both turn every read failure into an error row.
 const FAKE_FAILS = [
   ["HTTP 400", { http: 400 }],
-  ["HTTP 404", { http: 404 }],
   ["HTTP 500", { http: 500 }],
   ["network", { network: true }],
   ["401", { auth: true }],
@@ -82,6 +99,30 @@ for (const check of [corsRules, logLeftovers]) {
     });
   }
 }
+
+for (const check of [corsRules, logLeftovers]) {
+  test(`${check.meta.severity} ${check.name}: a 404 (missing table) is a skip warn`, async () => {
+    const http = createFakeSnClient({ tables: {}, fail: { http: 404 } });
+    const r = await check.run({ instanceUrl: INSTANCE, http, scope: SCOPE });
+    assert.equal(r.status, "warn", r.message);
+    assert.match(r.message, /^Skipped /);
+  });
+}
+
+test("the runner turns a thrown 404 into a skip warn, not an error", async () => {
+  const out = await runPreflight({ instanceUrl: INSTANCE }, [
+    {
+      name: "throws-404",
+      description: "d",
+      run() {
+        throw new SnHttpError(404, "Not Found");
+      },
+    },
+  ]);
+  assert.equal(out.results[0].status, "warn");
+  assert.match(out.results[0].message, /^Skipped this check: /);
+  assert.equal(out.ok, true);
+});
 
 test("the runner turns a thrown read failure into an error row; ok is false", async () => {
   const checks = READ_ERRORS.map(([label, err], i) => ({
@@ -247,3 +288,30 @@ test("trace carries the error status and summary bucket", async () => {
   const runEnd = events.find((e) => e.type === "run.end");
   assert.deepEqual(runEnd.summary, { pass: 0, warn: 0, fail: 0, error: 1 });
 });
+
+// RR-3 follow-up: the checks with their own catch blocks skip on a missing
+// table too, and still error on any other read failure.
+for (const [mod, exp] of [
+  ["atf-enablement", "atfEnablement"],
+  ["scoped-app-deps", "scopedAppDeps"],
+  ["i18n-completeness", "i18nCompleteness"],
+  ["default-set-leakage", "defaultSetLeakage"],
+  ["acl-role-sanity", "aclRoleSanity"],
+]) {
+  test(`${mod}: a 404 is a skip warn, a 500 an error row`, async () => {
+    const check = (await import(`../build/checks/${mod}.js`))[exp];
+    const run = (fail) =>
+      check.run({
+        instanceUrl: INSTANCE,
+        http: createFakeSnClient({ tables: {}, fail }),
+        scope: SCOPE,
+        updateSet: "x",
+        auth: { kind: "basic", user: "u", pass: "p" },
+        options: { requiredApps: [{ id: "com.x" }], languages: ["en", "de"] },
+      });
+    const skipped = await run({ http: 404 });
+    assert.equal(skipped.status, "warn", skipped.message);
+    assert.match(skipped.message, /^Skipped .*likely not installed/);
+    assert.equal((await run({ http: 500 })).status, "error");
+  });
+}

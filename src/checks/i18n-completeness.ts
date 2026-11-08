@@ -8,7 +8,11 @@ import { SnAuthError, SnHttpError, SnNetworkError } from "../http/client.js";
 import { and, eq, resolveScope } from "../http/query.js";
 import { o } from "../options/dsl.js";
 import { makeFinding } from "../findings.js";
-import { withFindings } from "./cert-common.js";
+import {
+  isMissingTable,
+  missingTableResult,
+  withFindings,
+} from "./cert-common.js";
 
 const NAME = "i18n-completeness";
 
@@ -282,6 +286,9 @@ export const i18nCompleteness: Check = {
           "error",
           "Could not read translations: the instance was unreachable.",
         );
+      }
+      if (isMissingTable(err)) {
+        return missingTableResult(NAME, "translations", err);
       }
       if (err instanceof SnHttpError) {
         return result(

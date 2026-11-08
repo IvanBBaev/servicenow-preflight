@@ -128,10 +128,41 @@ export function withFindings(
 }
 
 /**
+ * Whether a failed read means the table (or API) does not exist on the
+ * instance — HTTP 404, or the Table API's HTTP 400 "Invalid table" — as
+ * opposed to a read that exists but failed. A missing table is almost always
+ * a plugin that is not installed, so there is nothing to verify.
+ */
+export function isMissingTable(err: unknown): err is SnHttpError {
+  if (!(err instanceof SnHttpError)) return false;
+  if (err.status === 404) return true;
+  return err.status === 400 && /invalid table/i.test(err.message);
+}
+
+/**
+ * The skip verdict for a read whose table does not exist (see
+ * {@link isMissingTable}): `warn` with a plain reason, never `error` — a plugin
+ * that is not installed is not a read failure (RR-3 follow-up). Every other
+ * HTTP, auth or network failure stays `error`.
+ */
+export function missingTableResult(
+  name: string,
+  subject: string,
+  err: SnHttpError,
+): CheckResult {
+  return {
+    name,
+    status: "warn",
+    message: `Skipped ${subject}: a table it reads was not found (HTTP ${err.status}) — the plugin that provides it is likely not installed. ${err.message}`,
+  };
+}
+
+/**
  * Map a thrown error to the shared certification-check verdict. A failed read
  * — an auth failure (401/403), any other HTTP 4xx/5xx or a network error — is
  * `error`: the check verified nothing, so the run fails, the row is counted in
- * its own bucket and no baseline or severity policy can demote it (OD-12).
+ * its own bucket and no baseline or severity policy can demote it (OD-12). A
+ * missing table is the exception — see {@link missingTableResult}.
  * Anything else — including an {@link EncodedQueryError} from the
  * injection-safe query builders — fails closed as `fail`. `subject` names
  * what was being inspected so the message stays actionable per check.
@@ -158,6 +189,7 @@ export function errorResult(
       `Could not reach the instance to check ${subject}: ${err.message}`,
     );
   }
+  if (isMissingTable(err)) return missingTableResult(name, subject, err);
   if (err instanceof SnHttpError) {
     return result(
       "error",
