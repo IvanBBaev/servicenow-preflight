@@ -626,6 +626,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A baselined finding whose message changed is no longer demoted** (RR-9)
+  — a baseline entry matched on check and status alone, so when the message
+  moved (for example three new hard-coded secrets joined an accepted one) the
+  row was still rewritten to `warn` and the run passed. Such a row now keeps
+  its status with a `Baseline does not match (changed since …)` prefix, so it
+  gates again until the baseline is re-recorded. Accepted rows carry
+  `kind: "baseline"`, and `--fail-on warn` exempts rows by that marker instead
+  of a message prefix a check could produce itself.
+
 - **The post-policy / post-baseline summary fails closed on unknown statuses**
   (RR-8) — `applyPolicy`, `applyBaseline` and the CLI's incremental path
   recomputed the summary with a second counter that turned an unrecognised

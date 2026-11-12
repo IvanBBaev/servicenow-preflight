@@ -15,10 +15,10 @@ import { summarizeResults } from "./summary.js";
  *
  * Results carry no per-finding identity, so an entry matches a result by check
  * name and status. The stored message is the change detector: when the result's
- * message differs from the recorded one, the row is still demoted but its
- * message says `Baselined but CHANGED since …`, so a reviewer sees that the
- * finding moved (for example a new table joined the list). That is the only
- * defence against a baseline silently hiding new findings.
+ * message differs from the recorded one, the finding moved (for example a new
+ * table joined the list), so the row keeps its status and its message says
+ * `Baseline does not match (changed since …)`. A baselined check therefore
+ * still gates every regression in it until the baseline is re-recorded.
  *
  * An `error` row (a read failed, so the check verified nothing) is never
  * recorded and never demoted: accepting a finding must not also accept a
@@ -198,14 +198,12 @@ function isExpired(entry: BaselineEntry, now: Date): boolean {
   return now.getTime() >= end;
 }
 
-/** The message prefix {@link applyBaseline} gives a row a baseline accepted. */
-const BASELINED = "Baselined";
-
 /**
  * Apply a baseline to a report (pure). A result matched by an unexpired entry
- * (same check, same status) becomes `warn` with a `Baselined (…)` prefix, or a
- * `Baselined but CHANGED since …` prefix when its message differs from the
- * recorded one. An expired entry is ignored and adds a `warn` row named
+ * (same check, same status, same message) becomes `warn` with a
+ * `Baselined (…)` prefix and `kind: "baseline"`. When only the message differs
+ * the finding changed: the row keeps its status and gets a
+ * `Baseline does not match (changed since …)` prefix. An expired entry is ignored and adds a `warn` row named
  * {@link BASELINE_ROW}. Entries matching no result are ignored (the check may
  * be skipped this run). `pass` and `error` rows are never touched. Summary and
  * `ok` are recomputed.
@@ -220,13 +218,21 @@ export function applyBaseline(
     if (r.status === "pass" || r.status === "error") return r;
     const entry = live.find((e) => e.check === r.name && e.status === r.status);
     if (!entry) return r;
-    const prefix =
-      entry.message === r.message
-        ? `${BASELINED} (${entry.reason || "accepted"} until ${
-            entry.expires ?? "revoked"
-          })`
-        : `${BASELINED} but CHANGED since ${b.generatedAt}`;
-    return { ...r, status: "warn", message: `${prefix}: ${r.message}` };
+    if (entry.message !== r.message) {
+      return {
+        ...r,
+        message: `Baseline does not match (changed since ${b.generatedAt}): ${r.message}`,
+      };
+    }
+    const prefix = `Baselined (${entry.reason || "accepted"} until ${
+      entry.expires ?? "revoked"
+    })`;
+    return {
+      ...r,
+      status: "warn",
+      kind: "baseline",
+      message: `${prefix}: ${r.message}`,
+    };
   });
   for (const e of b.entries) {
     if (!isExpired(e, now)) continue;
@@ -244,10 +250,7 @@ export function applyBaseline(
 
 /** Whether a row came from {@link applyBaseline}: an accepted finding or an expiry note. */
 function isBaselined(r: CheckResult): boolean {
-  return (
-    r.kind === "baseline" ||
-    (r.status === "warn" && r.message.startsWith(`${BASELINED} `))
-  );
+  return r.kind === "baseline";
 }
 
 /**

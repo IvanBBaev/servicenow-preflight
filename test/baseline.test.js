@@ -102,7 +102,7 @@ test("applyBaseline uses accepted/revoked defaults and keeps a warn a warn", () 
   assert.equal(out.results[0].message, "Baselined (accepted until revoked): w");
 });
 
-test("applyBaseline flags a changed message but still demotes", () => {
+test("applyBaseline does not demote a fail whose message changed", () => {
   const out = applyBaseline(
     report([
       { name: "table-crud-acl", status: "fail", message: "3 tables: x_c" },
@@ -110,12 +110,42 @@ test("applyBaseline flags a changed message but still demotes", () => {
     baseline([{ check: "table-crud-acl", status: "fail", message: ACL_MSG }]),
     NOW,
   );
-  assert.equal(out.ok, true);
-  assert.equal(out.results[0].status, "warn");
+  assert.equal(out.ok, false);
+  assert.equal(out.results[0].status, "fail");
+  assert.equal(out.results[0].kind, undefined);
   assert.equal(
     out.results[0].message,
-    "Baselined but CHANGED since 2026-10-01T00:00:00Z: 3 tables: x_c",
+    "Baseline does not match (changed since 2026-10-01T00:00:00Z): 3 tables: x_c",
   );
+  assert.deepEqual(out.summary, { pass: 0, warn: 0, fail: 1, error: 0 });
+});
+
+test("applyBaseline marks an accepted row kind baseline", () => {
+  const out = applyBaseline(
+    report([{ name: "table-crud-acl", status: "fail", message: ACL_MSG }]),
+    baseline([{ check: "table-crud-acl", status: "fail", message: ACL_MSG }]),
+    NOW,
+  );
+  assert.equal(out.results[0].status, "warn");
+  assert.equal(out.results[0].kind, "baseline");
+});
+
+test("applyFailOn warn: a changed baselined warn still counts", () => {
+  const r = applyBaseline(
+    report([{ name: "b", status: "warn", message: "advisory, now 2" }]),
+    baseline([{ check: "b", status: "warn", message: "advisory" }]),
+    NOW,
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.results[0].status, "warn");
+  assert.equal(applyFailOn(r, "warn").ok, false);
+});
+
+test("applyFailOn warn: a check message that looks baselined is not exempt", () => {
+  const r = report([
+    { name: "b", status: "warn", message: "Baselined (x until y): spoof" },
+  ]);
+  assert.equal(applyFailOn(r, "warn").ok, false);
 });
 
 test("applyBaseline ignores an expired entry and appends a baseline warn row", () => {
@@ -341,6 +371,30 @@ test("CLI: --write-baseline then --baseline turns a known fail into a pass", () 
       out.results[0].message,
       /^Baselined \(accepted until revoked\)/,
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: a baselined finding whose message changed fails the run again", () => {
+  const dir = tempDir();
+  try {
+    const only = ["--only", "instance-url-configured"];
+    const first = runCli(["run", ...only, "--write-baseline"], { cwd: dir });
+    assert.equal(first.status, 1, first.stderr);
+    const path = join(dir, ".preflight", "baseline.json");
+    const b = JSON.parse(readFileSync(path, "utf8"));
+    b.entries[0].message = "an older message";
+    writeFileSync(path, JSON.stringify(b), "utf8");
+
+    const applied = runCli(["run", ...only, "--baseline", "--json"], {
+      cwd: dir,
+    });
+    assert.equal(applied.status, 1, applied.stderr);
+    const out = reportOf(applied.stdout);
+    assert.equal(out.ok, false);
+    assert.equal(out.results[0].status, "fail");
+    assert.match(out.results[0].message, /^Baseline does not match/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

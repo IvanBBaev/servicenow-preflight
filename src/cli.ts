@@ -1019,7 +1019,7 @@ Options:
                          warn (default .preflight/baseline.json; a registry
                          instance tries .preflight/baseline.<env>.json first).
                          A missing or malformed file is exit 2. A finding whose
-                         message changed still warns, flagged CHANGED.
+                         message changed keeps its status (not demoted).
       --write-baseline [path]
                          run: record every non-pass result as a baseline
                          (default .preflight/baseline.json, or

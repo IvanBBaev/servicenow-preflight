@@ -678,9 +678,9 @@ Commit `.preflight/baseline.json` and fill in `reason` (and optionally
   failure still fails it.
 - **Change detection is by message.** Results are one row per check, so when a
   baselined check's message differs from the recorded one (for example a new
-  table joined the list), the row is still demoted but reads
-  `Baselined but CHANGED since <generatedAt>: …`. Review those rows: this is the
-  only signal that a baseline is hiding a new finding. Re-record with
+  table joined the list), the row is **not** demoted: it keeps its status and
+  reads `Baseline does not match (changed since <generatedAt>): …`, so a new
+  finding in a baselined check still fails the run. Re-record with
   `--write-baseline --force` once the change is understood.
 - An entry past its `expires` date (a date-only value lasts through that day,
   UTC) is ignored — the finding fails again — and a `baseline` warning row

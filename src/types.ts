@@ -153,7 +153,7 @@ export interface Finding {
 /**
  * Who produced a result row: a check (`"check"`, the default when absent), the
  * runner itself (`"runner"`: the duplicate-name and empty-selection guards) or
- * the baseline (`"baseline"`: expired-entry notices).
+ * the baseline (`"baseline"`: accepted findings and expired-entry notices).
  */
 export type CheckResultKind = "check" | "runner" | "baseline";
 
@@ -162,7 +162,7 @@ export interface CheckResult {
   name: string;
   status: CheckStatus;
   message: string;
-  /** Set on synthetic rows only; absent means `"check"`. */
+  /** Set on synthetic and baseline-accepted rows only; absent means `"check"`. */
   kind?: CheckResultKind;
   /**
    * The record-level findings behind the verdict, when the check reports them.

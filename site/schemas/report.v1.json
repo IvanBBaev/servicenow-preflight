@@ -64,7 +64,7 @@
           "type": "string"
         },
         "kind": {
-          "description": "Set on synthetic rows only; absent means `\"check\"`.",
+          "description": "Set on synthetic and baseline-accepted rows only; absent means `\"check\"`.",
           "$ref": "#/$defs/CheckResultKind"
         },
         "findings": {
@@ -86,7 +86,7 @@
       ]
     },
     "CheckResultKind": {
-      "description": "Who produced a result row: a check (`\"check\"`, the default when absent), the runner itself (`\"runner\"`: the duplicate-name and empty-selection guards) or the baseline (`\"baseline\"`: expired-entry notices).",
+      "description": "Who produced a result row: a check (`\"check\"`, the default when absent), the runner itself (`\"runner\"`: the duplicate-name and empty-selection guards) or the baseline (`\"baseline\"`: accepted findings and expired-entry notices).",
       "enum": [
         "check",
         "runner",
