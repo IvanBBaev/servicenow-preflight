@@ -6,7 +6,7 @@
   "type": "object",
   "properties": {
     "instanceUrl": {
-      "description": "Base URL of the target instance.",
+      "description": "Base URL of the target instance (https://<instance>.service-now.com). A bare host gets https:// prepended. A cleartext http:// URL is refused while credentials are set, unless --allow-insecure-http or SNPF_ALLOW_INSECURE_HTTP=1 is given (loopback hosts are exempt); the opt-in is not a config key.",
       "type": "string"
     },
     "scope": {

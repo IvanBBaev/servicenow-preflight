@@ -32,6 +32,7 @@ import { doctorChecks, type InstanceSource } from "./doctor.js";
 import {
   loadConfig,
   type LoadedConfig,
+  normaliseInstanceUrl,
   parseConcurrency,
   parseFailOn,
   parseSwitch,
@@ -43,8 +44,10 @@ import {
 import {
   createSnClient,
   SnAuthError,
+  SnError,
   TRANSPORT_WRAP,
   type InternalClientConfig,
+  type SnClient,
 } from "./http/client.js";
 import { createRecorder, type Recorder } from "./fixtures/record.js";
 import {
@@ -179,6 +182,8 @@ interface ParsedArgs {
   allowEmpty: boolean;
   /** `run`/`sync`: accept a CI run with no credentials (anonymous instance). */
   allowNoAuth: boolean;
+  /** Accept a cleartext `http:` instance URL with credentials (SEC-7). */
+  allowInsecureHttp: boolean;
   only?: string[];
   skip?: string[];
   format: OutputFormat;
@@ -371,6 +376,28 @@ const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_MAX_IN_FLIGHT = 4;
 
 /**
+ * {@link createSnClient} with a construction-time refusal (a malformed
+ * instance URL, cleartext `http:` with credentials, a bad limit or proxy) as a
+ * usage error, exit 2 — never a runtime exit 3 (DX-4, SEC-7).
+ */
+function buildClient(
+  cfg: InternalClientConfig,
+  args: ParsedArgs,
+  loaded: LoadedConfig,
+): SnClient {
+  try {
+    return createSnClient({
+      ...cfg,
+      allowInsecureHttp:
+        args.allowInsecureHttp || loaded.allowInsecureHttp === true,
+    });
+  } catch (err) {
+    if (err instanceof SnError) throw new UsageError(err.message);
+    throw err;
+  }
+}
+
+/**
  * The client's request limits: the flag, then the (namespaced) env, then the
  * CLI default in-flight cap of {@link DEFAULT_MAX_IN_FLIGHT} (F-X-1).
  */
@@ -394,6 +421,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     withLastRun: false,
     allowEmpty: false,
     allowNoAuth: false,
+    allowInsecureHttp: false,
     noCache: false,
     timings: false,
     recordRaw: false,
@@ -487,6 +515,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--allow-no-auth":
         args.allowNoAuth = true;
+        break;
+      case "--allow-insecure-http":
+        args.allowInsecureHttp = true;
         break;
       case "--allow-stage-skip":
         args.allowStageSkip = true;
@@ -708,6 +739,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       "--changed-since and --write-baseline cannot be combined: an incremental run would record a partial baseline.",
     );
   }
+  // DX-4: a bare host gets https://; any other malformed value is exit 2.
+  if (args.instanceUrl?.trim()) {
+    const { url, note } = normaliseInstanceUrl(args.instanceUrl, "--instance");
+    args.instanceUrl = url;
+    if (note) process.stderr.write(`servicenow-preflight: note: ${note}\n`);
+  }
   return args;
 }
 
@@ -841,7 +878,7 @@ async function doctorRun(
     instanceUrl,
     auth: loaded.auth,
     tls: loaded.tls,
-    http: createSnClient(clientConfig),
+    http: buildClient(clientConfig, args, loaded),
     scope: target.scope ?? loaded.config.scope,
     instance: target.name,
   };
@@ -955,9 +992,14 @@ Multi-instance (registry at .preflight/instances.json):
                          (an anonymous instance); without it that is exit 2
                          (refused by default as likely ACL security-trimming;
                          cannot override a proven security-trimmed pull)
+      --allow-insecure-http
+                         accept a cleartext http:// instance URL while
+                         credentials are set (env SNPF_ALLOW_INSECURE_HTTP=1);
+                         without it that is exit 2. Loopback hosts are exempt
 
 Options:
-  -i, --instance <url>   Target instance URL (single-instance, no registry)
+  -i, --instance <url>   Target instance URL (single-instance, no registry);
+                         a bare host gets https:// prepended
       --config <path>    Path to a preflight config file
       --only <csv>       Run only these checks (comma-separated names)
       --skip <csv>       Skip these checks (comma-separated names)
@@ -1052,6 +1094,8 @@ Authentication (via environment / .env — never the config file, never logged):
   SNPF_DEV_USER / SNPF_PROD_TOKEN; the unprefixed SNPF_* is the fallback.
 
   SNPF_INSTANCE                  Instance URL (or use --instance)
+  SNPF_ALLOW_INSECURE_HTTP=1     Accept an http:// instance URL with
+                                 credentials (or --allow-insecure-http)
   SNPF_AUTH                      Force a method; otherwise it is auto-detected:
                                  basic | token | apikey | oauth-password
                                  | oauth-client | oauth-refresh | oauth-jwt
@@ -1716,7 +1760,7 @@ async function runOneInstance(
     const transport = replayTransport(resolve(cwd, replayDir));
     clientConfig[TRANSPORT_WRAP] = () => transport;
   }
-  const http = createSnClient(clientConfig);
+  const http = buildClient(clientConfig, args, loaded);
 
   const ctx: PreflightContext = {
     instanceUrl,
@@ -2038,15 +2082,19 @@ async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
   });
   assertCredentialsUnderCi(loaded, inst.url, args, inst.envPrefix);
 
-  const http = createSnClient({
-    instanceUrl: inst.url,
-    ...(loaded.auth ? { auth: loaded.auth } : {}),
-    ...(loaded.tls ? { tls: loaded.tls } : {}),
-    ...(loaded.config.proxy ? { proxy: loaded.config.proxy } : {}),
-    ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
-    env: loaded.env,
-    ...requestLimits(args, loaded.limits),
-  });
+  const http = buildClient(
+    {
+      instanceUrl: inst.url,
+      ...(loaded.auth ? { auth: loaded.auth } : {}),
+      ...(loaded.tls ? { tls: loaded.tls } : {}),
+      ...(loaded.config.proxy ? { proxy: loaded.config.proxy } : {}),
+      ...(loaded.config.noProxy ? { noProxy: loaded.config.noProxy } : {}),
+      env: loaded.env,
+      ...requestLimits(args, loaded.limits),
+    },
+    args,
+    loaded,
+  );
 
   const existing = await loadManifest(env, cwd);
   const now = new Date().toISOString();

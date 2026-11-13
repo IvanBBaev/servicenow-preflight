@@ -215,7 +215,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 
 | Flag                          | Description                                                                                                                   |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--instance <url>`      | Target instance URL (single-instance, no registry).                                                                           |
+| `-i`, `--instance <url>`      | Target instance URL (single-instance, no registry); a bare host gets `https://`.                                              |
 | `-e`, `--env <name>`          | Select a registry instance (same as positional).                                                                              |
 | `--all`                       | `run`: sweep every instance in the registry.                                                                                  |
 | `--registry <path>`           | Registry file (default `.preflight/instances.json`); see below.                                                               |
@@ -225,6 +225,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--with-last-run`             | `sync`: also pull each test's most recent result.                                                                             |
 | `--allow-empty`               | `sync`: commit an empty snapshot over a non-empty manifest.                                                                   |
 | `--allow-no-auth`             | `run`/`sync`: under `CI`, accept a run with no credentials (anonymous instance); without it that is exit `2`.                 |
+| `--allow-insecure-http`       | Accept an `http://` instance URL with credentials set (or `SNPF_ALLOW_INSECURE_HTTP=1`).                                      |
 | `--max-age <dur>`             | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                                |
 | `--allow-stage-skip`          | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                                   |
 | `--format <fmt>`              | `pretty` (default), `json`, `junit`, `sarif`, `markdown`, `github` (`list`/`explain`: `pretty` or `json`).                    |
@@ -425,6 +426,17 @@ claims come from `SNPF_OAUTH_JWT_KID`
 assertion variable accepts an **`@path` value** (read from that file, e.g.
 `SNPF_MTLS_KEY=@./certs/client.key`); a missing `@`-file is a hard error reported
 with the path only, never contents.
+
+**Instance URL and cleartext http.** A bare host in `--instance`,
+`SNPF_INSTANCE` or the config `instanceUrl` (`dev12345.service-now.com`) gets
+`https://` prepended, with a one-line note on stderr; any other malformed value
+exits `2` (`Instance URL must be https://<host> (got "...")`). Credentials are
+never sent over cleartext `http:`: with any auth method or mTLS configured, an
+`http://` URL to a non-loopback host is refused before the first request (exit
+`2`). Pass `--allow-insecure-http` or set `SNPF_ALLOW_INSECURE_HTTP=1` to accept
+the risk (library: `allowInsecureHttp: true`); the opt-in is deliberately not a
+config-file key. `localhost`, `127.0.0.0/8` and `[::1]` are exempt, so a local
+mock or tunnel works without it.
 
 **Config precedence** for `instanceUrl`, `updateSetId`, `proxy` and `noProxy`,
 highest first:

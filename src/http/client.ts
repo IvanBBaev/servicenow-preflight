@@ -426,6 +426,15 @@ export interface SnClientConfig {
    * `process.env`). Pass `loadConfig()`'s `env` so `.env` values apply.
    */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Accept a cleartext `http:` {@link instanceUrl} while {@link auth} or
+   * {@link tls} is configured (SEC-7; default `false`). Without it such a
+   * client is refused at construction, because the first request would send
+   * the credentials unencrypted. Loopback hosts (`localhost`, `127.0.0.0/8`,
+   * `[::1]`) are always accepted. CLI: `--allow-insecure-http` or
+   * `SNPF_ALLOW_INSECURE_HTTP=1`.
+   */
+  allowInsecureHttp?: boolean;
 }
 
 /** Minimal response shape the client consumes (a subset of `fetch`'s Response). */
@@ -798,6 +807,20 @@ type OAuthGrantAuth = Extract<SnAuth, { kind: `oauth-${string}` }>;
  * password. Errors that must name a URL (its path is the actionable part) go
  * through this rather than echoing the raw configured string.
  */
+/**
+ * A loopback host (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`) as
+ * `URL.hostname` spells it: traffic to it never leaves the machine (SEC-7).
+ */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "[::1]" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+  );
+}
+
 function redactedUrl(url: URL): string {
   return `${url.protocol}//${url.host}${url.pathname}${url.search}${url.hash}`;
 }
@@ -1438,7 +1461,22 @@ function buildUrl(
  * ```
  */
 export function createSnClient(cfg: SnClientConfig): SnClient {
-  const parsedUrl = new URL(cfg.instanceUrl);
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(cfg.instanceUrl);
+  } catch {
+    throw new SnError(
+      `instanceUrl "${String(cfg.instanceUrl).replace(/^([^/]*\/\/)?[^/@]*@/, "$1***@")}" ` +
+        `is not a valid URL. ` +
+        `Configure the instance origin, e.g. https://<instance>.service-now.com.`,
+    );
+  }
+  if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
+    throw new SnError(
+      `instanceUrl "${redactedUrl(parsedUrl)}" uses the scheme ` +
+        `"${parsedUrl.protocol}"; only https:// is supported.`,
+    );
+  }
   // CC-11: `URL.origin` silently drops any path/query/fragment. If the
   // configured instance URL carries one (a reverse-proxy prefix like
   // `/servicenow`, say), every request would quietly hit the origin root
@@ -1465,6 +1503,23 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       `instanceUrl "${redactedUrl(parsedUrl)}" carries credentials in its ` +
         `userinfo, which URL.origin would silently drop. Supply them through ` +
         `SNPF_USER / SNPF_PASS (or another SNPF_* auth variable) instead.`,
+    );
+  }
+  // SEC-7: with credentials configured, a cleartext origin would send them
+  // unencrypted on the very first request (before any https redirect could
+  // help, and `redirect: "error"` then fails the run anyway). Refuse it unless
+  // the caller opted in; loopback stays open for local fakes and tunnels.
+  if (
+    parsedUrl.protocol === "http:" &&
+    (cfg.auth !== undefined || cfg.tls !== undefined) &&
+    cfg.allowInsecureHttp !== true &&
+    !isLoopbackHost(parsedUrl.hostname)
+  ) {
+    throw new SnError(
+      `Refusing to send credentials over cleartext http to ` +
+        `"${parsedUrl.origin}". Use https://${parsedUrl.host}, or accept the ` +
+        `risk with --allow-insecure-http (SNPF_ALLOW_INSECURE_HTTP=1; ` +
+        `library: allowInsecureHttp: true).`,
     );
   }
   const origin = parsedUrl.origin;

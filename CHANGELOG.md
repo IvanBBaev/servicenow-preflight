@@ -732,6 +732,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Credentials are not sent over cleartext `http:`** (RR-11, SEC-7;
+  **breaking** for runs against an `http://` instance with credentials) —
+  `createSnClient` refused nothing, so an `http://` instance URL sent basic
+  auth, bearer tokens and API keys in clear text, with only a check warning
+  after the fact. With auth or mTLS configured, an `http:` URL to a
+  non-loopback host is now refused before any request (CLI exit `2`) with a
+  message naming the origin. `--allow-insecure-http`, `SNPF_ALLOW_INSECURE_HTTP=1`
+  or the library option `allowInsecureHttp: true` accepts the risk; it is
+  deliberately not a config-file key. `localhost`, `127.0.0.0/8` and `[::1]`
+  stay exempt.
+- **Scheme-less and malformed instance URLs** (RR-11, DX-4) — a bare host in
+  `--instance`, `SNPF_INSTANCE` or the config `instanceUrl` (for example
+  `dev12345.service-now.com`) now gets `https://` with a one-line note; it
+  used to fail later with exit `3`. Any other malformed value, or a scheme
+  other than `http`/`https`, exits `2` with
+  `Instance URL must be https://<host> (got "...")`, userinfo masked. A
+  malformed `instanceUrl` passed to `createSnClient` is an `SnError` instead of
+  a `TypeError`.
+
 - **Tessera TM-3 gate validates and caps declared Script Include targets**
   (`@tessera/generate`, PA-10) — a spec's `sys_script_include` target names
   come from the manifest and become constructible classes in the AST

@@ -43,7 +43,10 @@ export function buildConfigSchema(checks: readonly Check[]): ObjectSchema {
   return o.object(
     {
       instanceUrl: o.optional(
-        o.string({ description: "Base URL of the target instance." }),
+        o.string({
+          description:
+            "Base URL of the target instance (https://<instance>.service-now.com). A bare host gets https:// prepended. A cleartext http:// URL is refused while credentials are set, unless --allow-insecure-http or SNPF_ALLOW_INSECURE_HTTP=1 is given (loopback hosts are exempt); the opt-in is not a config key.",
+        }),
       ),
       scope: o.optional(
         o.string({ description: "Target scope name or scoped-app sys_id." }),

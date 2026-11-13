@@ -2077,3 +2077,95 @@ test("cicd.pollBudget reports the configured budget, and withSignal keeps it", (
     { maxPolls: 450, intervalMs: 2_000 },
   );
 });
+
+// RR-11 (SEC-7): credentials never go over cleartext http to a non-loopback
+// host unless the caller opts in.
+test("an http: instanceUrl with basic auth is refused before any request", () => {
+  assert.throws(
+    () =>
+      createSnClient({ instanceUrl: "http://x.service-now.com", auth: AUTH }),
+    (err) => {
+      assert.ok(err instanceof SnError);
+      assert.match(err.message, /http:\/\/x\.service-now\.com/);
+      assert.match(err.message, /--allow-insecure-http/);
+      assert.match(err.message, /SNPF_ALLOW_INSECURE_HTTP=1/);
+      return true;
+    },
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("an http: instanceUrl with only a tls config is refused too", () => {
+  assert.throws(
+    () =>
+      createSnClient({
+        instanceUrl: "http://x.service-now.com",
+        tls: { cert: "c", key: "k" },
+      }),
+    (err) => err instanceof SnError && /cleartext http/.test(err.message),
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("allowInsecureHttp accepts an http: instanceUrl with credentials", async () => {
+  handler = () => fakeResponse({ body: { result: { sys_id: "x" } } });
+  const c = createSnClient({
+    instanceUrl: "http://x.service-now.com",
+    auth: AUTH,
+    allowInsecureHttp: true,
+  });
+  await c.table("incident").get("x");
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].url.startsWith("http://x.service-now.com/"));
+});
+
+test("loopback http: hosts with credentials are accepted without the opt-in", () => {
+  for (const instanceUrl of [
+    "http://127.0.0.1:8080",
+    "http://127.10.0.1",
+    "http://localhost:3000",
+    "http://LOCALHOST",
+    "http://[::1]:8443",
+  ]) {
+    assert.doesNotThrow(
+      () => createSnClient({ instanceUrl, auth: AUTH }),
+      instanceUrl,
+    );
+  }
+});
+
+test("a lookalike of a loopback host is not exempt", () => {
+  for (const instanceUrl of [
+    "http://127.0.0.1.evil.example",
+    "http://localhost.evil.example",
+  ]) {
+    assert.throws(
+      () => createSnClient({ instanceUrl, auth: AUTH }),
+      (err) => err instanceof SnError && /cleartext http/.test(err.message),
+      instanceUrl,
+    );
+  }
+});
+
+test("an http: instanceUrl without credentials is not refused", () => {
+  assert.doesNotThrow(() =>
+    createSnClient({ instanceUrl: "http://x.service-now.com" }),
+  );
+});
+
+test("a malformed instanceUrl is an SnError, not a TypeError", () => {
+  assert.throws(
+    () => createSnClient({ instanceUrl: "not a url", auth: AUTH }),
+    (err) => err instanceof SnError && /is not a valid URL/.test(err.message),
+  );
+});
+
+test("a non-http(s) instanceUrl scheme is refused", () => {
+  assert.throws(
+    () =>
+      createSnClient({ instanceUrl: "ftp://x.service-now.com", auth: AUTH }),
+    (err) =>
+      err instanceof SnError &&
+      /only https:\/\/ is supported/.test(err.message),
+  );
+});

@@ -35,7 +35,11 @@ export class UsageError extends Error {
 
 /** The parsed, file-based portion of the configuration. */
 export interface PreflightConfig {
-  /** Base URL of the target instance. */
+  /**
+   * Base URL of the target instance. A bare host gets `https://` prepended
+   * (DX-4); a cleartext `http:` URL with credentials needs
+   * `--allow-insecure-http` / `SNPF_ALLOW_INSECURE_HTTP=1` (SEC-7).
+   */
   instanceUrl?: string;
   /** Target scope (scoped-app sys_id or scope name). */
   scope?: string;
@@ -121,6 +125,12 @@ export interface LoadedConfig {
   concurrency?: number;
   /** `SNPF_FAIL_ON` (`fail` or `warn`), when set (F-X-17). */
   failOn?: FailOn;
+  /**
+   * `SNPF_ALLOW_INSECURE_HTTP` as a switch, when set (SEC-7). Pass it to
+   * `createSnClient({ allowInsecureHttp })` to accept a cleartext `http:`
+   * instance URL with credentials.
+   */
+  allowInsecureHttp?: boolean;
   /**
    * Where each of `instanceUrl`, `updateSetId`, `proxy` and `noProxy` came
    * from (F-X-8): `"file"` or `"env"`. A field with no value is absent. The CLI
@@ -360,7 +370,59 @@ const ENV = {
   failOn: "SNPF_FAIL_ON",
   /** Config file vs env precedence: `file` (1.x default) or `env` (F-X-8). */
   precedence: "SNPF_PRECEDENCE",
+  /** Accept a cleartext `http:` instance URL with credentials (SEC-7). */
+  allowInsecureHttp: "SNPF_ALLOW_INSECURE_HTTP",
 } as const;
+
+/** A URL that names its scheme (`https://…`, `http://…`, `ftp://…`). */
+const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+/** A bare host: DNS name or IPv4, or a bracketed IPv6 literal, `:port`, `/`. */
+const BARE_HOST =
+  /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*|\[[0-9a-f:.]+\])(?::\d{1,5})?\/?$/i;
+
+/** `value` with any `user:pass@` userinfo masked, for an error message. */
+function maskUserinfo(value: string): string {
+  return value.replace(/^([a-z][a-z0-9+.-]*:\/\/)?[^/@]*@/i, "$1***@");
+}
+
+/**
+ * Normalise an instance URL from `--instance`, `SNPF_INSTANCE` or the config
+ * file's `instanceUrl` (DX-4). A bare host (`dev12345.service-now.com`, with
+ * an optional `:port`) gets `https://` prepended and a `note` saying so. A
+ * value that is neither a bare host nor an `http(s)://` URL is a
+ * {@link UsageError} (exit 2) naming `source`. Whether a cleartext `http:`
+ * URL may carry credentials is decided by `createSnClient` (SEC-7).
+ */
+export function normaliseInstanceUrl(
+  value: string,
+  source: string,
+): { url: string; note?: string } {
+  const raw = value.trim();
+  const invalid = (why = ""): UsageError =>
+    new UsageError(
+      `Instance URL must be https://<host> (got "${maskUserinfo(raw)}" from ${source})${why}.`,
+    );
+  if (!HAS_SCHEME.test(raw)) {
+    if (!BARE_HOST.test(raw)) throw invalid();
+    const url = `https://${raw.replace(/\/$/, "")}`;
+    return {
+      url,
+      note: `${source} "${raw}" has no scheme; using ${url}.`,
+    };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw invalid();
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw invalid(
+      `; the ${parsed.protocol.slice(0, -1)} scheme is not supported`,
+    );
+  }
+  return { url: raw };
+}
 
 /**
  * Resolve an env value that may reference a file. A value beginning with `@` is
@@ -1173,6 +1235,18 @@ export async function loadConfig(
     opts.onWarning ?? (() => {}),
   );
 
+  // DX-4: a bare host from the file or SNPF_INSTANCE gets https://; any other
+  // malformed value is a usage error here, not a runtime "Invalid URL" later.
+  if (typeof config.instanceUrl === "string" && config.instanceUrl.trim()) {
+    const source =
+      sources.instanceUrl === "env"
+        ? suppliedEnvName(fullEnv, ENV.instance, opts.envPrefix)
+        : `instanceUrl in ${configPath ? basename(configPath) : "the config file"}`;
+    const { url, note } = normaliseInstanceUrl(config.instanceUrl, source);
+    config.instanceUrl = url;
+    if (note) (opts.onWarning ?? (() => {}))(note);
+  }
+
   // Fail closed at load time on a mistyped proxy/noProxy config value (SR-5)
   // before it can reach the client as a silent bypass or a mid-request crash.
   assertProxyConfigTypes(config);
@@ -1207,6 +1281,10 @@ export async function loadConfig(
   const cache = parseSwitch(env[ENV.cache], ENV.cache);
   const concurrency = parseConcurrency(env[ENV.concurrency], ENV.concurrency);
   const failOn = parseFailOn(env[ENV.failOn], ENV.failOn);
+  const allowInsecureHttp = parseSwitch(
+    env[ENV.allowInsecureHttp],
+    ENV.allowInsecureHttp,
+  );
 
   return {
     config,
@@ -1219,5 +1297,6 @@ export async function loadConfig(
     ...(cache !== undefined ? { cache } : {}),
     ...(concurrency !== undefined ? { concurrency } : {}),
     ...(failOn !== undefined ? { failOn } : {}),
+    ...(allowInsecureHttp !== undefined ? { allowInsecureHttp } : {}),
   };
 }
