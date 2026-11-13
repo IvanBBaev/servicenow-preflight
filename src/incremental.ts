@@ -3,9 +3,10 @@
  * to the checks whose `meta.tables` intersect the tables that changed since a
  * point in time. Selection is fail-safe: a check that declares no tables, runs
  * unconditionally (`requires: "ALWAYS"`) or reads instance state ({@link STATE_TABLES}) is
- * always selected, and a change read that hits the row cap selects everything.
+ * always selected, and a change read that hits the row cap, is ACL-trimmed or
+ * returns no rows without a pre-trim count selects everything.
  */
-import { SnTruncationError } from "./http/client.js";
+import { SnTruncationError, type TableQueryResult } from "./http/client.js";
 import {
   and,
   assertIdentifier,
@@ -46,6 +47,41 @@ export interface ChangeSet {
    * so selection must run every check.
    */
   truncated?: boolean;
+  /**
+   * Tables whose change read was ACL security-trimmed (`X-Total-Count` above
+   * the visible rows): changes may be hidden, so selection must run every check.
+   */
+  trimmed?: string[];
+  /**
+   * Tables whose change read returned no rows and no pre-trim count: "no
+   * changes" cannot be told apart from "no access", so selection must run
+   * every check.
+   */
+  ambiguous?: string[];
+}
+
+/** Collects the reads of one {@link changedTables} call that are not trustworthy. */
+interface ReadAudit {
+  trimmed: Set<string>;
+  ambiguous: Set<string>;
+}
+
+/**
+ * Read `table` with `queryWithMeta` and record a trimmed read, or a zero-row
+ * read without `X-Total-Count`, in `audit`. Returns the visible rows.
+ */
+async function auditedQuery(
+  ctx: PreflightContext,
+  audit: ReadAudit,
+  table: string,
+  params: Record<string, string>,
+): Promise<TableQueryResult["rows"]> {
+  const meta = await ctx.http.table(table).queryWithMeta(params);
+  if (meta.securityTrimmed) audit.trimmed.add(table);
+  else if (meta.rows.length === 0 && meta.totalCount !== 0) {
+    audit.ambiguous.add(table);
+  }
+  return meta.rows;
 }
 
 /** Why a check was selected for an incremental run. */
@@ -116,6 +152,7 @@ function cell(row: Record<string, unknown>, field: string): string {
 /** The update set plus every child set batched under it (via `parent`). */
 async function batchIds(
   ctx: PreflightContext,
+  audit: ReadAudit,
   rootId: string,
 ): Promise<string[]> {
   const seen = new Set([rootId]);
@@ -123,7 +160,7 @@ async function batchIds(
   while (frontier.length > 0) {
     const next: string[] = [];
     for (const ids of chunk(frontier)) {
-      const rows = await ctx.http.table("sys_update_set").query({
+      const rows = await auditedQuery(ctx, audit, "sys_update_set", {
         sysparm_query: inClause("parent", ids),
         sysparm_fields: "sys_id",
       });
@@ -145,7 +182,11 @@ async function batchIds(
  * the set's (and its batched children's) `sys_update_xml` rows, mapped to a
  * table by name ({@link tableOfUpdateName}); otherwise `sys_metadata` rows of
  * `ctx.scope`, whose `sys_class_name` is the table. Neither configured throws.
+ * Every read goes through `queryWithMeta`: a trimmed read is listed in
+ * `trimmed`, a zero-row read without a pre-trim count in `ambiguous`.
  * Read errors propagate (the caller treats them as a runtime error).
+ * Scope mode sees `sys_metadata` only, so a change that only deletes records
+ * (logged in `sys_metadata_delete`) is not detected.
  */
 export async function changedTables(
   ctx: PreflightContext,
@@ -157,14 +198,22 @@ export async function changedTables(
   const updateSetId = ctx.updateSetId?.trim();
   const scope = ctx.scope?.trim();
   const tables = new Set<string>();
+  const audit: ReadAudit = { trimmed: new Set(), ambiguous: new Set() };
+  const done = (source: ChangeSource): ChangeSet => {
+    const out: ChangeSet = { tables: [...tables].sort(), source };
+    if (audit.trimmed.size > 0) out.trimmed = [...audit.trimmed].sort();
+    if (audit.ambiguous.size > 0) out.ambiguous = [...audit.ambiguous].sort();
+    return out;
+  };
   try {
     if (updateSetId) {
       const sets = await batchIds(
         ctx,
+        audit,
         assertIdentifier(updateSetId, "updateSetId"),
       );
       for (const ids of chunk(sets)) {
-        const rows = await ctx.http.table("sys_update_xml").query({
+        const rows = await auditedQuery(ctx, audit, "sys_update_xml", {
           sysparm_query: and(inClause("update_set", ids), window),
           sysparm_fields: "name",
         });
@@ -173,11 +222,11 @@ export async function changedTables(
           if (name) tables.add(tableOfUpdateName(name, options.known));
         }
       }
-      return { tables: [...tables].sort(), source: "update set" };
+      return done("update set");
     }
     if (scope) {
       const resolved = await resolveScope(ctx, scope);
-      const rows = await ctx.http.table("sys_metadata").query({
+      const rows = await auditedQuery(ctx, audit, "sys_metadata", {
         sysparm_query: and(resolved.clause, window),
         sysparm_fields: "sys_class_name",
       });
@@ -185,7 +234,7 @@ export async function changedTables(
         const table = cell(row, "sys_class_name");
         if (table) tables.add(table);
       }
-      return { tables: [...tables].sort(), source: "scope" };
+      return done("scope");
     }
   } catch (err) {
     if (err instanceof SnTruncationError) {
@@ -269,6 +318,21 @@ export async function planIncremental(
       skip: [],
       empty: false,
       preamble: `${head}: the change read hit the row cap; running all ${String(checks.length)} checks.`,
+    };
+  }
+  if (change.trimmed || change.ambiguous) {
+    const why = [
+      change.trimmed &&
+        `was ACL-trimmed on ${change.trimmed.join(", ")} (changes may be hidden)`,
+      change.ambiguous &&
+        `returned no rows and no X-Total-Count on ${change.ambiguous.join(", ")} (no changes cannot be told from no access)`,
+    ]
+      .filter(Boolean)
+      .join("; ");
+    return {
+      skip: [],
+      empty: false,
+      preamble: `${head}: the change read ${why}; running all ${String(checks.length)} checks.`,
     };
   }
   const { selected } = selectByTables(checks, change.tables);

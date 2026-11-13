@@ -626,6 +626,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--changed-since` no longer skips checks on an ACL-trimmed change read**
+  (RR-10) — the update set, `sys_update_xml` and `sys_metadata` reads carried
+  no trim signal, so a CI account that could not see every change narrowed the
+  run to the visible tables and skipped exactly the checks covering the hidden
+  ones. The reads now use `queryWithMeta`: a security-trimmed read, or a
+  zero-row read without `X-Total-Count`, runs every check, with a stderr line
+  that names the table. `ChangeSet` gains `trimmed` and `ambiguous`. Scope mode
+  still does not see deletions (`sys_metadata_delete`); the README states it.
+
 - **A baselined finding whose message changed is no longer demoted** (RR-9)
   — a baseline entry matched on check and status alone, so when the message
   moved (for example three new hard-coded secrets joined an accepted one) the

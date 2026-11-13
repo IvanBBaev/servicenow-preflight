@@ -281,8 +281,11 @@ retrieved-set previews, ATF results: `update-set-state`, `default-set-leakage`,
 `atf-run`) is always kept, so a check is never dropped for lack of metadata.
 Skipped checks are not rows (as with `--skip`); a stderr line names the kept
 count and the changed tables. With no changes, a
-`preflight:incremental` warn row says so. A change read over the row cap runs
-every check. It composes with `--only` / `--skip` and is refused with
+`preflight:incremental` warn row says so. A change read over the row cap, an
+ACL-trimmed change read, or one that returns no rows without an
+`X-Total-Count` header runs every check, and the stderr line names the table.
+Scope mode reads `sys_metadata`, so a change that only deletes records is not
+seen; target an update set when deletions matter. It composes with `--only` / `--skip` and is refused with
 `--write-baseline` (exit 2), since the baseline would be partial. Git refs are
 not supported.
 

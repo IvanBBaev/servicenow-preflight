@@ -40,8 +40,19 @@ const KNOWN = declaredTables(defaultChecks);
 
 const check = (name, meta) => ({ name, meta, run: async () => ({}) });
 
-function ctxOf(tables, extra = {}) {
+/**
+ * A context over the fake instance. `totalCounts` defaults to 0 for the change
+ * tables: the fake's count is per table, and 0 never flags a trim, so every
+ * read is "header present, nothing hidden" unless a test overrides it.
+ */
+function ctxOf(tables, extra = {}, totalCounts = {}) {
   const http = createFakeSnClient({
+    totalCounts: {
+      sys_update_set: 0,
+      sys_update_xml: 0,
+      sys_metadata: 0,
+      ...totalCounts,
+    },
     tables: {
       ...tables,
       sys_update_xml: tables.sys_update_xml?.map((row) => ({
@@ -175,6 +186,7 @@ test("changedTables reads sys_metadata for a scope", async () => {
         })),
       },
       now: NOW,
+      totalCounts: { sys_metadata: 0 },
     }),
   );
   const change = await changedTables(
@@ -198,6 +210,9 @@ test("changedTables flags a truncated read and needs a source", async () => {
       query: async () => {
         throw new SnTruncationError("cap", 10);
       },
+      queryWithMeta: async () => {
+        throw new SnTruncationError("cap", 10);
+      },
     }),
   };
   const change = await changedTables(
@@ -214,6 +229,9 @@ test("changedTables flags a truncated read and needs a source", async () => {
   const failing = {
     table: () => ({
       query: async () => {
+        throw new Error("boom");
+      },
+      queryWithMeta: async () => {
         throw new Error("boom");
       },
     }),
@@ -234,6 +252,79 @@ test("changedTables rejects a malformed update set id", async () => {
   await assert.rejects(
     changedTables(ctxOf({}, { updateSetId: "a^ORb" }), SINCE, { known: KNOWN }),
   );
+});
+
+test("changedTables lists ACL-trimmed change reads", async () => {
+  const rows = [{ sys_id: "1", update_set: SET, name: `sys_ui_page_${HEX}` }];
+  const xml = await changedTables(
+    ctxOf(
+      { sys_update_xml: rows },
+      { updateSetId: SET },
+      { sys_update_xml: 3 },
+    ),
+    SINCE,
+    { known: KNOWN, now: NOW },
+  );
+  assert.deepEqual(xml, {
+    tables: ["sys_ui_page"],
+    source: "update set",
+    trimmed: ["sys_update_xml"],
+  });
+
+  const children = await changedTables(
+    ctxOf(
+      { sys_update_xml: rows },
+      { updateSetId: SET },
+      { sys_update_set: 1 },
+    ),
+    SINCE,
+    { known: KNOWN, now: NOW },
+  );
+  assert.deepEqual(children.trimmed, ["sys_update_set"]);
+});
+
+test("changedTables lists zero-row reads without a pre-trim count", async () => {
+  const unknown = { sys_update_set: undefined, sys_update_xml: undefined };
+  const set = await changedTables(
+    ctxOf({ sys_update_xml: [] }, { updateSetId: SET }, unknown),
+    SINCE,
+    { known: KNOWN, now: NOW },
+  );
+  assert.deepEqual(set, {
+    tables: [],
+    source: "update set",
+    ambiguous: ["sys_update_set", "sys_update_xml"],
+  });
+
+  // Rows without a count are not ambiguous: they are what changed.
+  const seen = await changedTables(
+    ctxOf(
+      {
+        sys_update_xml: [
+          { sys_id: "1", update_set: SET, name: `sys_ui_page_${HEX}` },
+        ],
+      },
+      { updateSetId: SET },
+      { sys_update_xml: undefined },
+    ),
+    SINCE,
+    { known: KNOWN, now: NOW },
+  );
+  assert.deepEqual(seen, { tables: ["sys_ui_page"], source: "update set" });
+
+  const scope = await changedTables(
+    {
+      instanceUrl: "https://x",
+      http: createFakeSnClient({
+        tables: { sys_scope: [{ sys_id: SCOPE_ID, scope: "x_app" }] },
+        now: NOW,
+      }),
+      scope: "x_app",
+    },
+    SINCE,
+    { known: KNOWN, now: NOW },
+  );
+  assert.deepEqual(scope.ambiguous, ["sys_metadata"]);
 });
 
 // --- planning ---------------------------------------------------------------
@@ -335,6 +426,9 @@ test("planIncremental runs everything when the change read is truncated", async 
       query: async () => {
         throw new SnTruncationError("cap", 10);
       },
+      queryWithMeta: async () => {
+        throw new SnTruncationError("cap", 10);
+      },
     }),
   };
   const plan = await planIncremental(
@@ -346,6 +440,64 @@ test("planIncremental runs everything when the change read is truncated", async 
   assert.deepEqual(plan.skip, []);
   assert.equal(plan.empty, false);
   assert.match(plan.preamble, /row cap; running all 37 checks/);
+});
+
+test("planIncremental runs everything when a change read is ACL-trimmed", async () => {
+  const ctx = ctxOf(
+    {
+      sys_update_xml: [
+        { sys_id: "1", update_set: SET, name: `sys_ui_page_${HEX}` },
+      ],
+    },
+    { updateSetId: SET },
+    { sys_update_xml: 5 },
+  );
+  const plan = await planIncremental(ctx, defaultChecks, SINCE, {
+    known: KNOWN,
+    now: NOW,
+    label: "dev",
+  });
+  assert.deepEqual(plan.skip, []);
+  assert.equal(plan.empty, false);
+  assert.equal(plan.row, undefined);
+  assert.equal(
+    plan.preamble,
+    "Incremental (dev): the change read was ACL-trimmed on sys_update_xml (changes may be hidden); running all 37 checks.",
+  );
+});
+
+test("planIncremental runs everything on a zero-row read without X-Total-Count", async () => {
+  const ctx = ctxOf(
+    { sys_update_xml: [] },
+    { updateSetId: SET },
+    { sys_update_xml: undefined },
+  );
+  const plan = await planIncremental(ctx, defaultChecks, SINCE, {
+    known: KNOWN,
+    now: NOW,
+  });
+  assert.deepEqual(plan.skip, []);
+  assert.equal(plan.row, undefined);
+  assert.match(
+    plan.preamble,
+    /^Incremental: the change read returned no rows and no X-Total-Count on sys_update_xml \(no changes cannot be told from no access\); running all 37 checks\.$/,
+  );
+
+  const both = await planIncremental(
+    ctxOf(
+      { sys_update_xml: [] },
+      { updateSetId: SET },
+      { sys_update_set: 2, sys_update_xml: undefined },
+    ),
+    defaultChecks,
+    SINCE,
+    { known: KNOWN, now: NOW },
+  );
+  assert.deepEqual(both.skip, []);
+  assert.match(
+    both.preamble,
+    /was ACL-trimmed on sys_update_set .*; returned no rows and no X-Total-Count on sys_update_xml/,
+  );
 });
 
 // --- CLI --------------------------------------------------------------------
