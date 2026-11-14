@@ -636,6 +636,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The no-credentials guard covers every common CI system** (RR-37) — the
+  RR-4 guard (no credentials under CI is exit `2`) read only `CI`, which Azure
+  Pipelines, Jenkins, TeamCity and Buildkite do not set, so a missing secret
+  there was still an all-warn green run. `TF_BUILD`, `JENKINS_URL`,
+  `TEAMCITY_VERSION` and `BUILDKITE` now count as CI too (same rule: anything
+  but empty, `0` or `false`), and the message names the variable it found
+  (`... and TF_BUILD is set.`). `--allow-no-auth` still opts out. Inverting the
+  local default (fail without credentials everywhere) is left for 2.0.
+
 - **Release and CI gates fail closed** (RR-69, REL-1/5/6/7) —
   `ci/certification/scan.sh` exited with the blocker count, which wraps at
   256, so 256 blockers exited `0` and passed the gate; it now exits `1` on any

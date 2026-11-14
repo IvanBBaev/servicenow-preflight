@@ -151,11 +151,20 @@ test("resolveTlsFromEnv: a cert without its key (and the reverse) is a UsageErro
 
 // ---------- CLI ----------
 
+// RR-37: every variable the CLI reads as "this is a CI run".
+const CI_VARS = [
+  "CI",
+  "TF_BUILD",
+  "JENKINS_URL",
+  "TEAMCITY_VERSION",
+  "BUILDKITE",
+];
+
 /** Run the CLI in an empty dir with no ambient SNPF_* or CI variables. */
 function runCli(args, env = {}) {
   const clean = { ...process.env };
   for (const key of Object.keys(clean)) {
-    if (key.startsWith("SNPF_") || key === "CI") delete clean[key];
+    if (key.startsWith("SNPF_") || CI_VARS.includes(key)) delete clean[key];
   }
   const cwd = mkdtempSync(join(tmpdir(), "snpf-cred-"));
   try {
@@ -190,6 +199,56 @@ test("CLI: CI=false or CI=0 counts as not CI", () => {
   for (const CI of ["false", "0", ""]) {
     const res = runCli(["run", "-i", URL_, ...ONLY], { CI });
     assert.notEqual(res.status, 2, `CI=${CI}: ${res.stderr}`);
+  }
+});
+
+// RR-37: CI systems that do not set `CI` still trip the guard.
+const otherCi = [
+  ["Azure Pipelines", "TF_BUILD", "True"],
+  ["Jenkins", "JENKINS_URL", "https://jenkins.example.com/"],
+  ["TeamCity", "TEAMCITY_VERSION", "2024.12"],
+  ["Buildkite", "BUILDKITE", "true"],
+];
+
+for (const [system, name, value] of otherCi) {
+  test(`CLI: ${system} (${name}) with no credentials exits 2`, () => {
+    const res = runCli(["run", "-i", URL_, ...ONLY], { [name]: value });
+    assert.equal(res.status, 2, res.stderr);
+    assert.match(
+      res.stderr,
+      new RegExp(
+        `No credentials resolved for http://127\\.0\\.0\\.1:1 and ${name} is set`,
+      ),
+    );
+    assert.match(res.stderr, /SNPF_USER and SNPF_PASS/);
+    assert.match(res.stderr, /--allow-no-auth/);
+    assert.equal(res.stdout, "");
+  });
+
+  test(`CLI: ${system} (${name}) with --allow-no-auth proceeds`, () => {
+    const res = runCli(["run", "-i", URL_, ...ONLY, "--allow-no-auth"], {
+      [name]: value,
+    });
+    assert.notEqual(res.status, 2, res.stderr);
+    assert.doesNotMatch(res.stderr, /No credentials resolved/);
+  });
+}
+
+test("CLI: CI=false does not mask another CI variable", () => {
+  const res = runCli(["run", "-i", URL_, ...ONLY], {
+    CI: "false",
+    TF_BUILD: "True",
+  });
+  assert.equal(res.status, 2, res.stderr);
+  assert.match(res.stderr, /and TF_BUILD is set/);
+});
+
+test("CLI: CI variables set to empty, 0 or false count as not CI", () => {
+  for (const name of CI_VARS) {
+    for (const value of ["", "0", "false", "False"]) {
+      const res = runCli(["run", "-i", URL_, ...ONLY], { [name]: value });
+      assert.notEqual(res.status, 2, `${name}=${value}: ${res.stderr}`);
+    }
   }
 });
 

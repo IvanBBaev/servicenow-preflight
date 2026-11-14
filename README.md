@@ -224,7 +224,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--changed-since <dur\|date>` | `run`: only the checks whose tables changed since `<dur>` ago (`24h`, `7d`) or an ISO date; see below.                        |
 | `--with-last-run`             | `sync`: also pull each test's most recent result.                                                                             |
 | `--allow-empty`               | `sync`: commit an empty snapshot over a non-empty manifest.                                                                   |
-| `--allow-no-auth`             | `run`/`sync`: under `CI`, accept a run with no credentials (anonymous instance); without it that is exit `2`.                 |
+| `--allow-no-auth`             | `run`/`sync`: under CI, accept a run with no credentials (anonymous instance); without it that is exit `2`.                   |
 | `--allow-insecure-http`       | Accept an `http://` instance URL with credentials set (or `SNPF_ALLOW_INSECURE_HTTP=1`).                                      |
 | `--max-age <dur>`             | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                                |
 | `--allow-stage-skip`          | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                                   |
@@ -978,8 +978,12 @@ jobs:
 Store credentials as CI secrets — the tool only ever reads them from the
 environment.
 
-A missing secret fails closed. When `CI` is set and no credentials resolve,
-`run` and `sync` stop with exit `2` before any request:
+A missing secret fails closed. When the run is under CI and no credentials
+resolve, `run` and `sync` stop with exit `2` before any request. CI means any
+of `CI` (GitHub Actions, GitLab and most others), `TF_BUILD` (Azure
+Pipelines), `JENKINS_URL` (Jenkins), `TEAMCITY_VERSION` (TeamCity) or
+`BUILDKITE` (Buildkite) set to anything but empty, `0` or `false`; the message
+names the variable it found:
 
 ```text
 No credentials resolved for https://acme.service-now.com and CI is set. Set SNPF_USER and SNPF_PASS (basic), SNPF_TOKEN (bearer), SNPF_API_KEY, SNPF_OAUTH_CLIENT_ID and SNPF_OAUTH_CLIENT_SECRET (OAuth), or SNPF_MTLS_CERT and SNPF_MTLS_KEY (mTLS); a missing or renamed CI secret reads as unset. Pass --allow-no-auth for an anonymous instance.

@@ -1656,16 +1656,34 @@ function assertKnownSelection(
   }
 }
 
-/** `CI` is set to anything but an empty, `0` or `false` value. */
-function isCi(env: NodeJS.ProcessEnv): boolean {
-  const v = env.CI?.trim().toLowerCase();
-  return !!v && v !== "0" && v !== "false";
+/**
+ * RR-37: the variables that mark a CI run. `CI` covers GitHub Actions, GitLab
+ * and most others; Azure Pipelines (`TF_BUILD`), Jenkins (`JENKINS_URL`),
+ * TeamCity (`TEAMCITY_VERSION`) and Buildkite (`BUILDKITE`) do not set it.
+ */
+const CI_VARIABLES = [
+  "CI",
+  "TF_BUILD",
+  "JENKINS_URL",
+  "TEAMCITY_VERSION",
+  "BUILDKITE",
+] as const;
+
+/**
+ * The first CI variable set to anything but an empty, `0` or `false` value,
+ * or `undefined` outside CI.
+ */
+function ciVariable(env: NodeJS.ProcessEnv): string | undefined {
+  return CI_VARIABLES.find((name) => {
+    const v = env[name]?.trim().toLowerCase();
+    return !!v && v !== "0" && v !== "false";
+  });
 }
 
 /**
- * RR-4 (DX-1): under CI, a target instance with no credentials at all is a
- * config error (exit 2), not an all-warn green run — a renamed or expired CI
- * secret must fail the gate. Locally the run proceeds and the checks warn.
+ * RR-4 (DX-1): under CI (RR-37: any of `CI_VARIABLES`), a target instance
+ * with no credentials at all is a config error (exit 2), not an all-warn green
+ * run — a renamed or expired CI secret must fail the gate. Locally the run proceeds and the checks warn.
  * `--allow-no-auth` opts out for an anonymous instance. Partial credential sets
  * already failed in `loadConfig`.
  */
@@ -1676,11 +1694,13 @@ function assertCredentialsUnderCi(
   envPrefix?: string,
 ): void {
   if (!instanceUrl || loaded.auth || loaded.tls) return;
-  if (args.allowNoAuth || !isCi(loaded.env)) return;
+  if (args.allowNoAuth) return;
+  const ci = ciVariable(loaded.env);
+  if (!ci) return;
   const p = envPrefix?.trim().toUpperCase();
   const names = p ? ` (or the SNPF_${p}_* forms)` : "";
   throw new UsageError(
-    `No credentials resolved for ${instanceUrl} and CI is set. Set SNPF_USER and SNPF_PASS (basic), SNPF_TOKEN (bearer), SNPF_API_KEY, SNPF_OAUTH_CLIENT_ID and SNPF_OAUTH_CLIENT_SECRET (OAuth), or SNPF_MTLS_CERT and SNPF_MTLS_KEY (mTLS)${names}; a missing or renamed CI secret reads as unset. Pass --allow-no-auth for an anonymous instance.`,
+    `No credentials resolved for ${instanceUrl} and ${ci} is set. Set SNPF_USER and SNPF_PASS (basic), SNPF_TOKEN (bearer), SNPF_API_KEY, SNPF_OAUTH_CLIENT_ID and SNPF_OAUTH_CLIENT_SECRET (OAuth), or SNPF_MTLS_CERT and SNPF_MTLS_KEY (mTLS)${names}; a missing or renamed CI secret reads as unset. Pass --allow-no-auth for an anonymous instance.`,
   );
 }
 

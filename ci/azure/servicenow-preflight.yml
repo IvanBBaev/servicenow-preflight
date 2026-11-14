@@ -8,7 +8,9 @@
 #
 # Define SNPF_INSTANCE, SNPF_USER and SNPF_PASS as (secret) pipeline
 # variables; the step maps them into its environment. Secrets are never
-# template parameters.
+# template parameters. Azure sets TF_BUILD, so a missing or misnamed secret
+# fails the step with exit 2 instead of an all-warn green run; pass
+# --allow-no-auth in `args` only for an instance that needs no credentials.
 parameters:
   - name: version
     type: string
