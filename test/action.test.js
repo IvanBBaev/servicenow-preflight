@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -58,7 +58,16 @@ test("inputs reach the shell only through env, never inline in run", () => {
 });
 
 test("every uses: is pinned to a full commit SHA with a version comment", () => {
-  for (const file of ["action.yml", ".github/workflows/action-selftest.yml"]) {
+  // RR-69 (REL-7): the certification workflow template and every repo
+  // workflow too, not only the action.
+  const workflows = readdirSync(join(ROOT, ".github", "workflows"))
+    .filter((name) => name.endsWith(".yml"))
+    .map((name) => `.github/workflows/${name}`);
+  for (const file of [
+    "action.yml",
+    "ci/certification/github-workflow.yml",
+    ...workflows,
+  ]) {
     const uses = [...read(file).matchAll(/uses: (\S+)(.*)/g)].filter(
       ([, ref]) => ref !== "./",
     );

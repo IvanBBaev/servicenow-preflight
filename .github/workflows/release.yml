@@ -106,7 +106,18 @@ jobs:
       # `prepublishOnly` runs the full `check` gate (build + lint + format:check + coverage).
       # `--provenance` requires `id-token: write` (above) and publishes a signed
       # provenance attestation. It works with both a token and OIDC Trusted Publishing.
-      - run: npm publish --provenance --access public
+      # REL-6: the dist-tag is always explicit. A prerelease (any version with a
+      # `-` before any `+build` part, e.g. 1.0.0-rc.1) goes to `next`; without `--tag` npm would move
+      # `latest` to it and every plain `npm install` would get the rc.
+      - name: Publish to npm
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          case "${PKG%%+*}" in
+            *-*) DIST_TAG=next ;;
+            *) DIST_TAG=latest ;;
+          esac
+          echo "Publishing $PKG with dist-tag $DIST_TAG"
+          npm publish --provenance --access public --tag "$DIST_TAG"
         env:
           # OIDC Trusted Publishing is the intended long-term auth path. Keep
           # NODE_AUTH_TOKEN until npmjs.com Trusted Publishing is configured for

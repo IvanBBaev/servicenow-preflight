@@ -636,6 +636,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Release and CI gates fail closed** (RR-69, REL-1/5/6/7) —
+  `ci/certification/scan.sh` exited with the blocker count, which wraps at
+  256, so 256 blockers exited `0` and passed the gate; it now exits `1` on any
+  blocker (the count stays in the summary and the JUnit `failures`). Its
+  per-file rules word-split the file list and silently skipped a path with a
+  space; the list is now read line by line. The composite action used at a
+  commit SHA, a major tag or a branch ran `servicenow-preflight@latest`; it now
+  runs the version in the action's own `package.json` and fails with exit `2`
+  when that is not a valid version (`version: latest` still opts in). The
+  release workflow published every version, a `1.0.0-rc.1` included, as
+  `latest`; a prerelease now goes to the `next` dist-tag. The certification
+  workflow template pins `actions/checkout` and `actions/upload-artifact` to
+  commit SHAs.
+
 - **`table().get()` fails closed on a 2xx body without a record** (RR-38) —
   `get` returned `null` ("no such record") for any 2xx answer whose `result`
   was missing, `null`, an array or a scalar, so a proxy or gateway answering

@@ -46,6 +46,15 @@ as long as you follow the flow below — no back-fix needed.
    - the `prepublishOnly` gate (`npm run check`: build + lint + format +
      coverage) fails.
 
+## Prereleases publish under the `next` dist-tag
+
+The publish step always passes `--tag`. A version with a prerelease part
+(`1.0.0-rc.1`, `1.1.0-beta.0`) is published under `next`; any other version
+under `latest`. A plain `npm install servicenow-preflight` therefore never picks
+up a release candidate; testers install it with `servicenow-preflight@next` or
+the exact version. When the final release is published, `latest` moves to it;
+`next` keeps pointing at the last prerelease until the next one is cut.
+
 ## `main` is the 1.0.0 train — no 0.x releases from it
 
 `prepack` stages the Tessera runtime into every package packed from `main`, so

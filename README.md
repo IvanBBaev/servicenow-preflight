@@ -900,12 +900,15 @@ jobs:
 ```
 
 The action needs a release that ships it (the first release after 0.5.0);
-by default it runs the CLI version matching its own `vX.Y.Z` tag, else
-`latest`. Credentials are never inputs — pass them through `env:`.
+by default it runs the CLI version matching its own `vX.Y.Z` tag. Pinned to a
+commit SHA, a major tag or a branch, it runs the version in that checkout's
+`package.json`, so a SHA pin also pins the npm package; it never falls back to
+`latest` (pass `version: latest` to opt in). Credentials are never inputs —
+pass them through `env:`.
 
 | Input               | Default                | Meaning                                                 |
 | ------------------- | ---------------------- | ------------------------------------------------------- |
-| `version`           | the action's tag       | npm version / tag, or a local package path              |
+| `version`           | the action's version   | npm version / tag, or a local package path              |
 | `args`              | `run`                  | subcommand and extra flags, split on spaces             |
 | `instance`          |                        | registry instance (`--env`)                             |
 | `config`            |                        | config file (`--config`)                                |

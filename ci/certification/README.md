@@ -13,12 +13,12 @@ source-control exports).
 
 ## What's here
 
-| File                     | What it is                                                                                                                                                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CHECKLIST.md`           | The human gate — Tier 1–7 rules, each with _what_ to check, _why_, a detection grep, and a ❌/✅ example. Read it once; use it as the sign-off list before submitting.                                                                |
-| `scan.sh`                | The machine gate — text-scans `*.xml`/`*.js` for the automatable subset of the checklist. Emits `cert-report.txt` + `cert-junit.xml`; exit code = number of blocking violations. Zero dependencies (POSIX `sh` + `grep`/`sed`/`git`). |
-| `github-workflow.yml`    | GitHub Actions workflow that runs `scan.sh` on push / PR (blocking job + non-blocking advisory job).                                                                                                                                  |
-| `pre-commit-config.yaml` | [pre-commit](https://pre-commit.com) config that runs the same `scan.sh` locally before each commit.                                                                                                                                  |
+| File                     | What it is                                                                                                                                                                                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CHECKLIST.md`           | The human gate — Tier 1–7 rules, each with _what_ to check, _why_, a detection grep, and a ❌/✅ example. Read it once; use it as the sign-off list before submitting.                                                                               |
+| `scan.sh`                | The machine gate — text-scans `*.xml`/`*.js` for the automatable subset of the checklist. Emits `cert-report.txt` + `cert-junit.xml`; exit code 1 when any blocking violation is found, else 0. Zero dependencies (POSIX `sh` + `grep`/`sed`/`git`). |
+| `github-workflow.yml`    | GitHub Actions workflow that runs `scan.sh` on push / PR (blocking job + non-blocking advisory job).                                                                                                                                                 |
+| `pre-commit-config.yaml` | [pre-commit](https://pre-commit.com) config that runs the same `scan.sh` locally before each commit.                                                                                                                                                 |
 
 ## Install into a scoped-app repo
 
@@ -51,7 +51,7 @@ your-scoped-app-repo/
 # scan the whole tree
 ci/certification/scan.sh --mode all
 
-# only the blocking (Tier 1/2) rules — exit code = blocker count
+# only the blocking (Tier 1/2) rules — exit 1 on any blocker
 ci/certification/scan.sh --mode blocking
 
 # scan just what changed against a base commit (used by CI on PRs)

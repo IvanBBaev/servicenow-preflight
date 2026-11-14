@@ -11,7 +11,9 @@
 #   ci/certification/scan.sh [--mode blocking|advisory|all] [--diff BASE_SHA] [paths...]
 #
 # Exit code:
-#   blocking / all  -> number of BLOCKER violations (0 = clean; used by CI to fail)
+#   blocking / all  -> 1 when any BLOCKER violation was found, 0 when clean
+#                      (the count itself is in the summary line and the JUnit
+#                      `failures` attribute; an exit status wraps at 256)
 #   advisory        -> always 0
 #
 # Heuristic: a grep hit means "review", not certain defect. Metadata rules
@@ -96,8 +98,9 @@ if $run_blocking; then
   grep_check BLOCKER 2.7 "CORS rule with wildcard origin" \
         '<origin>\s*\*\s*</origin>'
 
-  for f in $FILES; do
-    [ -f "$f" ] || continue
+  # One path per line, read whole: a path with spaces is not word-split.
+  while IFS= read -r f; do
+    [ -n "$f" ] && [ -f "$f" ] || continue
     if grep -qE '\.getRefRecord\s*\(\)' "$f" 2>/dev/null && ! grep -qE 'isValidRecord\s*\(\)' "$f" 2>/dev/null; then
       record BLOCKER 4.1 "getRefRecord() without isValidRecord() guard" \
              "$(grep -nE '\.getRefRecord\s*\(\)' "$f" | head -20 | sed "s#^#$f:#")"
@@ -113,7 +116,7 @@ if $run_blocking; then
       record BLOCKER 7.4 "External link target=_blank without rel=noopener (tabnabbing)" \
              "$(grep -nE 'target="_blank"' "$f" | head -20 | sed "s#^#$f:#")"
     fi
-  done
+  done <<< "$FILES"
 fi
 
 # ---------------- ADVISORY (Tier 3/4) ----------------------------------------
@@ -145,4 +148,8 @@ echo "Reference: ci/certification/CHECKLIST.md"
 if [ "$MODE" = "advisory" ]; then
   exit 0
 fi
-exit "$blockers"
+# Never `exit "$blockers"`: 256 blockers would wrap to exit 0 and pass the gate.
+if [ "$blockers" -gt 0 ]; then
+  exit 1
+fi
+exit 0

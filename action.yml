@@ -14,8 +14,10 @@ inputs:
   version:
     description: >-
       servicenow-preflight version to run (an npm version or tag, or a local
-      package path). Default: the version of the action's own tag (vX.Y.Z),
-      else `latest`.
+      package path). Default: the version of the action's own tag (vX.Y.Z);
+      for any other ref (a commit SHA, a major tag such as `v1`, a branch) the
+      version in the action's own `package.json`. Never `latest` unless you
+      pass it here.
     required: false
     default: ""
   args:
@@ -110,6 +112,7 @@ runs:
       env:
         SNPF_ACTION_VERSION: ${{ inputs.version }}
         SNPF_ACTION_REF: ${{ github.action_ref }}
+        SNPF_ACTION_PATH: ${{ github.action_path }}
         SNPF_ACTION_ARGS: ${{ inputs.args }}
         SNPF_ACTION_INSTANCE: ${{ inputs.instance }}
         SNPF_ACTION_CONFIG: ${{ inputs.config }}
@@ -127,7 +130,17 @@ runs:
           if [[ "$SNPF_ACTION_REF" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+.*)$ ]]; then
             version="${BASH_REMATCH[1]}"
           else
-            version=latest
+            # REL-5: a SHA, major-tag or branch ref runs the package version
+            # that ships with this action checkout, never an unpinned `latest`.
+            version=""
+            if [ -n "$SNPF_ACTION_PATH" ]; then
+              version="$(node -p 'require(require("path").join(process.env.SNPF_ACTION_PATH, "package.json")).version' 2>/dev/null)"
+            fi
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Cannot pin the servicenow-preflight version for action ref '$SNPF_ACTION_REF': no valid version in the action's package.json. Set the 'version' input."
+              echo "exit-code=2" >> "$GITHUB_OUTPUT"
+              exit 2
+            fi
           fi
         fi
         case "$version" in
