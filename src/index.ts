@@ -25,7 +25,7 @@ import {
   SnNetworkError,
   withSignal,
 } from "./http/client.js";
-import { linkRunContext } from "./http/query.js";
+import { cachedScope, linkRunContext } from "./http/query.js";
 import { concurrencyProblem, runPool } from "./runner/pool.js";
 import { summarizeResults } from "./summary.js";
 import { checkScope, publishCheck, publishRun } from "./trace.js";
@@ -195,6 +195,27 @@ function assertBudget(name: string, value: number | undefined): void {
   }
 }
 
+/**
+ * ACL-1: a scope with no `sys_scope` row makes every scope-bound read match
+ * nothing, so those checks report "nothing to check" and pass. After the
+ * checks ran, look at the scope resolution they shared (no new read): when it
+ * found no row, return the run-level failure message. A lookup that failed or
+ * never happened returns `undefined` — the checks already reported that.
+ */
+async function unresolvedScope(
+  ctx: PreflightContext,
+): Promise<string | undefined> {
+  const scope = ctx.scope?.trim();
+  const lookup = scope ? cachedScope(ctx, scope) : undefined;
+  if (!lookup) return undefined;
+  try {
+    if ((await lookup).sysId) return undefined;
+  } catch {
+    return undefined;
+  }
+  return `Scope "${String(scope)}" did not resolve to a sys_scope record: no scoped app has that name or sys_id, or the account cannot read sys_scope. Every scope-bound read matched nothing, so a pass from a scope-bound check verified nothing. Fix the scope (--scope, SNPF_SCOPE, the config file or the instance registry).`;
+}
+
 /** Why the run stopped: "Run aborted" or the run-timeout wording. */
 type RunStop = () => string;
 
@@ -313,6 +334,9 @@ async function runCheck(
  * timed-out run fails the checks it did not finish. The report is always
  * produced. `opts.concurrency` runs up to that many checks at once; the report
  * keeps registry order. Invalid budgets or concurrency throw a `RangeError`.
+ *
+ * When the checks looked `ctx.scope` up and it matched no `sys_scope` row, a
+ * `preflight` `fail` row leads the report: the scope-bound checks read nothing.
  */
 export async function runPreflight(
   ctx: PreflightContext,
@@ -441,6 +465,16 @@ export async function runPreflight(
     }
   } finally {
     clearTimeout(runTimer);
+  }
+
+  const scopeProblem = await unresolvedScope(ctx);
+  if (scopeProblem !== undefined) {
+    results.unshift({
+      name: "preflight",
+      status: "fail",
+      message: scopeProblem,
+      kind: "runner",
+    });
   }
 
   // Summarise fail-closed: an unrecognised status counts as a failure.

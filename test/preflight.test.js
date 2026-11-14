@@ -8,7 +8,11 @@ import {
   SnError,
   SnTruncationError,
 } from "../build/index.js";
-import { instanceUrlConfigured } from "../build/api/checks.js";
+import {
+  corsRules,
+  instanceUrlConfigured,
+  tableAccessSettings,
+} from "../build/api/checks.js";
 import { resolveScope } from "../build/api/http.js";
 import { createFakeSnClient } from "../build/http/fake.js";
 import { tracked } from "./helpers/seed.js";
@@ -591,6 +595,86 @@ test("the scope lookup is shared across checks, but redone after a cancelled che
   );
   assert.equal(second.results[1].status, "pass");
   assert.equal(slow.calls.length, 2);
+});
+
+// ACL-1 (RR-45): a scope typo must fail the run, not pass "nothing to check".
+function typoFixture() {
+  const sid = "a".repeat(32);
+  const inScope = (row) => ({
+    sys_scope: sid,
+    "sys_scope.scope": "x_acme_app",
+    ...row,
+  });
+  return createFakeSnClient({
+    tables: {
+      sys_scope: [{ sys_id: sid, scope: "x_acme_app" }],
+      sys_db_object: [
+        inScope({
+          sys_id: "t1",
+          name: "x_acme_app_task",
+          access: "public",
+          create_access: "true",
+        }),
+      ],
+      sys_cors_rule: [
+        inScope({ sys_id: "c1", name: "any", domain: "*", active: "true" }),
+      ],
+    },
+    totalCounts: { sys_db_object: 0, sys_cors_rule: 0 },
+  });
+}
+
+test("an unresolved scope fails the run with one runner row", async () => {
+  const report = await runPreflight(
+    { http: typoFixture(), scope: "x_acme_ap" },
+    [tableAccessSettings, corsRules],
+  );
+  assert.equal(report.ok, false);
+  const [first, ...rest] = report.results;
+  assert.equal(first.name, "preflight");
+  assert.equal(first.kind, "runner");
+  assert.equal(first.status, "fail");
+  assert.match(
+    first.message,
+    /Scope "x_acme_ap" did not resolve to a sys_scope record/,
+  );
+  assert.deepEqual(
+    rest.map((r) => r.name),
+    [tableAccessSettings.name, corsRules.name],
+  );
+  assert.equal(report.summary.fail, 1);
+});
+
+test("a resolved scope adds no runner row", async () => {
+  const report = await runPreflight(
+    { http: typoFixture(), scope: "x_acme_app" },
+    [tableAccessSettings, corsRules],
+  );
+  assert.ok(report.results.every((r) => r.name !== "preflight"));
+  assert.ok(report.results.some((r) => r.status === "fail"));
+});
+
+test("a scope no check looked up adds no runner row", async () => {
+  const { http, calls } = tracked(createFakeSnClient());
+  const report = await runPreflight({ http, scope: "x_missing" }, [
+    {
+      name: "plain",
+      description: "plain",
+      run: () => ({ name: "plain", status: "pass", message: "ok" }),
+    },
+  ]);
+  assert.equal(report.ok, true);
+  assert.equal(calls.length, 0);
+});
+
+test("a failed scope lookup is left to the checks", async () => {
+  const http = createFakeSnClient({
+    fail: { table: { sys_scope: { http: 500 } } },
+  });
+  const report = await runPreflight({ http, scope: "x_acme_app" }, [corsRules]);
+  assert.equal(report.results.length, 1);
+  assert.equal(report.results[0].name, corsRules.name);
+  assert.equal(report.results[0].status, "error");
 });
 
 // F-X-3: bounded concurrent check execution.

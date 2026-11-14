@@ -303,8 +303,8 @@ window.PREFLIGHT_CHECKS = [
     "name": "cross-scope-privileges",
     "tag": "scope",
     "desc": "Every cross-scope privilege the scope holds as a source is allowed on the target instance; denied ones fail, requested ones warn.",
-    "fail": "A cross-scope privilege is denied, or the read was security-trimmed.",
-    "warn": "A privilege is only requested or has an unknown status, the scope is unset or did not resolve, or a zero-row read was ambiguous.",
+    "fail": "A cross-scope privilege is denied, the scope did not resolve to a sys_scope record, or the read was security-trimmed.",
+    "warn": "A privilege is only requested or has an unknown status, the scope is unset, or a zero-row read was ambiguous.",
     "pass": "Every cross-scope privilege is allowed, or the scope holds none."
   },
   {

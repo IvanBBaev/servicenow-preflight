@@ -248,6 +248,19 @@ export function linkRunContext(
   runRoots.set(child, runRoots.get(root) ?? root);
 }
 
+/**
+ * The resolution of `scope` this run already started (see {@link resolveScope}),
+ * or `undefined` when no check looked it up. Never issues a read: the runner
+ * uses it after the checks to see whether the scope they filtered by exists.
+ */
+export function cachedScope(
+  ctx: PreflightContext,
+  scope: string,
+): Promise<ResolvedScope> | undefined {
+  const key = runRoots.get(ctx) ?? ctx;
+  return scopeCache.get(key)?.get(String(scope).trim())?.promise;
+}
+
 /** Look the scope up in `sys_scope` (by sys_id OR scope name) and build its clause. */
 async function lookupScope(
   http: SnClient,

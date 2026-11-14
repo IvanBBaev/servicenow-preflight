@@ -102,10 +102,10 @@ test("warns when no scope is set", async () => {
   assert.match(result.message, /No scope set/);
 });
 
-test("warns when the scope does not resolve to a sys_scope record", async () => {
+test("fails when the scope does not resolve to a sys_scope record", async () => {
   const { http, calls } = makeHttp({ scopes: [] });
   const result = await run(http);
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "fail");
   assert.match(result.message, /did not resolve to a sys_scope record/);
   assert.equal(
     calls.filter((c) => c.table === TABLE).length,

@@ -1966,7 +1966,10 @@ test("CLI: a baselined finding whose read later fails is an error and exits 1 (R
               "sys_scope.scope": "x_acme_app",
             },
           ]
-        : [];
+        : table === "sys_scope"
+          ? // The configured scope resolves, so no runner row joins the baseline (RR-45).
+            [{ sys_id: "a".repeat(32), scope: "x_acme_app" }]
+          : [];
     res.writeHead(200, {
       "content-type": "application/json",
       "x-total-count": String(rows.length),

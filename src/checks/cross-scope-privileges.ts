@@ -59,8 +59,8 @@ export const crossScopePrivileges: Check = {
       "Approve requested privileges in the target instance or remove the cross-scope call",
     verdicts: {
       pass: "Every cross-scope privilege is allowed, or the scope holds none.",
-      warn: "A privilege is only requested or has an unknown status, the scope is unset or did not resolve, or a zero-row read was ambiguous.",
-      fail: "A cross-scope privilege is denied, or the read was security-trimmed.",
+      warn: "A privilege is only requested or has an unknown status, the scope is unset, or a zero-row read was ambiguous.",
+      fail: "A cross-scope privilege is denied, the scope did not resolve to a sys_scope record, or the read was security-trimmed.",
     },
   },
   async run(ctx): Promise<CheckResult> {
@@ -75,8 +75,9 @@ export const crossScopePrivileges: Check = {
     try {
       const resolved = await resolveScope(ctx, scope);
       if (!resolved.sysId) {
+        // ACL-22: an unresolved scope verified nothing — fail, as the runner does.
         return result(
-          "warn",
+          "fail",
           `Cannot check cross-scope privileges for "${scope}": the scope name did not resolve to a sys_scope record.`,
         );
       }

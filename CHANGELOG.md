@@ -636,6 +636,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An unresolved scope fails the run** (RR-45, ACL-1, ACL-22) — a scope with
+  no `sys_scope` row (a typo such as `x_acme_ap`) made every scope-bound read
+  match nothing, so 18 of the 20 scope-bound checks passed with "nothing to
+  check". `runPreflight` now looks at the scope lookup the checks shared (no
+  extra read) and, when it found no row, puts a `preflight` `fail` row first in
+  the report. A lookup that failed is still reported by each check.
+  `cross-scope-privileges` now fails instead of warning on an unresolved
+  scope. Checks called directly keep their own fallback.
 - **The no-credentials guard covers every common CI system** (RR-37) — the
   RR-4 guard (no credentials under CI is exit `2`) read only `CI`, which Azure
   Pipelines, Jenkins, TeamCity and Buildkite do not set, so a missing secret
