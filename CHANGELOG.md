@@ -636,6 +636,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An empty or low `X-Total-Count` no longer ends pagination** (RR-46,
+  HTTP-1) — an empty header was read as `0` and a count below the rows already
+  delivered was trusted, so a 2500-row table came back as its first 1000 rows
+  with `securityTrimmed: false` and no other signal. Only a plain digit run is
+  a count now (`""`, `1e3`, `+5` are absent), and once the rows delivered
+  exceed the count the header is dropped: the walk goes on by page length,
+  `totalCount` is reported as unknown, and the row cap still fails closed.
 - **An unresolved scope fails the run** (RR-45, ACL-1, ACL-22) — a scope with
   no `sys_scope` row (a typo such as `x_acme_ap`) made every scope-bound read
   match nothing, so 18 of the 20 scope-bound checks passed with "nothing to

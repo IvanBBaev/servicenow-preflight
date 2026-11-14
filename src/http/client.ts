@@ -1241,14 +1241,19 @@ function bodyPreview(text: string): string {
   return collapsed.length > 80 ? `${collapsed.slice(0, 80)}…` : collapsed;
 }
 
-/** Parse an `X-Total-Count` header (pre-trim match count) if present and valid. */
+/**
+ * Parse an `X-Total-Count` header (pre-trim match count) if present and valid.
+ * RR-46: only a plain run of digits is a count. `Number("")` and
+ * `Number("  ")` are `0`, so an empty or blank header would otherwise read as
+ * "no rows" and end the auto-paginated walk after page 1; it is absent instead.
+ */
 function parseTotalCount(
   headers: Record<string, string> | undefined,
 ): number | undefined {
-  const raw = headers?.["x-total-count"];
-  if (raw === undefined) return undefined;
+  const raw = headers?.["x-total-count"]?.trim();
+  if (raw === undefined || !/^\d+$/.test(raw)) return undefined;
   const n = Number(raw);
-  return Number.isInteger(n) && n >= 0 ? n : undefined;
+  return Number.isSafeInteger(n) ? n : undefined;
 }
 
 /** Assemble a {@link TableQueryResult}, deriving the security-trimmed signal. */
@@ -1951,6 +1956,9 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         // X-Total-Count is the pre-trim match count; it rides every page, so
         // capture it from the first response that carries it (SN-1).
         let totalCount: number | undefined;
+        // RR-46: set once the instance delivered more rows than its own count
+        // claims; from then on the header is ignored and page length decides.
+        let countContradicted = false;
         for (let offset = 0; ; offset += pageSize) {
           const res = await requestOk("GET", base, {
             query: {
@@ -1961,12 +1969,20 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
             },
             signal,
           });
-          if (totalCount === undefined) {
+          if (totalCount === undefined && !countContradicted) {
             totalCount = parseTotalCount(res.headers);
           }
           const rows = tableRows(res, name);
           all.push(...rows);
           const nextOffset = offset + pageSize;
+          if (totalCount !== undefined && all.length > totalCount) {
+            // RR-46: trimming only ever lowers the visible rows below the
+            // pre-trim count, so more rows than the count is proof the count
+            // is wrong. Trusting it would end the walk early and report the
+            // truncated set as untrimmed; drop it and walk by page length.
+            totalCount = undefined;
+            countContradicted = true;
+          }
           if (totalCount !== undefined) {
             // RR-1: X-Total-Count is the pre-trim match count, and ServiceNow
             // cuts the offset window *before* it drops ACL-denied rows, so a

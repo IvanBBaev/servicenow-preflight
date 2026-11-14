@@ -1667,6 +1667,73 @@ test("RR-1: trimmed windows still stop at the row cap (fail closed)", async () =
   assert.deepEqual(offsetsOf(calls), [0, 1000]);
 });
 
+// --- RR-46: an empty or low X-Total-Count never ends the walk early ----------
+
+/** A 2500-row table that answers every page with the given count header. */
+function headerHandler(count, size = 2500) {
+  return (url) => {
+    const params = new URL(url).searchParams;
+    const offset = Number(params.get("sysparm_offset"));
+    const limit = Number(params.get("sysparm_limit"));
+    const n = Math.max(0, Math.min(limit, size - offset));
+    return fakeResponse({
+      headers: { "X-Total-Count": count },
+      body: {
+        result: Array.from({ length: n }, (_, i) => ({
+          sys_id: `r${offset + i}`,
+        })),
+      },
+    });
+  };
+}
+
+for (const blank of ["", "   "]) {
+  test(`RR-46: a blank X-Total-Count (${JSON.stringify(blank)}) is absent, not 0`, async () => {
+    handler = headerHandler(blank);
+    const res = await client().table("sys_update_xml").queryWithMeta();
+    assert.deepEqual(offsetsOf(calls), [0, 1000, 2000]);
+    assert.equal(res.rows.length, 2500);
+    assert.equal(res.totalCount, undefined);
+    assert.equal(res.securityTrimmed, false);
+  });
+}
+
+test("RR-46: a count below the rows delivered is dropped; page length decides", async () => {
+  handler = headerHandler("10");
+  const res = await client().table("sys_update_xml").queryWithMeta();
+  assert.deepEqual(offsetsOf(calls), [0, 1000, 2000]);
+  assert.equal(res.rows.length, 2500);
+  // The contradicted count is not reported: it would claim 10 matches.
+  assert.equal(res.totalCount, undefined);
+  assert.equal(res.securityTrimmed, false);
+});
+
+test("RR-46: a contradicted count still stops at the row cap (fail closed)", async () => {
+  handler = headerHandler("0", 5000);
+  await assert.rejects(
+    () => client({ maxRows: 2000 }).table("sys_update_xml").query(),
+    (err) => {
+      assert.ok(err instanceof SnTruncationError);
+      assert.equal(err.cap, 2000);
+      return true;
+    },
+  );
+  assert.deepEqual(offsetsOf(calls), [0, 1000]);
+});
+
+test("RR-46: only a plain digit run is a count", async () => {
+  for (const raw of ["1e3", "+5", "0x10", "5.0", "-0", " 7 "]) {
+    calls.length = 0;
+    handler = () =>
+      fakeResponse({
+        body: { result: [{ sys_id: "1" }] },
+        headers: { "x-total-count": raw },
+      });
+    const res = await client().table("incident").queryWithMeta();
+    assert.equal(res.totalCount, raw === " 7 " ? 7 : undefined, raw);
+  }
+});
+
 test("SN-1: query() still resolves to a bare array (unchanged surface)", async () => {
   handler = () =>
     fakeResponse({
