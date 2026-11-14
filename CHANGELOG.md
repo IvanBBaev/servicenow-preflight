@@ -636,6 +636,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Runner rows are never baselined or demoted; a missing core table is an
+  error** (RR-49, CLI-1, CLI-2, CLI-3, CLI-17) — every HTTP 404 (or 400
+  "Invalid table") read was a "plugin not installed" skip `warn`, so a wrong
+  instance path or a proxy answering 404 gave a green run that verified
+  nothing. A baseline recorded and later accepted the runner's own rows
+  ("No checks matched", a timeout, a thrown error), and `--severity
+<check>=warn` demoted a timed-out, aborted or crashed check to `warn`. A
+  check could also return a result under another check's name, or one
+  without a `message`, and it was taken as given. Now the runner watches each
+  check's table reads: a missing table the check does not list in the new
+  `meta.optionalTables` makes its row `error` (`atf-enablement` lists
+  `sys_atf_agent`, `portal-roles` lists `sp_widget` and `sp_page`). Timeout,
+  abort, thrown-error and malformed-result rows carry `kind: "runner"`;
+  `applyPolicy` leaves them as they are, and `baselineFromReport` /
+  `applyBaseline` skip them and every row under a reserved name (`preflight`,
+  `preflight:*`, `baseline`). A returned result always takes the check's
+  name, and one without a `message` string is a runner `fail`. Library users:
+  a custom check that skips on a missing plugin table must now list that
+  table in `meta.optionalTables`.
 - **Drift fails closed on empty, malformed or duplicate-id manifests** (RR-48,
   ST-2, ST-3, ST-4, ST-11) — `test-drift` passed with "all 0 active test(s)
   exist" when the source manifest was empty or all-inactive; `loadManifest`

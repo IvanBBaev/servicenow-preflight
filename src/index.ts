@@ -26,6 +26,7 @@ import {
   withSignal,
 } from "./http/client.js";
 import { cachedScope, linkRunContext } from "./http/query.js";
+import { MissingTables, missingMessage } from "./runner/missing-tables.js";
 import { concurrencyProblem, runPool } from "./runner/pool.js";
 import { summarizeResults } from "./summary.js";
 import { checkScope, publishCheck, publishRun } from "./trace.js";
@@ -116,22 +117,27 @@ function coerceResult(check: Check, produced: unknown): CheckResult {
           ? String(produced)
           : `a ${typeof produced}`
       } instead of a CheckResult object; treated as fail.`,
+      kind: "runner",
     };
   }
-  // An object of the wrong shape still gets rendered: a bad `status` is caught
-  // by the summariser below, but `name` is what identifies the row, so a
-  // missing one falls back to the check that produced it.
   const candidate = produced as CheckResult;
-  let named =
-    typeof candidate.name === "string"
-      ? candidate
-      : { ...candidate, name: check.name };
+  // CLI-17: a result without a message string is not a verdict a reader can
+  // act on; it fails like any other malformed return.
+  if (typeof candidate.message !== "string") {
+    return {
+      name: check.name,
+      status: "fail",
+      message: `Check "${check.name}" returned a result without a message string; treated as fail.`,
+      kind: "runner",
+    };
+  }
+  // CLI-17: the row is always named after the check that produced it. Policy
+  // and baseline match rows by name, so a check must not report (or pass)
+  // under another check's name.
+  const named: CheckResult = { ...candidate, name: check.name };
   // `kind` marks rows the runner and the baseline synthesise; a check cannot
   // claim it.
-  if (Object.hasOwn(named, "kind")) {
-    named = { ...named };
-    delete named.kind;
-  }
+  delete named.kind;
   if (
     !Object.hasOwn(named, "findings") &&
     !Object.hasOwn(named, "findingsTruncated")
@@ -222,9 +228,12 @@ type RunStop = () => string;
 /**
  * Run one check under its own AbortController, linked to the run signal and
  * bounded by `timeoutMs`. Never rejects: a throw, a timeout and a run abort all
- * become `fail` rows. The timer is always cleared, so it never holds the
- * process open past the run — but it does keep a check that hangs on a bare
- * promise from letting the event loop drain before the verdict.
+ * become `fail` rows with `kind: "runner"`, so no baseline or severity policy
+ * can accept them (CLI-2, CLI-3). A table read that found a required table
+ * missing makes the row `error` (CLI-1, see {@link MissingTables}). The timer
+ * is always cleared, so it never holds the process open past the run — but it
+ * does keep a check that hangs on a bare promise from letting the event loop
+ * drain before the verdict.
  */
 async function runCheck(
   ctx: PreflightContext,
@@ -236,10 +245,11 @@ async function runCheck(
   const controller = new AbortController();
   const signal = controller.signal;
   const base = contextFor(ctx, check);
+  const missing = new MissingTables(check);
   const checkCtx: PreflightContext = {
     ...base,
     signal: anySignal([base.signal, signal]) ?? signal,
-    http: withSignal(base.http, signal),
+    http: missing.watch(withSignal(base.http, signal)),
   };
   linkRunContext(checkCtx, ctx);
 
@@ -253,6 +263,7 @@ async function runCheck(
           name: check.name,
           status: "fail",
           message: `Check timed out after ${timeoutMs} ms (--timeout).`,
+          kind: "runner",
         });
         controller.abort(
           new DOMException(
@@ -269,6 +280,7 @@ async function runCheck(
           name: check.name,
           status: "fail",
           message: `${stopReason()} while this check was running.`,
+          kind: "runner",
         });
         controller.abort(runSignal.reason);
       },
@@ -278,9 +290,11 @@ async function runCheck(
   const work = (async (): Promise<CheckResult> => {
     try {
       // F-X-5: the check's requests are traced under its name.
-      return coerceResult(
-        check,
-        await checkScope.run(check.name, () => check.run(checkCtx)),
+      return missing.enforce(
+        coerceResult(
+          check,
+          await checkScope.run(check.name, () => check.run(checkCtx)),
+        ),
       );
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -290,15 +304,31 @@ async function runCheck(
         err instanceof SnAuthError ||
         err instanceof SnHttpError ||
         err instanceof SnNetworkError;
-      // A missing table (plugin not installed) is the skip warn, not an error.
+      // CLI-1: a missing table is the skip warn only when the check declared
+      // that table optional (a plugin's table) and found no required table
+      // missing; any other missing table means the check verified nothing.
       if (isMissingTable(err)) {
-        return missingTableResult(check.name, "this check", err);
+        return missing.isOptional(err) && missing.required().length === 0
+          ? missingTableResult(check.name, "this check", err)
+          : {
+              name: check.name,
+              status: "error",
+              message: `${missingMessage(missing.required())} Check threw an error: ${detail}`,
+            };
       }
-      return {
+      if (readFailed) {
+        return {
+          name: check.name,
+          status: "error",
+          message: `Check threw an error: ${detail}`,
+        };
+      }
+      return missing.enforce({
         name: check.name,
-        status: readFailed ? "error" : "fail",
+        status: "fail",
         message: `Check threw an error: ${detail}`,
-      };
+        kind: "runner",
+      });
     }
   })();
   const startedAt = performance.now();
@@ -443,6 +473,7 @@ export async function runPreflight(
           name: check.name,
           status: "fail",
           message: `${stopReason()} before this check started.`,
+          kind: "runner",
         })
       : runCheck(ctx, check, runSignal, opts.timeoutMs, stopReason);
 

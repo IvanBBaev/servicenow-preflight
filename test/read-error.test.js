@@ -109,7 +109,9 @@ for (const check of [corsRules, logLeftovers]) {
   });
 }
 
-test("the runner turns a thrown 404 into a skip warn, not an error", async () => {
+// RR-49 (CLI-1): a 404 the check did not get from a table it declares
+// optional (meta.optionalTables) is not a missing plugin — it is an error.
+test("the runner turns a thrown 404 from no optional table into an error", async () => {
   const out = await runPreflight({ instanceUrl: INSTANCE }, [
     {
       name: "throws-404",
@@ -119,9 +121,9 @@ test("the runner turns a thrown 404 into a skip warn, not an error", async () =>
       },
     },
   ]);
-  assert.equal(out.results[0].status, "warn");
-  assert.match(out.results[0].message, /^Skipped this check: /);
-  assert.equal(out.ok, true);
+  assert.equal(out.results[0].status, "error");
+  assert.match(out.results[0].message, /^Required table not found/);
+  assert.equal(out.ok, false);
 });
 
 test("the runner turns a thrown read failure into an error row; ok is false", async () => {

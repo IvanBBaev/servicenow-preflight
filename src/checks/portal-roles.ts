@@ -148,6 +148,8 @@ export const portalRoles: Check = {
     rule: "2.6",
     severity: "advisory",
     tables: ["sp_widget", "sp_page"],
+    // The Service Portal plugin provides both tables.
+    optionalTables: ["sp_widget", "sp_page"],
     remediation:
       "Add roles to each Service Portal widget and page, or document why it is deliberately public (for example a login or landing page) for the certification reviewer.",
     verdicts: {

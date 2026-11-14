@@ -86,7 +86,7 @@
       ]
     },
     "CheckResultKind": {
-      "description": "Who produced a result row: a check (`\"check\"`, the default when absent), the runner itself (`\"runner\"`: the duplicate-name and empty-selection guards) or the baseline (`\"baseline\"`: accepted findings and expired-entry notices).",
+      "description": "Who produced a result row: a check (`\"check\"`, the default when absent), the runner itself (`\"runner\"`: the duplicate-name, empty-selection and scope guards, and a check's timeout, abort, throw or malformed result) or the baseline (`\"baseline\"`: accepted findings and expired-entry notices). No baseline or severity policy ever accepts or demotes a `\"runner\"` row.",
       "enum": [
         "check",
         "runner",

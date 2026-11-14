@@ -1130,8 +1130,13 @@ maxInFlight?, rps?, cache? }`),
   **`findCheck(name)`** (searches the default suite plus `test-drift`). Every
   bundled check declares an optional `meta` (`CheckMeta`): its certification
   `rule` id, `severity` (`"blocker"` or `"advisory"` — advisory checks never
-  fail on a finding), the `tables` it reads, a `remediation` paragraph and the
-  `verdicts` wording for pass / warn / fail. `formatSarif(report, checks?)`
+  fail on a finding), the `tables` it reads, the `optionalTables` among them
+  (tables a plugin provides, which may be absent), a `remediation` paragraph
+  and the `verdicts` wording for pass / warn / fail. A table read that answers
+  HTTP 404 (or 400 "Invalid table") is a "plugin not installed" skip `warn`
+  only for a table in `optionalTables`; any other missing table turns the
+  check's row into `error` — a wrong instance path, a proxy or a missing read
+  grant, not a missing plugin. `formatSarif(report, checks?)`
   uses it to fill each SARIF rule's `shortDescription`, `fullDescription` and
   `properties`; a check without `meta` keeps working everywhere.
 
@@ -1177,9 +1182,14 @@ finding per non-pass row.
 
 Rows the tool synthesises carry a **`kind`**: `"runner"` on the `preflight`
 guard rows (duplicate or reserved check names, an empty selection, a scope
-with no `sys_scope` row) and
+with no `sys_scope` row) and on a check's row the runner wrote for it (a
+timeout, an abort, a thrown non-read error, or a returned value that is not a
+result with a `message` string), and
 `"baseline"` on expired-baseline notices. Check rows leave it out (meaning
-`"check"`), and a `kind` a check sets itself is stripped. The names
+`"check"`), and a `kind` a check sets itself is stripped. A runner row is not
+a finding: `--severity` never demotes it, and a baseline never records or
+accepts it (nor any row under a reserved name). A check's row always carries
+the check's own `name`, whatever name its result returned. The names
 `preflight`, `baseline` and any `preflight:` prefix are reserved: a check set
 that uses one fails with a single `preflight` row. SARIF results carry the kind
 in `properties.kind`.

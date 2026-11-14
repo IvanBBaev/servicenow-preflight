@@ -13,8 +13,10 @@ import type { CheckResult, PreflightReport } from "./types.js";
  *
  * A rewritten row's message gets a ` [severity: <level> by policy]` suffix so
  * a reader knows why it differs from the catalogue. `pass` and `error` rows
- * are never touched (a failed read is not a severity a policy can lower) and
- * a row's `name` never changes.
+ * are never touched (a failed read is not a severity a policy can lower),
+ * nor is a runner row (`kind: "runner"`: a timeout, abort, throw or malformed
+ * result is not the check's verdict — CLI-3), and a row's `name` never
+ * changes.
  */
 
 /** One check's override. */
@@ -87,6 +89,7 @@ export function applyPolicy(
     // Only fail / warn rows are remapped: pass and error stay, and an
     // unrecognised status is left for summarizeResults to fail closed.
     if (r.status !== "fail" && r.status !== "warn") return r;
+    if (r.kind === "runner") return r;
     const level = Object.prototype.hasOwnProperty.call(policy, r.name)
       ? policy[r.name]
       : undefined;

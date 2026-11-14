@@ -163,6 +163,8 @@ export const atfEnablement: Check = {
       "ATF test execution is enabled instance-wide — optionally with an online client test runner.",
     severity: "blocker",
     tables: ["sys_properties", "sys_atf_agent"],
+    // The ATF plugin provides the runner table; without it the check skips.
+    optionalTables: ["sys_atf_agent"],
     remediation:
       "Set the sn_atf.runner.enabled system property to true on the target instance and, when browser tests are required, start a scheduled client test runner (Automated Test Framework > Run > Scheduled Client Test Runner).",
     verdicts: {

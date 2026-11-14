@@ -22,7 +22,11 @@ import { summarizeResults } from "./summary.js";
  *
  * An `error` row (a read failed, so the check verified nothing) is never
  * recorded and never demoted: accepting a finding must not also accept a
- * revoked credential or an unreachable table.
+ * revoked credential or an unreachable table. The same holds for a row the
+ * runner produced (`kind: "runner"`: no check matched, a check timed out,
+ * was aborted, threw or returned something malformed) and for a row under a
+ * reserved name (`preflight`, `preflight:*`, `baseline`): none is a finding
+ * (CLI-2).
  */
 
 /** One accepted finding. */
@@ -66,6 +70,19 @@ const DAY_MS = 86_400_000;
 export function baselinePath(cwd: string, instance?: string): string {
   const file = instance ? `baseline.${instance}.json` : "baseline.json";
   return resolve(cwd, PREFLIGHT_DIR, file);
+}
+
+/**
+ * Whether a row is a check's own finding a baseline may record or accept:
+ * not a runner or baseline row and not under a reserved name.
+ */
+function isAcceptable(r: CheckResult): boolean {
+  if (r.kind === "runner" || r.kind === "baseline") return false;
+  return !(
+    r.name === "preflight" ||
+    r.name.startsWith("preflight:") ||
+    r.name === BASELINE_ROW
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -165,7 +182,8 @@ export function writeBaseline(
 
 /**
  * Build a baseline from every `fail` / `warn` result of a report. `error`
- * rows are left out: a failed read is not a finding a team can accept.
+ * rows are left out: a failed read is not a finding a team can accept. Runner
+ * rows and reserved names are left out too (CLI-2).
  */
 export function baselineFromReport(
   report: PreflightReport,
@@ -175,6 +193,7 @@ export function baselineFromReport(
   const entries: BaselineEntry[] = [];
   for (const r of report.results) {
     if (r.status === "pass" || r.status === "error") continue;
+    if (!isAcceptable(r)) continue;
     entries.push({
       check: r.name,
       status: r.status,
@@ -205,8 +224,8 @@ function isExpired(entry: BaselineEntry, now: Date): boolean {
  * the finding changed: the row keeps its status and gets a
  * `Baseline does not match (changed since …)` prefix. An expired entry is ignored and adds a `warn` row named
  * {@link BASELINE_ROW}. Entries matching no result are ignored (the check may
- * be skipped this run). `pass` and `error` rows are never touched. Summary and
- * `ok` are recomputed.
+ * be skipped this run). `pass` and `error` rows, runner rows and rows under a
+ * reserved name are never touched (CLI-2). Summary and `ok` are recomputed.
  */
 export function applyBaseline(
   report: PreflightReport,
@@ -216,6 +235,7 @@ export function applyBaseline(
   const live = b.entries.filter((e) => !isExpired(e, now));
   const results: CheckResult[] = report.results.map((r) => {
     if (r.status === "pass" || r.status === "error") return r;
+    if (!isAcceptable(r)) return r;
     const entry = live.find((e) => e.check === r.name && e.status === r.status);
     if (!entry) return r;
     if (entry.message !== r.message) {

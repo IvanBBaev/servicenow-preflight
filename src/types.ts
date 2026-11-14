@@ -152,8 +152,10 @@ export interface Finding {
 
 /**
  * Who produced a result row: a check (`"check"`, the default when absent), the
- * runner itself (`"runner"`: the duplicate-name and empty-selection guards) or
- * the baseline (`"baseline"`: accepted findings and expired-entry notices).
+ * runner itself (`"runner"`: the duplicate-name, empty-selection and scope
+ * guards, and a check's timeout, abort, throw or malformed result) or the
+ * baseline (`"baseline"`: accepted findings and expired-entry notices). No
+ * baseline or severity policy ever accepts or demotes a `"runner"` row.
  */
 export type CheckResultKind = "check" | "runner" | "baseline";
 
@@ -193,6 +195,12 @@ export interface CheckMeta {
   severity?: CheckSeverity;
   /** Tables the check reads (used for offline eligibility, docs, SARIF). */
   tables?: readonly string[];
+  /**
+   * Tables a plugin provides that may be absent from an instance. A read that
+   * finds one of these missing may end in a skip `warn`; a missing table not
+   * listed here makes the check's row `error` (RR-49). Default: none.
+   */
+  optionalTables?: readonly string[];
   /** One paragraph, plain text: what to change on the instance to make the check pass. */
   remediation?: string;
   /** Catalogue wording for each verdict. */
