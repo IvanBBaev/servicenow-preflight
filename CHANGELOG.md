@@ -482,6 +482,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Unknown check names in the selection are a usage error** (RR-11b, DEV-9;
+  **breaking** for a misspelled name) — `--only` / `--skip` (on `run` and
+  `doctor`) and the config file's `select.only` / `select.skip` naming a
+  check that does not exist now exit `2` with the nearest names and a pointer
+  to `servicenow-preflight list`, instead of silently dropping the intended
+  gate. The severity policy, per-check `checks` options and the selection
+  share one known-name set, so `--severity test-drift=off` is accepted like
+  `checks: { "test-drift": … }`. The library's `selectChecks` still ignores
+  unknown names.
+
 - **A pending ATF suite fails the run** (RR-6; **breaking** for runs whose
   suites outlast the poll budget) — `atf-run` reports a configured suite that
   is still pending after the CI/CD poll budget (`cicdMaxPolls` ×

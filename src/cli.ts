@@ -860,10 +860,12 @@ async function doctorRun(
     // loadConfig reports whether the file or SNPF_INSTANCE supplied it (F-X-8).
     instanceSource = loaded.sources.instanceUrl === "env" ? "env" : "config";
   }
-  const selected = selectChecks(defaultChecks, {
+  const selection = {
     only: args.only ?? loaded.config.select?.only,
     skip: args.skip ?? loaded.config.select?.skip,
-  });
+  };
+  assertKnownSelection(selection, { only: !args.only, skip: !args.skip });
+  const selected = selectChecks(defaultChecks, selection);
   const clientConfig: InternalClientConfig = {
     instanceUrl: instanceUrl ?? "https://invalid.invalid",
     ...(loaded.auth ? { auth: loaded.auth } : {}),
@@ -1620,6 +1622,40 @@ function warnConfigIssues(config: unknown): void {
   }
 }
 
+/**
+ * Every check name the CLI knows: the default suite plus `test-drift` (the
+ * promote gate run by `drift`). One set for the severity policy, per-check
+ * options and the `--only` / `--skip` / `select` lists (DEV-9).
+ */
+function knownCheckNames(): string[] {
+  return [...defaultChecks, testDrift].map((c) => c.name);
+}
+
+/**
+ * Refuse `--only` / `--skip` (or the config's `select.only` / `select.skip`)
+ * naming a check that does not exist: a typo would otherwise drop a gate with
+ * no signal. Exit 2 with the nearest names and a pointer to `list`.
+ */
+function assertKnownSelection(
+  select: { only?: readonly string[]; skip?: readonly string[] },
+  fromConfig: { only: boolean; skip: boolean },
+): void {
+  const known = knownCheckNames();
+  for (const key of ["only", "skip"] as const) {
+    const unknown = (select[key] ?? []).filter((n) => !known.includes(n));
+    if (unknown.length === 0) continue;
+    const label = fromConfig[key] ? `Config select.${key}` : `--${key}`;
+    const hints = unknown
+      .map((n) => ({ n, s: closestNames(n, known) }))
+      .filter(({ s }) => s.length > 0)
+      .map(({ n, s }) => `"${n}" → ${s.join(", ")}`);
+    const hint = hints.length > 0 ? ` Did you mean: ${hints.join("; ")}?` : "";
+    throw new UsageError(
+      `${label} names unknown check(s): ${unknown.join(", ")}. Run "servicenow-preflight list".${hint}`,
+    );
+  }
+}
+
 /** `CI` is set to anything but an empty, `0` or `false` value. */
 function isCi(env: NodeJS.ProcessEnv): boolean {
   const v = env.CI?.trim().toLowerCase();
@@ -1684,14 +1720,11 @@ async function runOneInstance(
     ...loaded.config.severity,
     ...args.severity,
   };
-  validatePolicy(
-    policy,
-    defaultChecks.map((c) => c.name),
-  );
+  validatePolicy(policy, knownCheckNames());
   // Per-check options naming an unknown check are a typo, not a no-op.
   const checkOptions = loaded.config.checks;
   if (checkOptions) {
-    const known = [...defaultChecks, testDrift].map((c) => c.name);
+    const known = knownCheckNames();
     const unknown = Object.keys(checkOptions).filter((n) => !known.includes(n));
     if (unknown.length > 0) {
       throw new UsageError(
@@ -1702,8 +1735,13 @@ async function runOneInstance(
   warnConfigIssues(loaded.config);
   const offByPolicy = policySkips(policy);
   const baseSkip = args.skip ?? loaded.config.select?.skip;
+  const baseOnly = args.only ?? loaded.config.select?.only;
+  assertKnownSelection(
+    { only: baseOnly, skip: baseSkip },
+    { only: !args.only, skip: !args.skip },
+  );
   const select = {
-    only: args.only ?? loaded.config.select?.only,
+    only: baseOnly,
     skip:
       offByPolicy.length > 0 ? [...(baseSkip ?? []), ...offByPolicy] : baseSkip,
   };
@@ -2247,8 +2285,7 @@ function commandExplain(args: ParsedArgs): void {
   }
   const check = findCheck(name);
   if (!check) {
-    const all = [...defaultChecks, testDrift].map((c) => c.name);
-    const suggestions = closestNames(name, all);
+    const suggestions = closestNames(name, knownCheckNames());
     const hint =
       suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
     throw new UsageError(

@@ -195,7 +195,7 @@ test("CLI run --all --format github tags each annotation with its instance", () 
   });
   try {
     const res = runCli(
-      ["run", "--all", "--only", "no-such-check", "--format", "github"],
+      ["run", "--all", "--only", "test-drift", "--format", "github"],
       { cwd: dir },
     );
     assert.equal(res.status, 1);
@@ -613,9 +613,10 @@ test("CLI drift without two instances prints usage guidance", () => {
 // --- Fail-closed CLI behaviour --------------------------------------------
 
 test("CLI fails closed (exit 1) when --only matches no checks (Q-1 vacuous guard)", () => {
+  // test-drift is a known name (RR-11b) but not part of the run suite.
   const res = runCli([
     "--only",
-    "no-such-check",
+    "test-drift",
     "--instance",
     "https://dev12345.service-now.com",
     "--format",
@@ -884,7 +885,7 @@ test("CLI run --all pretty names the failing instances and exits 1", () => {
     prod: { url: "https://prod98765.service-now.com" },
   });
   try {
-    const res = runCli(["run", "--all", "--only", "no-such-check"], {
+    const res = runCli(["run", "--all", "--only", "test-drift"], {
       cwd: dir,
     });
     assert.equal(res.status, 1);
