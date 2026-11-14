@@ -9,6 +9,7 @@ import {
   assertSysId,
   chunk,
   eq,
+  eqUserName,
   inClause,
   isSafeIdentifier,
   isSysId,
@@ -114,6 +115,35 @@ test("eq fails closed when the value carries an operator (SR-1)", () => {
 test("eq fails closed when the field carries an operator (SR-1)", () => {
   assert.throws(
     () => eq("sys_scope^OR", "x_acme_app"),
+    (err) => err instanceof EncodedQueryError,
+  );
+});
+
+test("eqUserName admits e-mail-style user names as one term (RR-40)", () => {
+  assert.equal(eqUserName("user_name", "ci.user"), "user_name=ci.user");
+  assert.equal(
+    eqUserName("user_name", "  ci+bot@acme-corp.com "),
+    "user_name=ci+bot@acme-corp.com",
+  );
+});
+
+test("eqUserName fails closed on ^, =, %, whitespace and non-strings (RR-40)", () => {
+  for (const bad of [
+    "ci^ORuser_name=admin",
+    "a=b",
+    "ci%5EORactive=true",
+    "ci user",
+    "",
+    undefined,
+  ]) {
+    assert.throws(
+      () => eqUserName("user_name", bad),
+      (err) => err instanceof EncodedQueryError,
+      String(bad),
+    );
+  }
+  assert.throws(
+    () => eqUserName("user_name^OR", "ci.user"),
     (err) => err instanceof EncodedQueryError,
   );
 });

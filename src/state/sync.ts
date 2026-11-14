@@ -289,7 +289,7 @@ async function attachLastRuns(
       // — already optimal, so it stays per-test rather than an unbounded IN pull
       // of every historical result. `test.sysId` (an instance sys_id) is routed
       // through the builder so it cannot inject an operator (SR-1).
-      sysparm_query: `${eq("test", test.sysId)}^ORDERBYDESCsys_created_on`,
+      sysparm_query: and(eq("test", test.sysId), "ORDERBYDESCsys_created_on"),
       sysparm_limit: "1",
     });
     const row = rows[0];

@@ -23,6 +23,13 @@ import type { SnClient } from "./client.js";
 /** Charset of a ServiceNow identifier / plain value that is safe un-escaped. */
 const IDENTIFIER = /^[A-Za-z0-9_.-]+$/;
 
+/**
+ * Charset of a `sys_user.user_name` value that is safe un-escaped: the
+ * identifier charset plus `@` and `+`, so e-mail-style user names still query.
+ * Neither is an encoded-query operator; `^`, `=`, `%` and whitespace stay out.
+ */
+const USER_NAME = /^[A-Za-z0-9_.@+-]+$/;
+
 /** A ServiceNow sys_id is exactly 32 lowercase hex characters. */
 const SYS_ID = /^[0-9a-f]{32}$/;
 
@@ -99,6 +106,25 @@ export function assertSysId(value: unknown, label = "sys_id"): string {
  */
 export function eq(field: string, value: string): string {
   return `${assertIdentifier(field, "field")}=${assertIdentifier(value, "value")}`;
+}
+
+/**
+ * A `field=<user name>` equality clause (RR-40). Like {@link eq}, but the value
+ * may also carry `@` and `+` (e-mail-style user names). The field is held to
+ * the identifier charset; a value with an operator, `=`, `%` or whitespace
+ * throws an {@link EncodedQueryError}, so the caller fails closed.
+ */
+export function eqUserName(field: string, value: string): string {
+  const safeField = assertIdentifier(field, "field");
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!USER_NAME.test(trimmed)) {
+    throw new EncodedQueryError(
+      `user name "${String(value)}" is not queryable: only ` +
+        `[A-Za-z0-9_.@+-] are allowed. Encoded-query operators (e.g. "^", ` +
+        `"^OR", "%5E") are rejected to prevent query injection.`,
+    );
+  }
+  return `${safeField}=${trimmed}`;
 }
 
 /**

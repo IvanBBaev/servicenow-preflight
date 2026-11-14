@@ -239,6 +239,71 @@ test("doctor only sends GET requests", async () => {
   assert.ok(calls.includes("GET sys_properties"));
 });
 
+/** Wrap a client so every filtered sys_user `sysparm_query` is recorded. */
+function userQueries(http) {
+  const queries = [];
+  return {
+    queries,
+    client: {
+      ...http,
+      table(name) {
+        const inner = http.table(name);
+        if (name !== "sys_user") return inner;
+        return {
+          ...inner,
+          query: (params, opts) => {
+            // The table-access probe reads sys_user without a filter.
+            if (params?.sysparm_query !== undefined) {
+              queries.push(params.sysparm_query);
+            }
+            return inner.query(params, opts);
+          },
+        };
+      },
+      request: (...args) => http.request(...args),
+    },
+  };
+}
+
+test("doctor sends an e-mail-style user name as one sys_user term (RR-40)", async () => {
+  const user = "ci+bot@acme.com";
+  const fake = createFakeSnClient({
+    tables: {
+      sys_properties: restrictionOn(),
+      sys_user: [{ sys_id: USER_ID, user_name: user }],
+      sys_user_has_role: [
+        { sys_id: ROLE_ROW, user: USER_ID, "role.name": BASIC_AUTH_ROLE },
+      ],
+    },
+  });
+  const { queries, client } = userQueries(fake);
+  const { row } = await doctor({
+    http: client,
+    auth: { kind: "basic", user, pass: "secret" },
+  });
+  assert.deepEqual(queries, [`user_name=${user}`]);
+  assert.equal(row("doctor-account").status, "pass");
+});
+
+test("doctor never puts a user name with ^ or = into sys_user's query (RR-40)", async () => {
+  const fake = createFakeSnClient({
+    tables: {
+      sys_properties: restrictionOn(),
+      sys_user: account(),
+      sys_user_has_role: [],
+    },
+  });
+  const { queries, client } = userQueries(fake);
+  const { row } = await doctor({
+    http: client,
+    auth: { kind: "basic", user: "ci^ORuser_name=admin", pass: "secret" },
+  });
+  assert.deepEqual(queries, []);
+  const acct = row("doctor-account");
+  assert.equal(acct.status, "warn");
+  assert.match(acct.message, /holds characters the lookup does not query with/);
+});
+
 test("doctor on the fake carries a remediation on every row warning", async () => {
   // E-1: no elapsed-time assert here; a wall-clock budget flakes on a loaded
   // runner and the fake client has no latency to measure.

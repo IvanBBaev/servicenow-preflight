@@ -25,7 +25,7 @@ import {
   type SnClient,
 } from "./http/client.js";
 import { ProxyConfigError, redactedProxy, resolveProxy } from "./http/proxy.js";
-import { and, assertSysId, eq, inClause } from "./http/query.js";
+import { and, assertSysId, eq, eqUserName, inClause } from "./http/query.js";
 import type { Check, CheckResult, PreflightContext } from "./types.js";
 
 /** Where the instance URL came from. */
@@ -71,9 +71,6 @@ const CICD_PROBE = "/api/sn_cicd/progress/00000000000000000000000000000000";
 
 /** DNS lookups give up after this long. */
 const LOOKUP_TIMEOUT_MS = 5000;
-
-/** User names the account lookup accepts: no encoded-query operators. */
-const USER_NAME = /^[A-Za-z0-9_.@+-]+$/;
 
 const OAUTH_ADVICE =
   "Move the CI account to OAuth (SNPF_AUTH=oauth-client) or mutual TLS, which the restriction does not cover.";
@@ -332,7 +329,12 @@ async function readAccountFacts(ctx: PreflightContext): Promise<AccountFacts> {
     return { noUser: auth ? auth.kind : ctx.tls ? "mtls" : "none" };
   }
   const userName = auth.user.trim();
-  if (!USER_NAME.test(userName)) {
+  let userClause: string;
+  try {
+    // Built by the injection-safe builder: a name carrying `^`, `=` or `%`
+    // never reaches sysparm_query (RR-40).
+    userClause = eqUserName("user_name", userName);
+  } catch {
     return {
       userName,
       unreadable:
@@ -342,7 +344,7 @@ async function readAccountFacts(ctx: PreflightContext): Promise<AccountFacts> {
   let user: Record<string, unknown> | undefined;
   try {
     [user] = await ctx.http.table("sys_user").query({
-      sysparm_query: `user_name=${userName}`,
+      sysparm_query: userClause,
       sysparm_fields: "sys_id,user_name,web_service_access_only",
       sysparm_limit: "1",
     });

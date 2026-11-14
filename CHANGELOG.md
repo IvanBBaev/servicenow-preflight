@@ -774,6 +774,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **No raw interpolation in any `sysparm_query`** (RR-40) — `doctor` built its
+  `sys_user` lookup as a template literal (`user_name=${name}`), guarded only by
+  a local charset check. It now goes through the encoded-query builder
+  (`eqUserName`: the identifier charset plus `@` and `+`), so a user name with
+  `^`, `=` or `%` never reaches the query and the account row reports it as
+  unreadable. The ATF result read in `sync` joins its `ORDERBYDESC` clause with
+  `and()` instead of a template literal. No behaviour change for valid names.
 - **Credentials are not sent over cleartext `http:`** (RR-11, SEC-7;
   **breaking** for runs against an `http://` instance with credentials) —
   `createSnClient` refused nothing, so an `http://` instance URL sent basic
