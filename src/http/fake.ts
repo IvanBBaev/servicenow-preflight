@@ -483,7 +483,16 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
       };
       return {
         get(sysId, params) {
-          maybeThrow(tableFail(name), `table ${name}`, tablePath);
+          // RR-38: like the real client, a forced failure (including the
+          // `response` case: a 2xx body that is not a record) rejects the
+          // returned promise rather than throwing synchronously.
+          try {
+            maybeThrow(tableFail(name), `table ${name}`, tablePath);
+          } catch (err) {
+            return Promise.reject(
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          }
           const all = tableRows(name);
           const raw = all.find((r) => r.sys_id === sysId) ?? null;
           if (!raw) return Promise.resolve(null);

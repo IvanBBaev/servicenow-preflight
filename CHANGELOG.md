@@ -626,6 +626,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`table().get()` fails closed on a 2xx body without a record** (RR-38) —
+  `get` returned `null` ("no such record") for any 2xx answer whose `result`
+  was missing, `null`, an array or a scalar, so a proxy or gateway answering
+  with its own JSON under status 200, or an empty body, read as a missing
+  record. It now throws `SnResponseError` naming the table and the body shape,
+  as list reads do since RR-7. A 404 still resolves to `null`. The test fake's
+  `get` now rejects its returned promise on a forced failure instead of
+  throwing synchronously, as the real client does.
+
 - **`--changed-since` no longer skips checks on an ACL-trimmed change read**
   (RR-10) — the update set, `sys_update_xml` and `sys_metadata` reads carried
   no trim signal, so a CI account that could not see every change narrowed the

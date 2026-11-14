@@ -157,7 +157,8 @@ export interface TableQueryResult {
 export interface SnTable {
   /**
    * Fetch a single record by `sys_id`. Resolves to the record's fields, or
-   * `null` when the record does not exist (HTTP 404 / empty result).
+   * `null` when the record does not exist (HTTP 404). A 2xx answer without an
+   * object `result` rejects with {@link SnResponseError} (RR-38).
    */
   get(
     sysId: string,
@@ -1264,6 +1265,45 @@ function toQueryResult(
 }
 
 /**
+ * Pull the record out of a 2xx Table API single-record (`get`) response.
+ * RR-38: a 404 is the only "not found" answer; a 2xx body whose `result` is
+ * missing, `null`, an array or a scalar (a proxy error page served as JSON
+ * with status 200, an empty body, a schema change) is not "no such record".
+ * Reading it as `null` would let a check conclude a record is absent from an
+ * instance it never actually read, so fail closed with an
+ * {@link SnResponseError}, as {@link tableRows} does for lists (RR-7).
+ */
+function recordResult(
+  res: { status: number; body: unknown },
+  table: string,
+): Record<string, unknown> {
+  const body = res.body;
+  const hasResult =
+    body !== null && typeof body === "object" && "result" in body;
+  const result = hasResult ? body.result : undefined;
+  if (result !== null && typeof result === "object" && !Array.isArray(result)) {
+    return result as Record<string, unknown>;
+  }
+  const kind = Array.isArray(result)
+    ? "array"
+    : result === null
+      ? "null"
+      : typeof result;
+  const shape = !hasResult
+    ? "has no result object"
+    : `has a non-object result (${kind})`;
+  const raw = body === undefined ? "" : JSON.stringify(body);
+  throw new SnResponseError(
+    `Table API record response for "${table}" ${shape} (status ${res.status}); ` +
+      `refusing to read it as a missing record. A proxy or gateway may have ` +
+      `answered instead of ServiceNow.` +
+      (raw ? ` Body began: ${bodyPreview(raw)}` : ""),
+    res.status,
+    raw,
+  );
+}
+
+/**
  * Pull the rows out of a 2xx Table API list response. RR-7: a body without a
  * `result` array (a proxy error page served as JSON with status 200, a
  * Scripted REST answer, a schema change) is not an empty table. Coercing it to
@@ -2000,11 +2040,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           if (res.status < 200 || res.status >= 300) {
             throw httpErrorFor(res);
           }
-          const result = unwrapResult(res.body);
-          if (result && typeof result === "object" && !Array.isArray(result)) {
-            return result as Record<string, unknown>;
-          }
-          return null;
+          return recordResult(res, name);
         },
         async query(params, opts) {
           return (await cachedQuery(params, opts?.signal)).rows;

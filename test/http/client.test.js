@@ -126,10 +126,79 @@ test("table().get returns null on a 404", async () => {
   assert.equal(rec, null);
 });
 
-test("table().get returns null when the result is not a single object", async () => {
+// --- RR-38: a 2xx single-record body without an object result is not "missing"
+
+/** Assert `fn` rejects with the RR-38 missing/non-object record error. */
+async function rejectsNoRecord(fn, shape) {
+  await assert.rejects(fn, (err) => {
+    assert.ok(err instanceof SnResponseError, String(err));
+    assert.equal(err.status, 200);
+    assert.match(err.message, /"incident"/);
+    assert.match(err.message, shape);
+    assert.match(err.message, /refusing to read it as a missing record/);
+    return true;
+  });
+}
+
+test("RR-38: table().get rejects an array result instead of returning null", async () => {
   handler = () => fakeResponse({ body: { result: [] } });
-  const rec = await client().table("incident").get("x");
-  assert.equal(rec, null);
+  await rejectsNoRecord(
+    () => client().table("incident").get("x"),
+    /non-object result \(array\)/,
+  );
+});
+
+test("RR-38: table().get rejects a 200 JSON body without result", async () => {
+  // A gateway answering with its own JSON error page under status 200.
+  handler = () =>
+    fakeResponse({ body: { error: "upstream unavailable", status: "down" } });
+  await rejectsNoRecord(
+    () => client().table("incident").get("x"),
+    /has no result object/,
+  );
+});
+
+test("RR-38: table().get rejects a null or scalar result", async () => {
+  handler = () => fakeResponse({ body: { result: null } });
+  await rejectsNoRecord(
+    () => client().table("incident").get("x"),
+    /non-object result \(null\)/,
+  );
+  handler = () => fakeResponse({ body: { result: "ok" } });
+  await rejectsNoRecord(
+    () => client().table("incident").get("x"),
+    /non-object result \(string\)/,
+  );
+});
+
+test("RR-38: table().get rejects an empty 200 body", async () => {
+  handler = () => fakeResponse({ status: 200 });
+  await assert.rejects(
+    () => client().table("incident").get("x"),
+    (err) => {
+      assert.ok(err instanceof SnResponseError, String(err));
+      assert.match(err.message, /has no result object/);
+      assert.equal(err.bodySnippet, "");
+      assert.doesNotMatch(err.message, /Body began/);
+      return true;
+    },
+  );
+});
+
+test("RR-38: the fake client's get fails closed the same way", async () => {
+  const http = createFakeSnClient({
+    tables: { incident: [{ sys_id: "a1", number: "INC1" }] },
+    fail: { table: { incident: { response: true } } },
+  });
+  await assert.rejects(
+    () => http.table("incident").get("a1"),
+    (err) => err instanceof SnResponseError,
+  );
+  const ok = createFakeSnClient({
+    tables: { incident: [{ sys_id: "a1", number: "INC1" }] },
+  });
+  assert.equal(await ok.table("incident").get("missing"), null);
+  assert.equal((await ok.table("incident").get("a1"))?.number, "INC1");
 });
 
 test("table().get throws SnHttpError on a non-2xx (non-404) status", async () => {
