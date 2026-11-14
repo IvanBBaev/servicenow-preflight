@@ -778,12 +778,17 @@ except each instance looks up a **namespaced** variable first: an instance whose
   `id`. A test **active upstream but missing downstream** fails the gate (exit 1)
   — it would ship a promote without coverage upstream has validated. Extra tests
   downstream `warn`; a fully-covered target `pass`es. Only _active_ source tests
-  can block. Two **version-parity** results ride along: `instance-version-parity`
+  can block, and a source with **no active test at all fails** — nothing was
+  compared, so nothing is proven. A manifest with a missing or malformed
+  `tests`/`suites` field, a malformed `apps` entry, or two tests or suites sharing one logical
+  `id`, is refused (exit `2`) instead of being read as empty or collapsed.
+  Two **version-parity** results ride along: `instance-version-parity`
   fails on a release-family mismatch (`glide.buildname`) and warns on patch-level
   skew (`glide.war`); `app-version-parity` fails when an app or plugin installed
   on the source is missing or older on the target. Manifests written by older
   versions of the tool (no identity/app data) degrade to an advisory `warn`,
-  never a crash. A **`promotion-order`** result checks the pair against the
+  never a crash; a source manifest that records an empty app list `warn`s.
+  A **`promotion-order`** result checks the pair against the
   registry's `promotesTo` chain: the declared next stage `pass`es; a target
   further down that **skips a stage** fails (a `warn` under
   `--allow-stage-skip`, for a deliberate hotfix); a target **upstream** of the

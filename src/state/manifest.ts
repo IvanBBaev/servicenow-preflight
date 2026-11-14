@@ -249,13 +249,30 @@ export async function loadManifest(
         `"${instance}" or load the correct file.`,
     );
   }
-  const tests = Array.isArray(m.tests) ? m.tests : [];
-  const suites = Array.isArray(m.suites) ? m.suites : [];
+  // RR-48 (ST-3): `sync` always writes both lists. A missing or non-array
+  // `tests`/`suites` is a truncated or hand-edited file, not "no tests" —
+  // reading it as `[]` let drift pass with nothing compared.
+  const tests = requireArray(m.tests, "tests", path);
+  const suites = requireArray(m.suites, "suites", path);
   // CC-18: every test/suite must carry a non-empty string `id` — it is the
   // logical key drift compares on and merge reconciles by. A missing/blank id
   // would silently corrupt both, so fail with the file and element index named.
   validateElements(tests, "tests", path);
   validateElements(suites, "suites", path);
+  // RR-48 (ST-4): two entries sharing one logical id collapse into one when
+  // drift indexes by id, so a test could vanish from the gate unseen.
+  rejectDuplicateIds(
+    tests,
+    "tests",
+    `Manifest ${path}`,
+    (d) => new UsageError(d),
+  );
+  rejectDuplicateIds(
+    suites,
+    "suites",
+    `Manifest ${path}`,
+    (d) => new UsageError(d),
+  );
   const loaded: StateManifest = {
     instance: m.instance ?? instance,
     url: m.url,
@@ -269,9 +286,67 @@ export async function loadManifest(
   // pre-capture loader produced (round-trip compatibility, OPP-1/OPP-5).
   const identity = sanitizeIdentity(m.identity);
   if (identity) loaded.identity = identity;
-  const apps = sanitizeApps(m.apps);
+  const apps = readApps(m.apps, path);
   if (apps) loaded.apps = apps;
   return loaded;
+}
+
+/** The value of a required list key, or a {@link UsageError} naming the file. */
+function requireArray<T>(
+  raw: T[] | undefined,
+  kind: "tests" | "suites",
+  path: string,
+): T[] {
+  if (Array.isArray(raw)) return raw;
+  const found = raw === undefined ? "is missing" : `is ${describeJson(raw)}`;
+  throw new UsageError(
+    `Manifest ${path}: "${kind}" ${found}; expected an array. The file is ` +
+      `truncated or hand-edited — re-run sync to rewrite it.`,
+  );
+}
+
+/** A short JSON type label for error messages. */
+function describeJson(raw: unknown): string {
+  if (raw === null) return "null";
+  if (Array.isArray(raw)) return "an array";
+  return typeof raw === "object" ? "an object" : `a ${typeof raw}`;
+}
+
+/**
+ * Throw (via `make`) when two entries share one logical `id` (RR-48, ST-4).
+ * The message names the id and the entries' names and `sysId`s so the
+ * duplicate can be found in the file.
+ */
+export function rejectDuplicateIds(
+  items: readonly unknown[],
+  kind: string,
+  where: string,
+  make: (message: string) => Error,
+): void {
+  const seen = new Map<string, number>();
+  items.forEach((item, index) => {
+    const id = (item as { id: string }).id;
+    const prior = seen.get(id);
+    if (prior === undefined) {
+      seen.set(id, index);
+      return;
+    }
+    throw make(
+      `${where}: ${kind}[${prior}] (${entryLabel(items[prior])}) and ` +
+        `${kind}[${index}] (${entryLabel(item)}) share the logical id "${id}". ` +
+        `Drift indexes by id, so one of them would vanish from the gate. Give ` +
+        `one entry its own id (or remove the stale one) and re-run sync.`,
+    );
+  });
+}
+
+/** `"name", sysId …` for a duplicate-id message. */
+function entryLabel(item: unknown): string {
+  const o = item as { name?: unknown; sysId?: unknown };
+  const name = typeof o.name === "string" ? `"${o.name}"` : "no name";
+  return typeof o.sysId === "string" && o.sysId !== ""
+    ? `${name}, sysId ${o.sysId}`
+    : name;
 }
 
 /**
@@ -316,27 +391,45 @@ function sanitizeMissingReason(
 }
 
 /**
- * Tolerantly read the optional `apps` list (OPP-5). Unlike tests/suites —
- * whose missing `id` is a hard CC-18 error because logical ids drive merge and
- * drift reconciliation — apps are advisory version metadata: a malformed entry
- * is dropped rather than failing the whole manifest, and a non-array value
- * reads as never-captured.
+ * Read the optional `apps` list (OPP-5). An ABSENT key is a manifest written
+ * before version capture (or a trimmed capture `sync` dropped whole) and reads
+ * as never-captured. A PRESENT key must be well-formed (RR-48, ST-11): a
+ * non-array value, or an entry that is not an object, lacks a non-empty string
+ * `id`, or carries a `name`/`version` that is not a non-empty string, is a
+ * {@link UsageError}. Dropping such entries used to leave an empty or partial
+ * inventory that drift read as "nothing to gate".
  */
-function sanitizeApps(raw: unknown): InstalledAppState[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const apps: InstalledAppState[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const o = entry as { id?: unknown; name?: unknown; version?: unknown };
-    if (typeof o.id !== "string" || o.id === "") continue;
-    const app: InstalledAppState = { id: o.id };
-    if (typeof o.name === "string" && o.name !== "") app.name = o.name;
-    if (typeof o.version === "string" && o.version !== "") {
-      app.version = o.version;
-    }
-    apps.push(app);
+function readApps(raw: unknown, path: string): InstalledAppState[] | undefined {
+  if (raw === undefined) return undefined;
+  const bad = (detail: string): UsageError =>
+    new UsageError(
+      `Manifest ${path}: ${detail}. The file is truncated or hand-edited — ` +
+        `re-run sync to rewrite it.`,
+    );
+  if (!Array.isArray(raw)) {
+    throw bad(`"apps" is ${describeJson(raw)}; expected an array`);
   }
-  return apps;
+  return (raw as unknown[]).map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw bad(`apps[${index}] is ${describeJson(entry)}; expected an object`);
+    }
+    const o = entry as { id?: unknown; name?: unknown; version?: unknown };
+    if (typeof o.id !== "string" || o.id === "") {
+      throw bad(`apps[${index}] is missing a non-empty string "id"`);
+    }
+    const app: InstalledAppState = { id: o.id };
+    for (const key of ["name", "version"] as const) {
+      const value = o[key];
+      if (value === undefined) continue;
+      if (typeof value !== "string" || value === "") {
+        throw bad(
+          `apps[${index}] ("${o.id}") has a "${key}" that is not a non-empty string`,
+        );
+      }
+      app[key] = value;
+    }
+    return app;
+  });
 }
 
 /** Assert every manifest element carries a non-empty string `id` (CC-18). */
@@ -531,6 +624,9 @@ function reconcileSuites(
  * while logical `id`s are preserved from `existing` wherever a match is found
  * (by `sysId`, else name/coverage). Never blind-overwrites `id`s, so a committed
  * manifest evolves as a clean diff instead of churning every sync.
+ *
+ * Throws when the merged result would hold two tests (or two suites) with one
+ * logical `id` (RR-48); nothing is returned to write.
  */
 export function mergeManifest(
   existing: StateManifest | undefined,
@@ -550,6 +646,15 @@ export function mergeManifest(
   const suites = reconcileSuites(existing?.suites ?? [], incoming.suites).map(
     (s) => ({ ...s, testIds: s.testIds.map((id) => idRemap.get(id) ?? id) }),
   );
+
+  // RR-48 (ST-4): sync checks the fresh snapshot for id collisions, but the
+  // reconciliation above can still give two entries one id — e.g. a test
+  // renamed on the instance keeps its committed id by `sysId` while a NEW test
+  // with the old name takes the same id by name. Refuse the merged result.
+  const where = `Merging the synced snapshot for "${incoming.instance}"`;
+  const mergeError = (message: string): Error => new Error(message);
+  rejectDuplicateIds(tests, "tests", where, mergeError);
+  rejectDuplicateIds(suites, "suites", where, mergeError);
 
   return {
     instance: incoming.instance,

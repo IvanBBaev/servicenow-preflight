@@ -66,12 +66,15 @@ function describe(entries: DriftEntry[]): string {
  * (`ctx.driftTarget`) by logical `id`.
  *
  * - `fail` — a test active on the source is absent on the target (a promote
- *   would ship without validated coverage).
+ *   would ship without validated coverage), or the source has no active test
+ *   at all: nothing was compared, so nothing is proven (RR-48, ST-2).
  * - `warn` — no manifests to compare (single-instance run), or the target only
  *   carries extra tests the source lacks (informational, not a regression).
  * - `pass` — every active source test exists on the target.
  *
- * Never throws — it is a pure comparison of two already-loaded manifests.
+ * A pure comparison of two already-loaded manifests. It throws only when a
+ * manifest holds two tests with one logical `id` ({@link computeDrift}); the
+ * runner records that as `fail`.
  */
 export const testDrift: Check = {
   name: NAME,
@@ -85,7 +88,7 @@ export const testDrift: Check = {
     verdicts: {
       pass: "Every active source test exists on the promote target.",
       warn: "No source/target manifest to compare, or the target only carries extra tests.",
-      fail: "A test active on the source is absent on the promote target.",
+      fail: "A test active on the source is absent on the promote target, or the source has no active test to compare.",
     },
   },
   run(ctx): CheckResult {
@@ -107,6 +110,17 @@ export const testDrift: Check = {
         `${drift.missingOnTarget.length} test(s) present on "${drift.source}" are missing on "${drift.target}": ${describe(
           drift.missingOnTarget,
         )}.`,
+        findings,
+      );
+    }
+
+    // RR-48 (ST-2): "all 0 active tests exist on the target" proves nothing.
+    // An empty or all-inactive source manifest is a failed sync or the wrong
+    // file far more often than a project without tests.
+    if (drift.sourceActiveCount === 0) {
+      return makeResult(
+        "fail",
+        `Nothing to compare: "${drift.source}" has no active test (${source.tests.length} recorded), so test drift cannot show that "${drift.target}" carries its coverage. Re-run sync on "${drift.source}" and check the account can read the ATF tables.`,
         findings,
       );
     }

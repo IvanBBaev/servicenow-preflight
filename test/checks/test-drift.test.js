@@ -260,13 +260,69 @@ test("a renamed test keeps its finding id", () => {
 
 test("an extra-only drift warns with extra-on-target findings", () => {
   const result = testDrift.run({
-    manifest: manifest("staging", []),
-    driftTarget: manifest("prod", [["x/z", ""]]),
+    manifest: manifest("staging", [["x/a", "A"]]),
+    driftTarget: manifest("prod", [
+      ["x/a", "A"],
+      ["x/z", ""],
+    ]),
   });
   assert.equal(result.status, "warn");
   assert.equal(result.findings.length, 1);
   assert.equal(result.findings[0].kind, "extra-on-target");
   assert.match(result.findings[0].message, /"x\/z" exists on "prod"/);
+});
+
+// RR-48 (ST-2): zero active source tests compared nothing — never a pass.
+test("an empty source manifest fails with nothing to compare", () => {
+  for (const target of [[], [["x/a", "A"]]]) {
+    const result = testDrift.run({
+      manifest: manifest("staging", []),
+      driftTarget: manifest("prod", target),
+    });
+    assert.equal(result.status, "fail");
+    assert.match(result.message, /Nothing to compare/);
+    assert.match(result.message, /"staging" has no active test \(0 recorded\)/);
+  }
+});
+
+test("an all-inactive source manifest fails with nothing to compare", () => {
+  const result = testDrift.run({
+    manifest: manifest("staging", [
+      ["x/a", "A", false],
+      ["x/b", "B", false],
+    ]),
+    driftTarget: manifest("prod", [["x/a", "A"]]),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /no active test \(2 recorded\)/);
+});
+
+// RR-48 (ST-4): a duplicated id would collapse in the index and hide a test.
+test("a duplicate logical id in either manifest throws instead of passing", () => {
+  const dup = {
+    instance: "staging",
+    tests: [
+      { id: "x/smoke", name: "Smoke (legacy)", sysId: "1", active: true },
+      { id: "x/smoke", name: "Smoke", sysId: "2", active: true },
+    ],
+    suites: [],
+  };
+  assert.throws(
+    () =>
+      testDrift.run({
+        manifest: dup,
+        driftTarget: manifest("prod", [["x/smoke", "Smoke"]]),
+      }),
+    /source manifest "staging".*share the logical id "x\/smoke"/,
+  );
+  assert.throws(
+    () =>
+      testDrift.run({
+        manifest: manifest("prod", [["x/smoke", "Smoke"]]),
+        driftTarget: { ...dup, instance: "prod2" },
+      }),
+    /target manifest "prod2"/,
+  );
 });
 
 test("no drift and no manifests carry no findings", () => {

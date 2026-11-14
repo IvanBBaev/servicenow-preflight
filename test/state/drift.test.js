@@ -193,16 +193,55 @@ test("drift buckets are sorted by logical id", () => {
   );
 });
 
-test("empty manifests on both sides yield an empty, ok report", () => {
+test("empty manifests on both sides yield an empty report that is not ok (RR-48)", () => {
   const drift = computeDrift(manifest("staging", []), manifest("prod", []));
 
-  assert.equal(drift.ok, true);
+  // Zero active source tests compared nothing, so nothing is proven.
+  assert.equal(drift.ok, false);
   assert.equal(drift.sourceActiveCount, 0);
   assert.equal(drift.targetCount, 0);
   assert.deepEqual(drift.missingOnTarget, []);
   assert.deepEqual(drift.extraOnTarget, []);
   assert.equal(drift.source, "staging");
   assert.equal(drift.target, "prod");
+});
+
+test("an all-inactive source is not ok even when nothing is missing (RR-48)", () => {
+  const drift = computeDrift(
+    manifest("staging", [["x/a", "A", false]]),
+    manifest("prod", [["x/a", "A"]]),
+  );
+  assert.equal(drift.sourceActiveCount, 0);
+  assert.deepEqual(drift.missingOnTarget, []);
+  assert.equal(drift.ok, false);
+});
+
+test("computeDrift rejects a duplicate logical id on either side (RR-48)", () => {
+  const dup = (instance) => ({
+    instance,
+    tests: [
+      { id: "x/a", name: "A", active: true },
+      { id: "x/a", name: "Other A", sysId: "s2", active: true },
+    ],
+    suites: [],
+  });
+  // Old behaviour: the Map collapsed the pair and the promote passed.
+  assert.throws(
+    () => computeDrift(dup("staging"), manifest("prod", [["x/a", "A"]])),
+    (err) => {
+      assert.match(err.message, /Drift source manifest "staging"/);
+      assert.match(
+        err.message,
+        /tests\[0\] \("A"\) and tests\[1\] \("Other A", sysId s2\)/,
+      );
+      assert.match(err.message, /share the logical id "x\/a"/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => computeDrift(manifest("staging", [["x/a", "A"]]), dup("prod")),
+    /Drift target manifest "prod"/,
+  );
 });
 
 test("simultaneous missing and extra drift are reported in their own buckets", () => {
@@ -951,7 +990,7 @@ test("apps present only on the target are not a finding, just a count", () => {
   assert.match(apps[0].message, /2 app\(s\) present only on the target/);
 });
 
-test("an empty source app list passes with nothing to gate", () => {
+test("an empty source app list warns: nothing was compared (RR-48)", () => {
   const results = versionParityResults(
     versioned("staging", { identity: FULL_IDENTITY, apps: [] }),
     versioned("prod", {
@@ -961,8 +1000,8 @@ test("an empty source app list passes with nothing to gate", () => {
   );
   const { apps } = byCheck(results);
   assert.equal(apps.length, 1);
-  assert.equal(apps[0].status, "pass");
-  assert.match(apps[0].message, /No apps recorded/);
+  assert.equal(apps[0].status, "warn");
+  assert.match(apps[0].message, /records zero installed apps/);
 });
 
 test("hard failures and advisories are reported as separate app-parity results", () => {
@@ -1008,9 +1047,10 @@ test("long offender lists truncate to three names plus a (+N more) suffix", () =
 test("versionParityResults always emits at least one result per dimension", () => {
   // Clean pass on both dimensions still yields positive gate evidence — the
   // deliberate contrast with stalenessResults, which is silent when fresh.
+  const apps = [{ id: "x_acme", version: "1.0.0" }];
   const clean = versionParityResults(
-    versioned("staging", { identity: FULL_IDENTITY, apps: [] }),
-    versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
+    versioned("staging", { identity: FULL_IDENTITY, apps }),
+    versioned("prod", { identity: FULL_IDENTITY, apps }),
   );
   assert.equal(clean.length, 2);
   assert.deepEqual(

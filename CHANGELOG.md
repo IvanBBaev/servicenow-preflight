@@ -636,6 +636,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Drift fails closed on empty, malformed or duplicate-id manifests** (RR-48,
+  ST-2, ST-3, ST-4, ST-11) — `test-drift` passed with "all 0 active test(s)
+  exist" when the source manifest was empty or all-inactive; `loadManifest`
+  read a missing or non-array `tests`/`suites` field as an empty list and
+  silently dropped malformed `apps` entries; two tests with one logical `id`
+  collapsed into one in drift's index, so the missing one never blocked; and
+  an empty source app list made `app-version-parity` pass having compared
+  nothing. Now `test-drift` fails when the source has no active test, and
+  `computeDrift(...).ok` is `false` in that case. `loadManifest` rejects
+  (exit `2`) a missing or non-array `tests`/`suites`, a non-array `apps`, an
+  app entry without a non-empty string `id` or with an empty `name`/`version`,
+  and duplicate test or suite ids. `computeDrift` throws on a duplicate id
+  (the runner records `fail`), `mergeManifest` (and so `sync`) throws when
+  reconciliation would write one — a renamed test plus a new test with its
+  old name — and an empty source app list `warn`s.
 - **`sync` fails closed on a partial ATF read** (RR-47, ST-1, ST-5, ST-19) —
   a proven security-trim was acted on only when the whole snapshot was empty
   over a non-empty manifest, so a re-sync that saw 1 of 3 tests silently

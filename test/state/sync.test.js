@@ -585,6 +585,43 @@ test("pullManifest rejects two same-scope tests that slug to the same logical id
   );
 });
 
+test("syncManifest rejects a rename plus a new test of the old name after merge (RR-48)", async () => {
+  // Committed: "Smoke" (sys_id t1). On the instance t1 was renamed and a new
+  // "Smoke" (t2) created — the snapshot itself has no collision.
+  const existing = {
+    instance: "dev",
+    tests: [
+      { id: "x_acme_app/smoke", sysId: "t1", name: "Smoke", active: true },
+    ],
+    suites: [],
+  };
+  const client = createFakeSnClient({
+    tables: {
+      sys_atf_test: [
+        {
+          sys_id: "t1",
+          name: "Smoke (legacy)",
+          active: "true",
+          "sys_scope.scope": "x_acme_app",
+        },
+        {
+          sys_id: "t2",
+          name: "Smoke",
+          active: "true",
+          "sys_scope.scope": "x_acme_app",
+        },
+      ],
+      sys_atf_test_suite: [],
+      sys_atf_test_suite_test: [],
+    },
+  });
+  await assert.rejects(
+    () =>
+      syncManifest(client, "dev", undefined, existing, { scope: "x_acme_app" }),
+    /share the logical id "x_acme_app\/smoke"/,
+  );
+});
+
 test("syncManifest rejects two same-scope suites that slug to the same logical id (CC-4)", async () => {
   // The same collision on the suite side must also fail loudly.
   const client = createFakeSnClient({

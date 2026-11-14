@@ -210,17 +210,29 @@ test("loadManifest round-trips a manifest written by writeManifest", async () =>
   }
 });
 
-test("loadManifest defaults missing tests/suites to empty arrays", async () => {
+// RR-48 (ST-3): a missing list is a truncated or hand-edited file, not "no tests".
+test("loadManifest rejects missing tests/suites lists", async () => {
   const dir = tempDir();
   try {
-    writeFileSync(
-      manifestPathWithMkdir(dir, "dev"),
-      JSON.stringify({ instance: "dev" }),
-    );
-    const loaded = await loadManifest("dev", dir);
-    assert.equal(loaded.instance, "dev");
-    assert.deepEqual(loaded.tests, []);
-    assert.deepEqual(loaded.suites, []);
+    for (const [body, key] of [
+      [{ instance: "dev" }, "tests"],
+      [{ instance: "dev", tests: [] }, "suites"],
+      [{ instance: "dev", suites: [] }, "tests"],
+    ]) {
+      writeFileSync(manifestPathWithMkdir(dir, "dev"), JSON.stringify(body));
+      await assert.rejects(
+        () => loadManifest("dev", dir),
+        (err) => {
+          assert.equal(err.name, "UsageError");
+          assert.match(
+            err.message,
+            new RegExp(`"${key}" is missing; expected an array`),
+          );
+          assert.match(err.message, /dev\.state\.json/);
+          return true;
+        },
+      );
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -310,16 +322,70 @@ test("loadManifest rejects a suite element with a blank id (CC-18)", async () =>
   }
 });
 
-test("loadManifest coerces non-array tests/suites fields to empty arrays", async () => {
+test("loadManifest rejects non-array tests/suites fields (RR-48)", async () => {
+  const dir = tempDir();
+  try {
+    for (const [body, pattern] of [
+      [{ tests: "nope", suites: [] }, /"tests" is a string/],
+      [{ tests: { "x/a": { id: "x/a" } }, suites: [] }, /"tests" is an object/],
+      [{ tests: null, suites: [] }, /"tests" is null/],
+      [{ tests: [], suites: {} }, /"suites" is an object/],
+      [{ tests: [], suites: 3 }, /"suites" is a number/],
+    ]) {
+      writeFileSync(
+        manifestPathWithMkdir(dir, "dev"),
+        JSON.stringify({ instance: "dev", ...body }),
+      );
+      await assert.rejects(() => loadManifest("dev", dir), pattern);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// RR-48 (ST-4): drift indexes by id, so a duplicate would hide one test.
+test("loadManifest rejects duplicate test and suite ids", async () => {
   const dir = tempDir();
   try {
     writeFileSync(
       manifestPathWithMkdir(dir, "dev"),
-      JSON.stringify({ instance: "dev", tests: "nope", suites: {} }),
+      JSON.stringify({
+        instance: "dev",
+        tests: [
+          { id: "x/smoke", name: "Smoke (legacy)", sysId: "1" },
+          { id: "x/other", name: "Other" },
+          { id: "x/smoke", name: "Smoke", sysId: "2" },
+        ],
+        suites: [],
+      }),
     );
-    const loaded = await loadManifest("dev", dir);
-    assert.deepEqual(loaded.tests, []);
-    assert.deepEqual(loaded.suites, []);
+    await assert.rejects(
+      () => loadManifest("dev", dir),
+      (err) => {
+        assert.equal(err.name, "UsageError");
+        assert.match(
+          err.message,
+          /tests\[0\] \("Smoke \(legacy\)", sysId 1\) and tests\[2\] \("Smoke", sysId 2\) share the logical id "x\/smoke"/,
+        );
+        assert.match(err.message, /dev\.state\.json/);
+        return true;
+      },
+    );
+    writeFileSync(
+      manifestPathWithMkdir(dir, "dev"),
+      JSON.stringify({
+        instance: "dev",
+        tests: [],
+        suites: [
+          { id: "x/s", name: "S", testIds: [] },
+          { id: "x/s", testIds: [] },
+        ],
+      }),
+    );
+    await assert.rejects(
+      () => loadManifest("dev", dir),
+      /suites\[0\] \("S"\) and suites\[1\] \(no name\) share the logical id "x\/s"/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -694,7 +760,7 @@ test("loadManifest tolerates a manifest written before version capture (no ident
   }
 });
 
-test("loadManifest sanitizes malformed identity/apps instead of crashing", async () => {
+test("loadManifest sanitizes a malformed identity block instead of crashing", async () => {
   const dir = tempDir();
   try {
     writeFileSync(
@@ -703,33 +769,70 @@ test("loadManifest sanitizes malformed identity/apps instead of crashing", async
         instance: "dev",
         // buildName is not a string → dropped; war survives.
         identity: { buildName: 42, war: "glide-x" },
-        apps: [
-          null,
-          "not-an-object",
-          ["array"],
-          { name: "no id" },
-          { id: "" },
-          { id: "x_ok", name: 7, version: "1.0.0" },
-          { id: "x_also_ok", version: 99 },
-        ],
+        apps: [{ id: "x_ok", version: "1.0.0", source: "sys_app" }],
         tests: [],
         suites: [],
       }),
     );
     const loaded = await loadManifest("dev", dir);
     assert.deepEqual(loaded.identity, { war: "glide-x" });
-    // Malformed entries are dropped; non-string name/version are stripped —
-    // apps are advisory version metadata, not the CC-18 hard id contract.
-    assert.deepEqual(loaded.apps, [
-      { id: "x_ok", version: "1.0.0" },
-      { id: "x_also_ok" },
-    ]);
+    assert.deepEqual(loaded.apps, [{ id: "x_ok", version: "1.0.0" }]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("loadManifest reads a non-object identity and a non-array apps as never captured", async () => {
+// RR-48 (ST-11): dropping malformed entries left an empty or partial
+// inventory that drift read as "nothing to gate".
+test("loadManifest rejects malformed app entries", async () => {
+  const dir = tempDir();
+  try {
+    for (const [apps, pattern] of [
+      [{ x_acme_app: "1.0.0" }, /"apps" is an object; expected an array/],
+      [null, /"apps" is null; expected an array/],
+      [[null], /apps\[0\] is null; expected an object/],
+      [["not-an-object"], /apps\[0\] is a string; expected an object/],
+      [
+        [{ id: "x_ok" }, ["array"]],
+        /apps\[1\] is an array; expected an object/,
+      ],
+      [
+        [{ scope: "x_acme", version: "9.9.9" }],
+        /apps\[0\] is missing a non-empty string "id"/,
+      ],
+      [[{ id: "" }], /apps\[0\] is missing a non-empty string "id"/],
+      [
+        [{ id: "x_ok", name: 7 }],
+        /apps\[0\] \("x_ok"\) has a "name" that is not a non-empty string/,
+      ],
+      [
+        [{ id: "x_ok", version: 99 }],
+        /apps\[0\] \("x_ok"\) has a "version" that is not a non-empty string/,
+      ],
+      [
+        [{ id: "x_ok", version: "" }],
+        /"version" that is not a non-empty string/,
+      ],
+    ]) {
+      writeFileSync(
+        manifestPathWithMkdir(dir, "dev"),
+        JSON.stringify({ instance: "dev", apps, tests: [], suites: [] }),
+      );
+      await assert.rejects(
+        () => loadManifest("dev", dir),
+        (err) => {
+          assert.equal(err.name, "UsageError");
+          assert.match(err.message, pattern);
+          return true;
+        },
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadManifest reads a non-object identity and an absent apps key as never captured", async () => {
   const dir = tempDir();
   try {
     writeFileSync(
@@ -737,7 +840,6 @@ test("loadManifest reads a non-object identity and a non-array apps as never cap
       JSON.stringify({
         instance: "dev",
         identity: "Xanadu",
-        apps: { x_acme_app: "1.0.0" },
         tests: [],
         suites: [],
       }),
@@ -928,6 +1030,61 @@ test("mergeManifest keeps the incoming ids when there is no existing manifest", 
   const merged = mergeManifest(undefined, incoming);
   assert.equal(merged.tests[0].id, "x/login");
   assert.equal(merged.suites[0].id, "x/smoke");
+});
+
+// RR-48 (ST-4): the snapshot has no collision, but reconciliation creates one.
+test("mergeManifest rejects a rename plus a new test of the old name (one id twice)", () => {
+  const existing = {
+    instance: "dev",
+    tests: [{ id: "x/smoke", sysId: "1", name: "Smoke", active: true }],
+    suites: [],
+  };
+  const incoming = {
+    instance: "dev",
+    tests: [
+      // Renamed on the instance: keeps the committed id by sysId.
+      {
+        id: "x/smoke-legacy",
+        sysId: "1",
+        name: "Smoke (legacy)",
+        active: true,
+      },
+      // New test with the old name: takes the committed id by name.
+      { id: "x/smoke", sysId: "2", name: "Smoke", active: true },
+    ],
+    suites: [],
+  };
+  assert.throws(
+    () => mergeManifest(existing, incoming),
+    (err) => {
+      assert.match(err.message, /Merging the synced snapshot for "dev"/);
+      assert.match(
+        err.message,
+        /tests\[0\] \("Smoke \(legacy\)", sysId 1\) and tests\[1\] \("Smoke", sysId 2\) share the logical id "x\/smoke"/,
+      );
+      return true;
+    },
+  );
+});
+
+test("mergeManifest rejects two suites reconciled onto one id", () => {
+  const existing = {
+    instance: "dev",
+    tests: [],
+    suites: [{ id: "x/s", sysId: "su1", name: "S", testIds: [] }],
+  };
+  const incoming = {
+    instance: "dev",
+    tests: [],
+    suites: [
+      { id: "x/s-old", sysId: "su1", name: "S old", testIds: [] },
+      { id: "x/s", sysId: "su2", name: "S", testIds: [] },
+    ],
+  };
+  assert.throws(
+    () => mergeManifest(existing, incoming),
+    /suites\[0\] \("S old", sysId su1\) and suites\[1\] \("S", sysId su2\) share the logical id "x\/s"/,
+  );
 });
 
 test("mergeManifest adds a brand-new test verbatim (no committed match)", () => {

@@ -1,11 +1,12 @@
 import type { CheckResult, CheckStatus, Finding } from "../types.js";
 import { capFindings, makeFinding } from "../findings.js";
-import type {
-  IdentityMissingReason,
-  InstalledAppState,
-  InstanceIdentity,
-  StateManifest,
-  AtfTestState,
+import {
+  rejectDuplicateIds,
+  type IdentityMissingReason,
+  type InstalledAppState,
+  type InstanceIdentity,
+  type StateManifest,
+  type AtfTestState,
 } from "./manifest.js";
 import { compareVersions } from "../versions.js";
 import { promotionChain, type InstanceRegistry } from "../registry.js";
@@ -49,7 +50,11 @@ export interface DriftReport {
   sourceActiveCount: number;
   /** Count of active tests considered on the target. */
   targetCount: number;
-  /** `true` when nothing blocks a promote (`missingOnTarget` is empty). */
+  /**
+   * `true` when nothing blocks a promote: `missingOnTarget` is empty AND the
+   * source has at least one active test. Zero active source tests means
+   * nothing was compared, which is never a pass (RR-48, ST-2).
+   */
   ok: boolean;
 }
 
@@ -69,11 +74,25 @@ function isActive(test: AtfTestState): boolean {
  * Compare two manifests by logical `id` and report the drift. Only **active**
  * source tests can block a promote — an intentionally deactivated test missing
  * downstream is not a regression.
+ *
+ * Throws when either manifest holds two tests with one logical `id` (RR-48,
+ * ST-4): indexing by id would collapse them and hide one from the gate.
  */
 export function computeDrift(
   source: StateManifest,
   target: StateManifest,
 ): DriftReport {
+  for (const [role, m] of [
+    ["source", source],
+    ["target", target],
+  ] as const) {
+    rejectDuplicateIds(
+      m.tests,
+      "tests",
+      `Drift ${role} manifest "${m.instance}"`,
+      (message) => new Error(message),
+    );
+  }
   const sourceTests = source.tests.filter(isActive);
   // Apply the same active filter to the TARGET (CC-3): a test deactivated on the
   // target is *absent* for drift purposes, so an active source test whose only
@@ -111,7 +130,7 @@ export function computeDrift(
     extraOnTarget,
     sourceActiveCount: sourceTests.length,
     targetCount: targetTests.length,
-    ok: missingOnTarget.length === 0,
+    ok: missingOnTarget.length === 0 && sourceTests.length > 0,
   };
 }
 
@@ -549,6 +568,7 @@ function warOnlyParityResult(
  *
  * - Either manifest lacking an `apps` list (pre-capture manifest, or the
  *   capture was ACL-trimmed and dropped whole) → single ADVISORY `warn`.
+ * - An empty source `apps` list → `warn` (nothing compared, RR-48).
  * - App recorded on the source but absent on the target → advisory `warn`
  *   (expected on a first-ever deploy or when the source carries in-development
  *   apps; confirm each is intended — presence alone is not a regression).
@@ -581,12 +601,15 @@ function appParityResults(
     ];
   }
 
+  // RR-48 (ST-11): a real instance always has apps and plugins, and `sync`
+  // never writes an empty inventory — an empty list is unproven, not "nothing
+  // to gate", so it is never a pass.
   if (sourceApps.length === 0) {
     return [
       {
         name: APP_VERSION_CHECK,
-        status: "pass",
-        message: `No apps recorded on source "${source.instance}" to compare; app-version parity has nothing to gate.`,
+        status: "warn",
+        message: `Manifest for source "${source.instance}" records zero installed apps, so app-version parity compared nothing — a real instance always has apps; re-run sync on "${source.instance}".`,
       },
     ];
   }
