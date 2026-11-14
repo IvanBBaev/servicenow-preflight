@@ -13,6 +13,7 @@ import {
   syncManifest,
   readBuildInfo,
   EmptySnapshotError,
+  IncompleteSnapshotError,
 } from "../../build/state/sync.js";
 
 /**
@@ -838,11 +839,12 @@ test("syncManifest commits an intentional empty snapshot when --allow-empty is s
   assert.deepEqual(merged.suites, []);
 });
 
-test("syncManifest hard-refuses a security-trimmed empty snapshot even WITH --allow-empty (SN-1/P5)", async () => {
+test("syncManifest hard-refuses a security-trimmed empty snapshot even WITH --allow-empty (SN-1/P5, RR-47)", async () => {
   // The instance reports X-Total-Count = 5 on sys_atf_test but returns 0 visible
   // rows — proof that ACL security-trimming is hiding tests from this account.
   // They are not gone, so committing the empty snapshot would erase real
-  // coverage. This refusal is HARD: --allow-empty must not override it.
+  // coverage. This refusal is HARD: --allow-empty must not override it. Since
+  // RR-47 every proven trim raises IncompleteSnapshotError, empty or not.
   const trimmedClient = createFakeSnClient({
     tables: {
       sys_atf_test: [],
@@ -858,12 +860,291 @@ test("syncManifest hard-refuses a security-trimmed empty snapshot even WITH --al
         allowEmpty: true, // deliberately set — must NOT override a proven trim
       }),
     (err) => {
-      assert.ok(err instanceof EmptySnapshotError);
-      assert.equal(err.securityTrimmed, true);
-      assert.match(err.message, /X-Total-Count exceeds the visible rows/);
-      assert.match(err.message, /NOT overridable with --allow-empty/);
+      assert.ok(err instanceof IncompleteSnapshotError);
+      assert.equal(err.reason, "security-trimmed");
+      assert.equal(err.table, "sys_atf_test");
+      assert.match(err.message, /reported 5 sys_atf_test row\(s\)/);
+      assert.match(err.message, /can see only 0/);
+      assert.match(err.message, /--allow-empty does not override this/);
       return true;
     },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// RR-47 — any proven trim or unreadable `active` value fails the sync closed
+// (AUDIT-2026-11-12 ST-1, ST-5, ST-19).
+// ---------------------------------------------------------------------------
+
+/** Assert an IncompleteSnapshotError for `table` with `reason`. */
+function incomplete(table, reason) {
+  return (err) => {
+    assert.ok(err instanceof IncompleteSnapshotError, String(err));
+    assert.equal(err.name, "IncompleteSnapshotError");
+    assert.equal(err.table, table);
+    assert.equal(err.reason, reason);
+    return true;
+  };
+}
+
+test("a FIRST sync that sees 0 of 50 tests is refused, not written as an empty manifest (RR-47, ST-1)", async () => {
+  const client = createFakeSnClient({
+    tables: { sys_atf_test: [], sys_atf_test_suite: [] },
+    totalCounts: { sys_atf_test: 50, sys_atf_test_suite: 4 },
+  });
+  await assert.rejects(
+    () =>
+      syncManifest(client, "staging", undefined, undefined, {
+        scope: "x_acme_app",
+        allowEmpty: true,
+      }),
+    incomplete("sys_atf_test", "security-trimmed"),
+  );
+});
+
+test("a re-sync that sees 1 of 3 tests is refused, even with --allow-empty (RR-47, ST-1)", async () => {
+  const existing = {
+    instance: "staging",
+    tests: [
+      { id: "x_acme_app/a", sysId: "1", name: "A", active: true },
+      { id: "x_acme_app/b", sysId: "2", name: "B", active: true },
+      { id: "x_acme_app/c", sysId: "3", name: "C", active: true },
+    ],
+    suites: [],
+  };
+  const client = createFakeSnClient({
+    tables: {
+      sys_atf_test: [
+        {
+          sys_id: "1",
+          name: "A",
+          active: "true",
+          "sys_scope.scope": "x_acme_app",
+        },
+      ],
+      sys_atf_test_suite: [],
+    },
+    totalCounts: { sys_atf_test: 3 },
+  });
+  await assert.rejects(
+    () =>
+      syncManifest(client, "staging", undefined, existing, {
+        scope: "x_acme_app",
+        allowEmpty: true,
+      }),
+    (err) => {
+      incomplete("sys_atf_test", "security-trimmed")(err);
+      assert.match(err.message, /reported 3 sys_atf_test row\(s\)/);
+      assert.match(err.message, /can see only 1/);
+      return true;
+    },
+  );
+});
+
+test("pullManifest refuses a trimmed test read too — the raw pull is never partial (RR-47)", async () => {
+  const client = createFakeSnClient({
+    tables: { sys_atf_test: seedRows().sys_atf_test, sys_atf_test_suite: [] },
+    totalCounts: { sys_atf_test: 10 },
+  });
+  await assert.rejects(
+    () => pullManifest(client, "staging", undefined, {}),
+    incomplete("sys_atf_test", "security-trimmed"),
+  );
+});
+
+test("a trimmed suite read is refused instead of dropping the hidden suites (RR-47, ST-1)", async () => {
+  const client = createFakeSnClient({
+    tables: seedRows(),
+    totalCounts: { sys_atf_test_suite: 7 },
+  });
+  await assert.rejects(
+    () =>
+      syncManifest(client, "staging", undefined, undefined, {
+        scope: "x_acme_app",
+      }),
+    incomplete("sys_atf_test_suite", "security-trimmed"),
+  );
+});
+
+test("a trimmed suite→test link read is refused instead of an empty membership (RR-47, ST-19)", async () => {
+  const { client, calls } = tracked(
+    createFakeSnClient({
+      tables: {
+        sys_atf_test: seedRows().sys_atf_test,
+        sys_atf_test_suite: seedRows().sys_atf_test_suite,
+        sys_atf_test_suite_test: [],
+      },
+      totalCounts: { sys_atf_test_suite_test: 12 },
+    }),
+  );
+  await assert.rejects(
+    () =>
+      syncManifest(client, "staging", undefined, undefined, {
+        scope: "x_acme_app",
+        allowEmpty: true,
+      }),
+    incomplete("sys_atf_test_suite_test", "security-trimmed"),
+  );
+  // The link read carried the scope filter like its siblings.
+  const link = calls.find((c) => c.table === "sys_atf_test_suite_test");
+  assert.match(link.params.sysparm_query, /x_acme_app/);
+});
+
+test("untrimmed reads whose X-Total-Count equals the visible rows still sync (RR-47)", async () => {
+  const rows = seedRows();
+  const client = createFakeSnClient({
+    tables: rows,
+    totalCounts: {
+      sys_atf_test: 2,
+      sys_atf_test_suite: 1,
+      sys_atf_test_suite_test: 3,
+    },
+  });
+  const m = await syncManifest(client, "staging", undefined, undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(
+    m.tests.map((t) => [t.id, t.active]),
+    [
+      ["x_acme_app/login-works", true],
+      ["x_acme_app/logout-works", false],
+    ],
+  );
+  assert.deepEqual(m.suites[0].testIds, [
+    "x_acme_app/login-works",
+    "x_acme_app/logout-works",
+  ]);
+});
+
+test("a test row without an `active` value fails the sync instead of recording it inactive (RR-47, ST-5)", async () => {
+  const client = createFakeSnClient({
+    tables: {
+      sys_atf_test: [
+        { sys_id: "1", name: "A", "sys_scope.scope": "x_acme_app" },
+        { sys_id: "2", name: "B", "sys_scope.scope": "x_acme_app" },
+      ],
+      sys_atf_test_suite: [],
+    },
+  });
+  await assert.rejects(
+    () =>
+      syncManifest(client, "staging", undefined, undefined, {
+        scope: "x_acme_app",
+        allowEmpty: true,
+      }),
+    (err) => {
+      incomplete("sys_atf_test", "active-unreadable")(err);
+      assert.match(err.message, /2 sys_atf_test row\(s\)/);
+      assert.match(err.message, /"A", "B"/);
+      assert.match(err.message, /sys_atf_test\.active/);
+      return true;
+    },
+  );
+});
+
+for (const [label, active] of [
+  ["null", null],
+  ["blank", ""],
+  ["whitespace", "  "],
+  ["an unknown word", "yes"],
+  ["an empty display-value object", { value: "", display_value: "" }],
+]) {
+  test(`an \`active\` value that is ${label} is unreadable, never false (RR-47, ST-5)`, async () => {
+    const client = createFakeSnClient({
+      tables: {
+        sys_atf_test: [
+          {
+            sys_id: "1",
+            name: "A",
+            active: "true",
+            "sys_scope.scope": "x_acme_app",
+          },
+          { sys_id: "2", name: "B", active, "sys_scope.scope": "x_acme_app" },
+        ],
+        sys_atf_test_suite: [],
+      },
+    });
+    await assert.rejects(
+      () => pullManifest(client, "staging", undefined, { scope: "x_acme_app" }),
+      (err) => {
+        incomplete("sys_atf_test", "active-unreadable")(err);
+        assert.match(err.message, /1 sys_atf_test row\(s\)/);
+        assert.match(err.message, /"B"/);
+        return true;
+      },
+    );
+  });
+}
+
+test("the unreadable-`active` message lists five names and counts the rest (RR-47, ST-5)", async () => {
+  const rows = Array.from({ length: 7 }, (_, i) => ({
+    sys_id: `s${i}`,
+    name: `T${i}`,
+    "sys_scope.scope": "x_acme_app",
+  }));
+  const client = createFakeSnClient({
+    tables: { sys_atf_test: rows, sys_atf_test_suite: [] },
+  });
+  await assert.rejects(
+    () => pullManifest(client, "staging", undefined, { scope: "x_acme_app" }),
+    (err) => {
+      assert.match(err.message, /7 sys_atf_test row\(s\)/);
+      assert.match(err.message, /"T0", "T1", "T2", "T3", "T4" and 2 more/);
+      return true;
+    },
+  );
+});
+
+test("readable `active` forms — booleans, any case, display-value objects — still parse (RR-47)", async () => {
+  const client = createFakeSnClient({
+    tables: {
+      sys_atf_test: [
+        {
+          sys_id: "1",
+          name: "A",
+          active: true,
+          "sys_scope.scope": "x_acme_app",
+        },
+        {
+          sys_id: "2",
+          name: "B",
+          active: false,
+          "sys_scope.scope": "x_acme_app",
+        },
+        {
+          sys_id: "3",
+          name: "C",
+          active: " TRUE ",
+          "sys_scope.scope": "x_acme_app",
+        },
+        {
+          sys_id: "4",
+          name: "D",
+          active: "False",
+          "sys_scope.scope": "x_acme_app",
+        },
+        {
+          sys_id: "5",
+          name: "E",
+          active: { value: "true", display_value: "true" },
+          "sys_scope.scope": "x_acme_app",
+        },
+      ],
+      sys_atf_test_suite: [],
+    },
+  });
+  const m = await pullManifest(client, "staging", undefined, {
+    scope: "x_acme_app",
+  });
+  assert.deepEqual(
+    m.tests.map((t) => [t.name, t.active]),
+    [
+      ["A", true],
+      ["B", false],
+      ["C", true],
+      ["D", false],
+      ["E", true],
+    ],
   );
 });
 

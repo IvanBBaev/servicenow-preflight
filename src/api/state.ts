@@ -38,6 +38,7 @@ export {
   pullManifest,
   syncManifest,
   EmptySnapshotError,
+  IncompleteSnapshotError,
   readBuildInfo,
   type BuildInfo,
   type SyncOptions,

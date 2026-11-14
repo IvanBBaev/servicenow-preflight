@@ -68,22 +68,23 @@ export interface SyncOptions {
    * (SN-1). Off by default: an empty pull over real coverage is far more likely
    * a least-privilege/ACL problem than a genuine "all tests deleted", so
    * {@link syncManifest} refuses it unless this is set. It can NOT override a
-   * refusal when security-trimming is *proven* (see {@link EmptySnapshotError}).
+   * proven security-trim or an unreadable `active` column: those raise
+   * {@link IncompleteSnapshotError} before this option is consulted (RR-47).
    */
   allowEmpty?: boolean;
 }
 
 /**
  * Thrown by {@link syncManifest} when a pull returns an all-empty snapshot that
- * would overwrite a non-empty committed manifest (SN-1). `securityTrimmed` is
- * `true` when the instance *proved* it is hiding rows from this account
- * (`X-Total-Count` exceeded the visible rows) — a hard refusal that
- * `SyncOptions.allowEmpty` can NOT override; `false` is the softer refusal a
- * caller can override with `allowEmpty` once they have confirmed the emptiness
- * is real.
+ * would overwrite a non-empty committed manifest (SN-1) — the soft refusal a
+ * caller can override with `SyncOptions.allowEmpty` once they have confirmed
+ * the emptiness is real. A proven security-trim never reaches this refusal: it
+ * raises {@link IncompleteSnapshotError} first (RR-47), so `securityTrimmed` is
+ * always `false` on an error thrown by this version; the field stays for
+ * callers that read it.
  */
 export class EmptySnapshotError extends Error {
-  /** `true` when ACL security-trimming was proven (hard, non-overridable). */
+  /** Kept for compatibility; `false` on every error {@link syncManifest} throws. */
   readonly securityTrimmed: boolean;
   constructor(message: string, securityTrimmed: boolean) {
     super(message);
@@ -92,11 +93,57 @@ export class EmptySnapshotError extends Error {
   }
 }
 
-/** A pulled snapshot plus whether the instance proved it is hiding rows (SN-1). */
-interface Snapshot {
-  manifest: StateManifest;
-  /** `true` when any read reported more rows than this account could see. */
-  securityTrimmed: boolean;
+/**
+ * Thrown by {@link pullManifest} / {@link syncManifest} when the ATF reads
+ * cannot be trusted to describe the instance (RR-47, ST-1, ST-5, ST-19):
+ *
+ * - `"security-trimmed"` — the test, suite or suite→test link read reported
+ *   more rows (`X-Total-Count`) than this account could see, so the snapshot
+ *   would silently drop tests, suites or suite membership;
+ * - `"active-unreadable"` — a test row came back without a readable `active`
+ *   value (field-level read ACL, or the column is not returned), so every such
+ *   test would be recorded inactive and drift could never block on it.
+ *
+ * Always a hard refusal: `SyncOptions.allowEmpty` does not apply, and nothing
+ * is merged or written.
+ */
+export class IncompleteSnapshotError extends Error {
+  /** The table whose read was incomplete. */
+  readonly table: string;
+  /** Why the read cannot be trusted. */
+  readonly reason: "security-trimmed" | "active-unreadable";
+  constructor(
+    message: string,
+    table: string,
+    reason: "security-trimmed" | "active-unreadable",
+  ) {
+    super(message);
+    this.name = "IncompleteSnapshotError";
+    this.table = table;
+    this.reason = reason;
+  }
+}
+
+/**
+ * Refuse a read that ServiceNow proved incomplete (`X-Total-Count` above the
+ * visible rows). A partial test, suite or link read is never a snapshot of the
+ * instance (RR-47, ST-1, ST-19).
+ */
+function assertNotTrimmed(
+  table: string,
+  instanceHint: string,
+  read: TableQueryResult,
+): void {
+  if (!read.securityTrimmed) return;
+  throw new IncompleteSnapshotError(
+    `Refusing to sync: the instance reported ${String(read.totalCount)} ${table} ` +
+      `row(s) for this read but this account can see only ${read.rows.length}. ACL ` +
+      `security-trimming is hiding ${instanceHint} — a manifest built from this ` +
+      `read would silently drop them. Re-run sync with an account that can read ` +
+      `${table} in scope. --allow-empty does not override this.`,
+    table,
+    "security-trimmed",
+  );
 }
 
 /**
@@ -130,10 +177,18 @@ function str(value: unknown): string {
   return "";
 }
 
-/** ServiceNow booleans arrive as `"true"`/`"false"` (or real booleans in a fake). */
-function bool(value: unknown): boolean {
+/**
+ * ServiceNow booleans arrive as `"true"`/`"false"` (real booleans in a fake,
+ * `{ value }` with display values on). Anything else — absent, `null`, blank
+ * or an unknown word — is `undefined`: the value was not readable, and
+ * guessing `false` would hide the test from drift (ST-5).
+ */
+function bool(value: unknown): boolean | undefined {
   if (typeof value === "boolean") return value;
-  return str(value).toLowerCase() === "true";
+  const raw = refValue(value).toLowerCase();
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return undefined;
 }
 
 /**
@@ -186,34 +241,55 @@ function scopedQuery(scope: string | undefined, extra?: string): string {
 async function pullTests(
   client: SnClient,
   opts: SyncOptions,
-): Promise<{ tests: AtfTestState[]; securityTrimmed: boolean }> {
+): Promise<AtfTestState[]> {
   // No `sysparm_limit`: SnClient auto-paginates, so a scope with more than one
   // page of tests is pulled in full. An explicit cap here silently truncated
   // the manifest, which then compared as drift against the real instance.
   // `queryWithMeta` surfaces `securityTrimmed` (X-Total-Count > visible rows) so
   // an ACL-hidden result set can be distinguished from a genuinely empty one.
-  const { rows, securityTrimmed } = await client
-    .table(TEST_TABLE)
-    .queryWithMeta({
-      sysparm_query: scopedQuery(opts.scope),
-      sysparm_fields: TEST_FIELDS,
-    });
-  const tests = rows
+  // A trimmed read is refused outright (RR-47, ST-1): dropping the hidden
+  // tests would let drift pass a promote they never covered.
+  const read = await client.table(TEST_TABLE).queryWithMeta({
+    sysparm_query: scopedQuery(opts.scope),
+    sysparm_fields: TEST_FIELDS,
+  });
+  assertNotTrimmed(TEST_TABLE, "ATF tests", read);
+  const unreadable: string[] = [];
+  const tests = read.rows
     .filter((r) => str(r.sys_id))
     .map((r) => {
       const name = str(r.name) || str(r.sys_id);
       const scope = rowScope(r, opts.scope);
+      const active = bool(r.active);
+      if (active === undefined) unreadable.push(name);
       const test: AtfTestState = {
         id: logicalId(scope, name),
         sysId: str(r.sys_id),
         name,
-        active: bool(r.active),
+        active: active ?? false,
       };
       const covers = rowCoverage(r);
       if (covers) test.covers = covers;
       return test;
     });
-  return { tests, securityTrimmed };
+  if (unreadable.length > 0) {
+    const shown = unreadable
+      .slice(0, 5)
+      .map((n) => `"${n}"`)
+      .join(", ");
+    const more =
+      unreadable.length > 5 ? ` and ${unreadable.length - 5} more` : "";
+    throw new IncompleteSnapshotError(
+      `Refusing to sync: ${unreadable.length} ${TEST_TABLE} row(s) came back ` +
+        `without a readable "active" value (${shown}${more}). A field-level read ` +
+        `ACL or a missing column would record every such test as inactive, and ` +
+        `drift never blocks on an inactive test. Re-run sync with an account ` +
+        `that can read ${TEST_TABLE}.active.`,
+      TEST_TABLE,
+      "active-unreadable",
+    );
+  }
+  return tests;
 }
 
 /**
@@ -225,23 +301,24 @@ async function pullSuites(
   client: SnClient,
   opts: SyncOptions,
   testBySysId: Map<string, AtfTestState>,
-): Promise<{ suites: AtfSuiteState[]; securityTrimmed: boolean }> {
+): Promise<AtfSuiteState[]> {
   // No `sysparm_limit` on either read — the client auto-paginates (see
-  // pullTests). The suite read uses `queryWithMeta` for the `securityTrimmed`
-  // signal; the link table stays a plain `query` (its rows are pure join tuples
-  // — no scope name, no id to prefix — so it needs no field pinning).
-  const { rows: suiteRows, securityTrimmed } = await client
-    .table(SUITE_TABLE)
-    .queryWithMeta({
-      sysparm_query: scopedQuery(opts.scope),
-      sysparm_fields: SUITE_FIELDS,
-    });
+  // pullTests). Both reads go through `queryWithMeta` and refuse a proven
+  // trim (RR-47): a hidden suite drops out of the manifest, a hidden link row
+  // leaves its suite with no members and no signal (ST-19). The link rows are
+  // pure join tuples — no scope name, no id to prefix — so no field pinning.
+  const suiteRead = await client.table(SUITE_TABLE).queryWithMeta({
+    sysparm_query: scopedQuery(opts.scope),
+    sysparm_fields: SUITE_FIELDS,
+  });
+  assertNotTrimmed(SUITE_TABLE, "ATF suites", suiteRead);
 
-  const linkRows = await client.table(SUITE_TEST_TABLE).query({
+  const linkRead = await client.table(SUITE_TEST_TABLE).queryWithMeta({
     sysparm_query: scopedQuery(opts.scope),
   });
+  assertNotTrimmed(SUITE_TEST_TABLE, "suite membership rows", linkRead);
   const testIdsBySuite = new Map<string, string[]>();
-  for (const link of linkRows) {
+  for (const link of linkRead.rows) {
     const suiteId = refValue(link.test_suite);
     const testSysId = refValue(link.test);
     if (!suiteId || !testSysId) continue;
@@ -252,7 +329,7 @@ async function pullSuites(
     testIdsBySuite.set(suiteId, list);
   }
 
-  const suites = suiteRows
+  return suiteRead.rows
     .filter((r) => str(r.sys_id))
     .map((r) => {
       const name = str(r.name) || str(r.sys_id);
@@ -264,7 +341,6 @@ async function pullSuites(
         testIds: testIdsBySuite.get(sysId) ?? [],
       };
     });
-  return { suites, securityTrimmed };
 }
 
 /** Normalise a raw `sys_atf_test_result.status` to `pass` / `fail` / raw. */
@@ -523,30 +599,23 @@ async function pullApps(
 }
 
 /**
- * Pull a fresh snapshot plus the `securityTrimmed` signal. Shared by
- * {@link pullManifest} (which drops the signal) and {@link syncManifest} (which
- * uses it to harden the SN-1 empty-snapshot guard).
+ * Pull a fresh snapshot. Shared by {@link pullManifest} and
+ * {@link syncManifest}. A trimmed ATF read or an unreadable `active` column
+ * throws {@link IncompleteSnapshotError} before anything is merged (RR-47).
  */
 async function pullSnapshot(
   client: SnClient,
   instance: string,
   url: string | undefined,
   opts: SyncOptions,
-): Promise<Snapshot> {
-  const { tests, securityTrimmed: testsTrimmed } = await pullTests(
-    client,
-    opts,
-  );
+): Promise<StateManifest> {
+  const tests = await pullTests(client, opts);
   if (opts.withLastRun) await attachLastRuns(client, tests, opts);
 
   const testBySysId = new Map<string, AtfTestState>();
   for (const t of tests) if (t.sysId) testBySysId.set(t.sysId, t);
 
-  const { suites, securityTrimmed: suitesTrimmed } = await pullSuites(
-    client,
-    opts,
-    testBySysId,
-  );
+  const suites = await pullSuites(client, opts, testBySysId);
 
   // Fail loudly on same-scope slug collisions before they corrupt the merge.
   assertNoLogicalIdCollisions(tests, "test");
@@ -566,14 +635,16 @@ async function pullSnapshot(
   if (opts.now) manifest.syncedAt = opts.now;
   if (identity) manifest.identity = identity;
   if (apps) manifest.apps = apps;
-  return { manifest, securityTrimmed: testsTrimmed || suitesTrimmed };
+  return manifest;
 }
 
 /**
  * Pull a fresh {@link StateManifest} snapshot from an instance. This is the raw
  * instance reality — NOT merged with any committed manifest. Callers typically
  * pass the result to {@link mergeManifest} against {@link loadManifest} output
- * and then {@link writeManifest} it.
+ * and then {@link writeManifest} it. Throws {@link IncompleteSnapshotError}
+ * when a test, suite or suite-link read is security-trimmed or a test's
+ * `active` value is unreadable (RR-47).
  */
 export async function pullManifest(
   client: SnClient,
@@ -581,7 +652,7 @@ export async function pullManifest(
   url: string | undefined,
   opts: SyncOptions = {},
 ): Promise<StateManifest> {
-  return (await pullSnapshot(client, instance, url, opts)).manifest;
+  return pullSnapshot(client, instance, url, opts);
 }
 
 /**
@@ -589,12 +660,16 @@ export async function pullManifest(
  * returning the manifest to write. Pure w.r.t. the filesystem — the caller reads
  * `existing` and writes the result.
  *
- * SN-1: an ALL-EMPTY snapshot over a non-empty committed manifest is refused.
- * Zero visible rows on a least-privilege account usually means ACL
- * security-trimming, not "no tests" — committing would erase real coverage. The
- * refusal is a soft {@link EmptySnapshotError} that `opts.allowEmpty` overrides,
- * UNLESS the instance proved it is hiding rows (`securityTrimmed`), in which case
- * the error is hard and `allowEmpty` does not apply.
+ * RR-47: any proven security-trim on the test, suite or suite-link read, and
+ * any test row without a readable `active` value, throws
+ * {@link IncompleteSnapshotError} — on a first sync too, and whether or not
+ * the snapshot is empty. `opts.allowEmpty` does not apply.
+ *
+ * SN-1: an ALL-EMPTY (untrimmed) snapshot over a non-empty committed manifest
+ * is refused. Zero visible rows on a least-privilege account usually means ACL
+ * security-trimming the instance could not prove — committing would erase
+ * real coverage. The refusal is a soft {@link EmptySnapshotError} that
+ * `opts.allowEmpty` overrides.
  */
 export async function syncManifest(
   client: SnClient,
@@ -603,12 +678,7 @@ export async function syncManifest(
   existing: StateManifest | undefined,
   opts: SyncOptions = {},
 ): Promise<StateManifest> {
-  const { manifest: snapshot, securityTrimmed } = await pullSnapshot(
-    client,
-    instance,
-    url,
-    opts,
-  );
+  const snapshot = await pullSnapshot(client, instance, url, opts);
   const snapshotEmpty =
     snapshot.tests.length === 0 && snapshot.suites.length === 0;
   if (
@@ -616,19 +686,6 @@ export async function syncManifest(
     existing &&
     (existing.tests.length > 0 || existing.suites.length > 0)
   ) {
-    if (securityTrimmed) {
-      // Proven security-trimming: the instance reported MORE rows than this
-      // account can see, so tests exist but are ACL-hidden. Committing the empty
-      // snapshot would erase real coverage — hard error, not overridable.
-      throw new EmptySnapshotError(
-        `Refusing to overwrite the committed manifest for "${instance}" with an ` +
-          `empty snapshot: the instance reported more ATF rows than this account can ` +
-          `see (X-Total-Count exceeds the visible rows), so ACL security-trimming is ` +
-          `hiding tests — they are not gone. Re-run sync with an account that can ` +
-          `read the ATF tables in scope. This is NOT overridable with --allow-empty.`,
-        true,
-      );
-    }
     if (!opts.allowEmpty) {
       throw new EmptySnapshotError(
         `Refusing to overwrite the committed manifest for "${instance}" (which holds ` +

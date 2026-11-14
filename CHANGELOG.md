@@ -636,6 +636,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sync` fails closed on a partial ATF read** (RR-47, ST-1, ST-5, ST-19) —
+  a proven security-trim was acted on only when the whole snapshot was empty
+  over a non-empty manifest, so a re-sync that saw 1 of 3 tests silently
+  dropped two, and a first sync that saw 0 of 50 wrote an empty manifest. The
+  suite→test link read had no trim signal at all, and a test row without a
+  readable `active` value was recorded as inactive, so drift never blocked on
+  it. Now any trimmed test, suite or link read, and any test without a
+  `"true"`/`"false"` `active` value, throws the new `IncompleteSnapshotError`
+  (`table`, `reason`) from `pullManifest` and `syncManifest` (exit `3`,
+  nothing written); `--allow-empty` does not override it. A trimmed empty
+  snapshot now raises this error instead of `EmptySnapshotError`, whose
+  `securityTrimmed` is therefore always `false`.
 - **An empty or low `X-Total-Count` no longer ends pagination** (RR-46,
   HTTP-1) — an empty header was read as `0` and a count below the rows already
   delivered was trusted, so a 2500-row table came back as its first 1000 rows

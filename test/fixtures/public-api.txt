@@ -208,6 +208,7 @@
 ./state value EmptySnapshotError
 ./state value FRESHNESS_CHECK
 ./state value INSTANCE_VERSION_CHECK
+./state value IncompleteSnapshotError
 ./state type InstalledAppState
 ./state type InstanceDef
 ./state type InstanceIdentity

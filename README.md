@@ -223,7 +223,7 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--only` / `--skip <csv>`     | Run only / skip these checks (comma-separated names).                                                                         |
 | `--changed-since <dur\|date>` | `run`: only the checks whose tables changed since `<dur>` ago (`24h`, `7d`) or an ISO date; see below.                        |
 | `--with-last-run`             | `sync`: also pull each test's most recent result.                                                                             |
-| `--allow-empty`               | `sync`: commit an empty snapshot over a non-empty manifest.                                                                   |
+| `--allow-empty`               | `sync`: commit an empty snapshot over a non-empty manifest (never a proven security-trimmed one).                             |
 | `--allow-no-auth`             | `run`/`sync`: under CI, accept a run with no credentials (anonymous instance); without it that is exit `2`.                   |
 | `--allow-insecure-http`       | Accept an `http://` instance URL with credentials set (or `SNPF_ALLOW_INSECURE_HTTP=1`).                                      |
 | `--max-age <dur>`             | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                                |
@@ -770,6 +770,10 @@ except each instance looks up a **namespaced** variable first: an instance whose
   versions, feeding the parity gates below. Manifests carry `"version": 1`;
   one without a version reads as 1, and a newer version is refused (exit `2`)
   with a hint to upgrade the tool. A malformed manifest also exits `2`.
+  `sync` fails closed (exit `3`, nothing written) when the instance proves a
+  test, suite or suite-membership read is security-trimmed (`X-Total-Count`
+  above the visible rows) or a test comes back without a readable `active`
+  value; `--allow-empty` does not override either.
 - **`drift <src> <dst>`** compares two committed manifests **offline** by logical
   `id`. A test **active upstream but missing downstream** fails the gate (exit 1)
   — it would ship a promote without coverage upstream has validated. Extra tests
