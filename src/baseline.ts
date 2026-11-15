@@ -53,6 +53,12 @@ export interface Baseline {
   generatedAt: string;
   /** The registry instance the baseline was recorded against, if any. */
   instance?: string;
+  /**
+   * The instance origin (`https://dev12345.service-now.com`) the baseline was
+   * recorded against, if known. A baseline applied to another instance or
+   * origin is refused (RR-50), so a dev baseline cannot waive prod findings.
+   */
+  url?: string;
   entries: BaselineEntry[];
 }
 
@@ -150,6 +156,9 @@ export function readBaseline(path: string): Baseline {
   if (parsed.instance !== undefined && typeof parsed.instance !== "string") {
     throw new UsageError(`Baseline ${path} has a non-string "instance".`);
   }
+  if (parsed.url !== undefined && typeof parsed.url !== "string") {
+    throw new UsageError(`Baseline ${path} has a non-string "url".`);
+  }
   if (!Array.isArray(parsed.entries)) {
     throw new UsageError(`Baseline ${path} needs an "entries" array.`);
   }
@@ -158,6 +167,7 @@ export function readBaseline(path: string): Baseline {
     version: 1,
     generatedAt: parsed.generatedAt,
     ...(parsed.instance !== undefined ? { instance: parsed.instance } : {}),
+    ...(parsed.url !== undefined ? { url: parsed.url } : {}),
     entries,
   };
 }
@@ -180,15 +190,68 @@ export function writeBaseline(
   writeFileSync(path, `${JSON.stringify(b, null, 2)}\n`, "utf8");
 }
 
+/** The comparable form of an instance URL: its lower-case origin, else the trimmed input. */
+function originOf(url: string): string {
+  const trimmed = url.trim();
+  try {
+    const origin = new URL(trimmed).origin;
+    if (origin && origin !== "null") return origin.toLowerCase();
+  } catch {
+    // Not a URL: compare the raw text.
+  }
+  return trimmed.toLowerCase();
+}
+
+/** The instance a baseline is applied to (see {@link assertBaselineTarget}). */
+export interface BaselineTarget {
+  /** The registry instance name, if any. */
+  instance?: string;
+  /** The instance URL, if known. */
+  url?: string;
+}
+
+/**
+ * Refuse a baseline recorded against another instance (RR-50, CLI-6): when
+ * both sides name a registry instance and the names differ, or both carry a
+ * URL and the origins differ, throw {@link UsageError}. A side without the
+ * field (an older baseline, an unnamed target) is not compared.
+ */
+export function assertBaselineTarget(
+  b: Baseline,
+  target: BaselineTarget,
+  path?: string,
+): void {
+  const where = path ? `Baseline ${path}` : "The baseline";
+  const fix =
+    "Use the baseline recorded for this instance, or re-record one with --write-baseline.";
+  const name = target.instance?.trim();
+  if (b.instance !== undefined && name && b.instance.trim() !== name) {
+    throw new UsageError(
+      `${where} was recorded for instance "${b.instance}", not "${name}". ${fix}`,
+    );
+  }
+  if (b.url !== undefined && target.url?.trim()) {
+    const recorded = originOf(b.url);
+    const current = originOf(target.url);
+    if (recorded !== current) {
+      throw new UsageError(
+        `${where} was recorded against ${recorded}, not ${current}. ${fix}`,
+      );
+    }
+  }
+}
+
 /**
  * Build a baseline from every `fail` / `warn` result of a report. `error`
  * rows are left out: a failed read is not a finding a team can accept. Runner
- * rows and reserved names are left out too (CLI-2).
+ * rows and reserved names are left out too (CLI-2). `url` records the target
+ * instance's origin, so the baseline is refused elsewhere (RR-50).
  */
 export function baselineFromReport(
   report: PreflightReport,
   instance: string | undefined,
   now: Date,
+  url?: string,
 ): Baseline {
   const entries: BaselineEntry[] = [];
   for (const r of report.results) {
@@ -205,6 +268,7 @@ export function baselineFromReport(
     version: 1,
     generatedAt: now.toISOString(),
     ...(instance !== undefined ? { instance } : {}),
+    ...(url?.trim() ? { url: originOf(url) } : {}),
     entries,
   };
 }
@@ -226,12 +290,16 @@ function isExpired(entry: BaselineEntry, now: Date): boolean {
  * {@link BASELINE_ROW}. Entries matching no result are ignored (the check may
  * be skipped this run). `pass` and `error` rows, runner rows and rows under a
  * reserved name are never touched (CLI-2). Summary and `ok` are recomputed.
+ * With `target`, a baseline recorded against another instance throws
+ * {@link UsageError} first ({@link assertBaselineTarget}, RR-50).
  */
 export function applyBaseline(
   report: PreflightReport,
   b: Baseline,
   now: Date,
+  target?: BaselineTarget,
 ): PreflightReport {
+  if (target) assertBaselineTarget(b, target);
   const live = b.entries.filter((e) => !isExpired(e, now));
   const results: CheckResult[] = report.results.map((r) => {
     if (r.status === "pass" || r.status === "error") return r;

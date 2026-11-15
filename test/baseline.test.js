@@ -22,7 +22,7 @@ import {
   BASELINE_ROW,
 } from "../build/api/report.js";
 import { UsageError } from "../build/config.js";
-import { applyFailOn } from "../build/baseline.js";
+import { applyFailOn, assertBaselineTarget } from "../build/baseline.js";
 import { reportOf } from "./helpers/json-report.js";
 
 const BIN = fileURLToPath(
@@ -282,6 +282,7 @@ test("readBaseline rejects each malformed shape with UsageError", () => {
       [{ version: 2, generatedAt: "x", entries: [] }, /"version": 1/],
       [{ version: 1, entries: [] }, /generatedAt/],
       [{ version: 1, generatedAt: "x", instance: 5, entries: [] }, /instance/],
+      [{ version: 1, generatedAt: "x", url: 5, entries: [] }, /"url"/],
       [{ version: 1, generatedAt: "x", entries: {} }, /"entries" array/],
       [{ version: 1, generatedAt: "x", entries: [null] }, /entries\[0\]/],
       [baseline([entry, { ...entry, check: "" }]), /entries\[1\].*check/],
@@ -549,4 +550,123 @@ test("applyBaseline fails closed on an unrecognised status (RR-8)", () => {
   assert.deepEqual(out.summary, { pass: 1, warn: 0, fail: 1, error: 0 });
   assert.equal(out.results[1].status, "fail");
   assert.match(out.results[1].message, /unrecognised status "bogus"/);
+});
+
+test("assertBaselineTarget refuses a baseline of another instance (RR-50)", () => {
+  const b = {
+    ...baseline([]),
+    instance: "dev",
+    url: "https://a.service-now.com",
+  };
+  const usage = (re) => (err) =>
+    err instanceof UsageError && re.test(err.message);
+  assert.throws(
+    () => assertBaselineTarget(b, { instance: "prod" }, "x.json"),
+    usage(/Baseline x\.json was recorded for instance "dev", not "prod"/),
+  );
+  assert.throws(
+    () => assertBaselineTarget(b, { url: "https://b.service-now.com" }),
+    usage(/recorded against https:\/\/a\.service-now\.com, not https:\/\/b/),
+  );
+  // Same origin despite case, a trailing slash or a path.
+  assert.doesNotThrow(() =>
+    assertBaselineTarget(b, {
+      instance: "dev",
+      url: "HTTPS://A.service-now.com/now/nav/ui",
+    }),
+  );
+  // A side without the field is not compared.
+  assert.doesNotThrow(() =>
+    assertBaselineTarget(baseline([]), {
+      instance: "x",
+      url: "https://b.example",
+    }),
+  );
+  assert.doesNotThrow(() => assertBaselineTarget(b, {}));
+});
+
+test("applyBaseline with a target throws before demoting (RR-50)", () => {
+  const r = report([{ name: "acl", status: "fail", message: ACL_MSG }]);
+  const b = {
+    ...baseline([{ check: "acl", status: "fail", message: ACL_MSG }]),
+    url: "https://a.service-now.com",
+  };
+  assert.throws(
+    () => applyBaseline(r, b, NOW, { url: "https://b.service-now.com" }),
+    UsageError,
+  );
+  const same = applyBaseline(r, b, NOW, { url: "https://a.service-now.com/" });
+  assert.equal(same.results[0].status, "warn");
+});
+
+test("baselineFromReport records the instance origin and readBaseline keeps it (RR-50)", () => {
+  const r = report([{ name: "acl", status: "fail", message: ACL_MSG }]);
+  assert.equal(
+    baselineFromReport(r, undefined, NOW, "https://A.service-now.com/x").url,
+    "https://a.service-now.com",
+  );
+  assert.equal("url" in baselineFromReport(r, undefined, NOW), false);
+  assert.equal("url" in baselineFromReport(r, undefined, NOW, "  "), false);
+  const dir = tempDir();
+  try {
+    const path = join(dir, "b.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ ...baseline([]), url: "https://a.service-now.com" }),
+    );
+    assert.equal(readBaseline(path).url, "https://a.service-now.com");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: a baseline recorded against another instance URL exits 2 (RR-50)", () => {
+  const dir = tempDir();
+  try {
+    const only = ["--only", "update-set-state"];
+    const a = ["--instance", "https://a.service-now.com"];
+    const first = runCli(["run", ...a, ...only, "--write-baseline"], {
+      cwd: dir,
+    });
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(
+      readBaseline(join(dir, ".preflight", "baseline.json")).url,
+      "https://a.service-now.com",
+    );
+    const same = runCli(["run", ...a, ...only, "--baseline"], { cwd: dir });
+    assert.equal(same.status, 0, same.stderr);
+    const other = runCli(
+      ["run", "--instance", "https://b.service-now.com", ...only, "--baseline"],
+      { cwd: dir },
+    );
+    assert.equal(other.status, 2);
+    assert.match(
+      other.stderr,
+      /recorded against https:\/\/a\.service-now\.com/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: --write-baseline keeps --fail-on warn (RR-50)", () => {
+  const dir = tempDir();
+  try {
+    const args = [
+      "run",
+      "--instance",
+      "https://a.service-now.com",
+      "--only",
+      "update-set-state",
+      "--fail-on",
+      "warn",
+    ];
+    const plain = runCli(args, { cwd: dir });
+    assert.equal(plain.status, 1, plain.stderr);
+    const wrote = runCli([...args, "--write-baseline"], { cwd: dir });
+    assert.equal(wrote.status, 1, wrote.stderr);
+    assert.match(wrote.stderr, /Wrote baseline with 1 entry/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

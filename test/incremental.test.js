@@ -43,7 +43,8 @@ const check = (name, meta) => ({ name, meta, run: async () => ({}) });
 /**
  * A context over the fake instance. `totalCounts` defaults to 0 for the change
  * tables: the fake's count is per table, and 0 never flags a trim, so every
- * read is "header present, nothing hidden" unless a test overrides it.
+ * read is "header present, nothing hidden" unless a test overrides it. The
+ * update set SET always exists (RR-50 reads it before its children).
  */
 function ctxOf(tables, extra = {}, totalCounts = {}) {
   const http = createFakeSnClient({
@@ -55,6 +56,7 @@ function ctxOf(tables, extra = {}, totalCounts = {}) {
     },
     tables: {
       ...tables,
+      sys_update_set: [{ sys_id: SET }, ...(tables.sys_update_set ?? [])],
       sys_update_xml: tables.sys_update_xml?.map((row) => ({
         sys_updated_on: CHANGED_ON,
         ...row,
@@ -391,6 +393,9 @@ test("planIncremental reports when nothing is left to run", async () => {
   );
   assert.equal(none.empty, true);
   assert.match(none.row.message, /nothing ran/);
+  // RR-50 (CLI-5): a run that checks nothing cannot pass.
+  assert.equal(none.row.status, "fail");
+  assert.equal(none.row.kind, "runner");
 
   const other = await planIncremental(
     ctxOf(
@@ -410,6 +415,7 @@ test("planIncremental reports when nothing is left to run", async () => {
     other.row.message,
     /No selected check reads the tables .*sys_script/,
   );
+  assert.equal(other.row.status, "fail");
 
   const empty = await planIncremental(
     ctxOf({ sys_update_xml: [] }, { updateSetId: SET }),
@@ -418,6 +424,81 @@ test("planIncremental reports when nothing is left to run", async () => {
     { known: KNOWN, now: NOW },
   );
   assert.equal(empty.empty, false);
+});
+
+test("changedTables reports an update set or scope that does not exist (RR-50)", async () => {
+  const MISSING = "deadbeefdeadbeefdeadbeefdeadbeef";
+  const set = await changedTables(
+    ctxOf(
+      {
+        sys_update_xml: [
+          { sys_id: "1", update_set: SET, name: `sys_ui_page_${HEX}` },
+        ],
+      },
+      { updateSetId: MISSING },
+    ),
+    SINCE,
+    { known: KNOWN, now: NOW },
+  );
+  assert.deepEqual(set, { tables: [], source: "update set", missing: true });
+
+  const scope = await changedTables(
+    {
+      instanceUrl: "https://x",
+      http: createFakeSnClient({
+        tables: { sys_scope: [{ sys_id: SCOPE_ID, scope: "x_app" }] },
+        now: NOW,
+        totalCounts: { sys_metadata: 0 },
+      }),
+      scope: "x_nope",
+    },
+    SINCE,
+    { known: KNOWN, now: NOW },
+  );
+  assert.deepEqual(scope, { tables: [], source: "scope", missing: true });
+
+  // A trimmed or count-less miss is not proof: it stays untrusted, not missing.
+  for (const count of [1, undefined]) {
+    const hidden = await changedTables(
+      ctxOf(
+        { sys_update_xml: [] },
+        { updateSetId: MISSING },
+        {
+          sys_update_set: count,
+        },
+      ),
+      SINCE,
+      { known: KNOWN, now: NOW },
+    );
+    assert.equal(hidden.missing, undefined);
+    assert.ok(
+      (hidden.trimmed ?? hidden.ambiguous).includes("sys_update_set"),
+      JSON.stringify(hidden),
+    );
+  }
+});
+
+test("planIncremental runs everything and fails when the update set is missing (RR-50)", async () => {
+  const pages = [check("pages", { tables: ["sys_ui_page"] })];
+  const plan = await planIncremental(
+    ctxOf(
+      { sys_update_xml: [] },
+      { updateSetId: "deadbeefdeadbeefdeadbeefdeadbeef" },
+    ),
+    pages,
+    SINCE,
+    { known: KNOWN, now: NOW, label: "dev" },
+  );
+  assert.deepEqual(plan.skip, []);
+  assert.equal(plan.empty, false);
+  assert.equal(
+    plan.preamble,
+    "Incremental (dev): the update set deadbeefdeadbeefdeadbeefdeadbeef was not found; running all 1 checks.",
+  );
+  assert.equal(plan.row.name, INCREMENTAL_ROW);
+  assert.equal(plan.row.status, "fail");
+  assert.equal(plan.row.kind, "runner");
+  assert.match(plan.row.message, /was not found/);
 });
 
 test("planIncremental runs everything when the change read is truncated", async () => {
@@ -616,7 +697,7 @@ test("CLI --changed-since runs only the checks for the changed tables", async ()
   }
 });
 
-test("CLI --changed-since with nothing to run reports a warn row", async () => {
+test("CLI --changed-since with nothing to run fails (RR-50)", async () => {
   const instance = await startInstance({
     sys_scope: [{ sys_id: SCOPE_ID, scope: "x_app" }],
     sys_metadata: [{ sys_id: "1", sys_class_name: "sys_script" }],
@@ -639,15 +720,57 @@ test("CLI --changed-since with nothing to run reports a warn row", async () => {
       ],
       { cwd: dir, env: CREDS },
     );
-    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.status, 1, res.stderr);
     const report = reportOf(res.stdout);
     assert.deepEqual(
       report.results.map((r) => [r.name, r.status]),
-      [[INCREMENTAL_ROW, "warn"]],
+      [[INCREMENTAL_ROW, "fail"]],
     );
     assert.ok(!instance.paths.includes("sys_ui_page"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
     await instance.stop();
+  }
+});
+
+test("CLI --changed-since with an unknown update set fails, not 'no changes' (RR-50)", async () => {
+  // The instance has no sys_update_set row for the id and reports a count of 0.
+  const server = createHttpServer((req, res) => {
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "x-total-count": "0",
+    });
+    res.end(JSON.stringify({ result: [] }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address();
+  try {
+    const res = await runCliAsync(
+      [
+        "-i",
+        `http://127.0.0.1:${port}`,
+        "--only",
+        "ui-page-acl",
+        "--changed-since",
+        "1d",
+        "--json",
+      ],
+      {
+        env: { ...CREDS, SNPF_UPDATE_SET: "deadbeefdeadbeefdeadbeefdeadbeef" },
+      },
+    );
+    assert.equal(res.status, 1, res.stderr);
+    assert.match(res.stderr, /update set deadbeef\w+ was not found/);
+    const rows = reportOf(res.stdout).results;
+    assert.deepEqual(
+      rows.filter((r) => r.name === INCREMENTAL_ROW).map((r) => r.status),
+      ["fail"],
+    );
+    assert.ok(rows.some((r) => r.name === "ui-page-acl"));
+  } finally {
+    server.closeAllConnections();
+    server.close();
+    await once(server, "close");
   }
 });

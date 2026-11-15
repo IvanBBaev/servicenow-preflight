@@ -117,6 +117,7 @@ import {
 import {
   applyBaseline,
   applyFailOn,
+  assertBaselineTarget,
   baselineFromReport,
   baselinePath,
   readBaseline,
@@ -1704,6 +1705,47 @@ function assertCredentialsUnderCi(
   );
 }
 
+/**
+ * RR-50 (CLI-4): under CI, a run with no instance URL at all is a config
+ * error (exit 2). Without it a `--only` selection that leaves out
+ * `instance-url-configured` checks nothing and exits 0 — a missing or renamed
+ * CI variable must fail the gate. `--allow-no-auth` does not apply: it waives
+ * credentials, not the target.
+ */
+function assertInstanceUnderCi(
+  loaded: LoadedConfig,
+  instanceUrl: string | undefined,
+  envPrefix?: string,
+): void {
+  if (instanceUrl?.trim()) return;
+  const ci = ciVariable(loaded.env);
+  if (!ci) return;
+  const p = envPrefix?.trim().toUpperCase();
+  const names = p ? ` (or SNPF_${p}_INSTANCE)` : "";
+  throw new UsageError(
+    `No instance URL resolved and ${ci} is set. Pass --instance <url>, set SNPF_INSTANCE${names}, or set instanceUrl in the config file; a missing or renamed CI variable reads as unset.`,
+  );
+}
+
+/**
+ * RR-50 (CLI-4): a local run with no instance URL must not exit 0 when the
+ * selection (or the severity policy) leaves no `instance-url-configured`
+ * failure in the report — nothing was checked against an instance.
+ */
+function missingInstanceRow(report: PreflightReport): CheckResult | undefined {
+  const flagged = report.results.some(
+    (r) => r.name === "instance-url-configured" && r.status === "fail",
+  );
+  if (flagged) return undefined;
+  return {
+    name: "preflight:instance",
+    status: "fail",
+    kind: "runner",
+    message:
+      "No instance URL resolved; nothing was checked against an instance. Pass --instance <url>, set SNPF_INSTANCE, or set instanceUrl in the config file.",
+  };
+}
+
 async function runOneInstance(
   target: RunTarget,
   args: ParsedArgs,
@@ -1727,8 +1769,10 @@ async function runOneInstance(
     target.instanceUrl ??
     loaded.config.instanceUrl ??
     (replay ? PLACEHOLDER_ORIGIN : undefined);
-  if (!replay)
+  if (!replay) {
+    assertInstanceUnderCi(loaded, instanceUrl, target.envPrefix);
     assertCredentialsUnderCi(loaded, instanceUrl, args, target.envPrefix);
+  }
   const scope = target.scope ?? loaded.config.scope;
   const manifest = target.name
     ? await loadManifest(target.name, cwd)
@@ -1787,7 +1831,19 @@ async function runOneInstance(
       cwd,
       target.name,
     );
-    if (file) baseline = readBaseline(file);
+    if (file) {
+      baseline = readBaseline(file);
+      // RR-50 (CLI-6): a baseline recorded for another instance never applies.
+      // A replay's URL is a placeholder, so only the name is compared there.
+      assertBaselineTarget(
+        baseline,
+        {
+          ...(target.name ? { instance: target.name } : {}),
+          ...(!replay && instanceUrl ? { url: instanceUrl } : {}),
+        },
+        file,
+      );
+    }
   }
 
   const recorder =
@@ -1899,7 +1955,10 @@ async function runOneInstance(
     version: readVersion(),
     checks: raw.results.map((r) => r.name),
   });
-  const report = applyPolicy(raw, policy);
+  let report = applyPolicy(raw, policy);
+  const noInstance = !replay && !instanceUrl?.trim();
+  const instanceRow = noInstance ? missingInstanceRow(report) : undefined;
+  if (instanceRow) report = summarizeResults([...report.results, instanceRow]);
   const failOn: FailOn =
     args.failOn ?? loaded.failOn ?? loaded.config.failOn ?? "fail";
   const extra = {
@@ -1910,14 +1969,20 @@ async function runOneInstance(
   };
 
   if (writePath) {
-    const b = baselineFromReport(report, target.name, new Date());
+    const b = baselineFromReport(
+      report,
+      target.name,
+      new Date(),
+      replay ? undefined : instanceUrl,
+    );
     writeBaseline(writePath, b, { force: args.force });
     process.stderr.write(
       `Wrote baseline with ${b.entries.length} entr${
         b.entries.length === 1 ? "y" : "ies"
       } → ${writePath}\n`,
     );
-    return { report, ...extra };
+    // RR-50 (CLI-8): --fail-on still sets the exit when a baseline is written.
+    return { report: applyFailOn(report, failOn), ...extra };
   }
   // F-X-17: the threshold comes last, so baselined rows no longer count.
   const accepted = baseline

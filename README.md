@@ -177,10 +177,13 @@ suites you configure).
 or `error`ed (or, under
 `--fail-on warn`, when a row `warn`ed that no baseline accepted), when a
 selection matched zero checks (nothing verified — treated as a failure, never a
-vacuous pass); `2` for a usage
+vacuous pass), when `run` resolved no instance URL (a `preflight:instance` fail
+row, unless `instance-url-configured` already failed), or when an incremental
+run had nothing to run or could not find its update set or scope; `2` for a usage
 error — a bad invocation or config caught before any check runs (unknown option,
 invalid `--format` value, malformed `--max-age` or `--timeout`, missing required
-argument, an invalid config, registry or state manifest); `3` for a runtime
+argument, an invalid config, registry or state manifest, no instance URL under
+CI, a baseline recorded against another instance); `3` for a runtime
 error — the tool could not run (a network or HTTP failure outside the checks,
 such as during `sync`, an unreadable or unwritable file, an unexpected crash),
 so CI can retry or page instead of treating it as a blocked release; `130` when
@@ -282,7 +285,10 @@ retrieved-set previews, ATF results: `update-set-state`, `default-set-leakage`,
 `atf-run`) is always kept, so a check is never dropped for lack of metadata.
 Skipped checks are not rows (as with `--skip`); a stderr line names the kept
 count and the changed tables. With no changes, a
-`preflight:incremental` warn row says so. A change read over the row cap, an
+`preflight:incremental` warn row says so; when nothing is left to run at all,
+that row is a `fail` (exit `1`), since nothing was verified. An update set or
+scope that does not exist (or cannot be read) is not "no changes": every check
+runs and the `preflight:incremental` row fails, naming it. A change read over the row cap, an
 ACL-trimmed change read, or one that returns no rows without an
 `X-Total-Count` header runs every check, and the stderr line names the table.
 Scope mode reads `sys_metadata`, so a change that only deletes records is not
@@ -675,6 +681,7 @@ Commit `.preflight/baseline.json` and fill in `reason` (and optionally
 {
   "version": 1,
   "generatedAt": "2026-10-22T10:00:00Z",
+  "url": "https://acme.service-now.com",
   "entries": [
     {
       "check": "table-crud-acl",
@@ -704,6 +711,13 @@ Commit `.preflight/baseline.json` and fill in `reason` (and optionally
   `.preflight/baseline.<env>.json` when present, else the shared file;
   `--write-baseline` writes the per-instance file. An explicit path applies to
   every instance (`--write-baseline <path>` is refused with `--all`).
+- `--write-baseline` records the instance URL's origin as `url` (and the
+  registry name as `instance`). Applying a baseline whose `instance` or `url`
+  differs from the run's target is a usage error (exit 2), so one instance's
+  accepted findings never pass another. A baseline without the field (written
+  by an older version) is not compared.
+- `--write-baseline` keeps `--fail-on warn`: the run that records the baseline
+  still exits `1` on an unaccepted warning.
 - A missing or malformed baseline file is a usage error (exit 2). `--baseline`
   and `--write-baseline` cannot be combined. The optional path is the next
   token unless it starts with `-`; use `--baseline=<path>` before a positional
@@ -997,6 +1011,13 @@ names the variable it found:
 ```text
 No credentials resolved for https://acme.service-now.com and CI is set. Set SNPF_USER and SNPF_PASS (basic), SNPF_TOKEN (bearer), SNPF_API_KEY, SNPF_OAUTH_CLIENT_ID and SNPF_OAUTH_CLIENT_SECRET (OAuth), or SNPF_MTLS_CERT and SNPF_MTLS_KEY (mTLS); a missing or renamed CI secret reads as unset. Pass --allow-no-auth for an anonymous instance.
 ```
+
+No instance URL fails closed the same way: under CI, a `run` with no
+`--instance`, no `SNPF_INSTANCE` (an empty value counts as unset) and no
+`instanceUrl` in the config file stops with exit `2`, even with
+`--allow-no-auth`. Outside CI the run goes on, and a narrowed run (`--only`)
+that leaves out `instance-url-configured` gets a `preflight:instance` fail
+row, so a run that checked nothing against an instance never exits `0`.
 
 Half a credential set is exit `2` everywhere, CI or not, and names the missing
 variable (`SNPF_USER is set but SNPF_PASS is not.`). Pass `--allow-no-auth`

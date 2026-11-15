@@ -170,27 +170,41 @@ test("CLI: a malformed config severity value exits 2 naming the key", () => {
 test("CLI: --severity demotes a failing check; the flag wins over config", () => {
   withTempDir((dir) => {
     const only = ["--only", "instance-url-configured", "--json"];
+    const statusOf = (res) =>
+      reportOf(res.stdout).results.find(
+        (r) => r.name === "instance-url-configured",
+      ).status;
     const plain = runCli(["run", ...only], { cwd: dir });
     assert.equal(plain.status, 1);
+    assert.equal(statusOf(plain), "fail");
 
     const demoted = runCli(
       ["run", ...only, "--severity", "instance-url-configured=warn"],
       { cwd: dir },
     );
-    assert.equal(demoted.status, 0, demoted.stderr);
     const out = reportOf(demoted.stdout);
     assert.match(out.results[0].message, /\[severity: warn by policy\]$/);
+    assert.equal(out.results[0].status, "warn");
+    // RR-50 (CLI-4): demoting the no-instance failure does not pass the run.
+    assert.equal(demoted.status, 1, demoted.stderr);
+    assert.deepEqual(
+      out.results
+        .filter((r) => r.name === "preflight:instance")
+        .map((r) => [r.status, r.kind]),
+      [["fail", "runner"]],
+    );
 
     writeFileSync(
       join(dir, "preflight.config.json"),
       JSON.stringify({ severity: { "instance-url-configured": "warn" } }),
     );
-    assert.equal(runCli(["run", ...only], { cwd: dir }).status, 0);
+    assert.equal(statusOf(runCli(["run", ...only], { cwd: dir })), "warn");
     const flagWins = runCli(
       ["run", ...only, "--severity=instance-url-configured=fail"],
       { cwd: dir },
     );
     assert.equal(flagWins.status, 1);
+    assert.equal(statusOf(flagWins), "fail");
   });
 });
 
@@ -224,10 +238,11 @@ test("CLI: policy runs before the baseline is recorded", () => {
       ],
       { cwd: dir },
     );
-    assert.equal(res.status, 0, res.stderr);
-    const [entry] = readBaseline(
-      join(dir, ".preflight", "baseline.json"),
-    ).entries;
+    // RR-50 (CLI-4): with no instance the runner row keeps the exit failing.
+    assert.equal(res.status, 1, res.stderr);
+    const { entries } = readBaseline(join(dir, ".preflight", "baseline.json"));
+    assert.equal(entries.length, 1);
+    const [entry] = entries;
     assert.equal(entry.status, "warn");
     assert.match(entry.message, /\[severity: warn by policy\]$/);
   });

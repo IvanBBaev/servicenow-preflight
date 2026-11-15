@@ -636,6 +636,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A run that checks nothing, an empty incremental plan or a foreign baseline
+  fails closed** (RR-50, CLI-4, CLI-5, CLI-6, CLI-8) — `run` with no instance
+  URL (`--instance ""`, `SNPF_INSTANCE=` or a renamed CI variable) and a
+  narrowed `--only` that left out `instance-url-configured` exited `0`, as did
+  `--severity instance-url-configured=warn`. Now, under CI, no instance URL is
+  exit `2` before any check runs (even with `--allow-no-auth`); outside CI the
+  report gets a `preflight:instance` runner `fail` row unless
+  `instance-url-configured` already failed. `--changed-since` against an
+  update set or scope that does not exist read as "no changes" and passed:
+  the update set is now looked up first, a missing set or unresolved scope
+  marks the change set `missing` (`ChangeSet.missing`), every check runs and
+  the `preflight:incremental` row fails; a plan with nothing left to run is a
+  `fail` row too. A baseline recorded against one instance was applied to
+  any other: `--write-baseline` now records the instance origin as `url`, and
+  a baseline whose `instance` or `url` differs from the run's target is a
+  usage error (`assertBaselineTarget`, and `applyBaseline`'s new `target`
+  argument). `--write-baseline` returned before `--fail-on warn` was applied,
+  so the recording run exited `0` on an unaccepted warning; it now keeps the
+  exit code.
 - **Runner rows are never baselined or demoted; a missing core table is an
   error** (RR-49, CLI-1, CLI-2, CLI-3, CLI-17) — every HTTP 404 (or 400
   "Invalid table") read was a "plugin not installed" skip `warn`, so a wrong

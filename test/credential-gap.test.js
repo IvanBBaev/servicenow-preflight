@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { resolveAuthFromEnv, resolveTlsFromEnv } from "../build/config.js";
+import { reportOf } from "./helpers/json-report.js";
 
 const BIN = fileURLToPath(
   new URL("../bin/servicenow-preflight.cjs", import.meta.url),
@@ -289,4 +290,48 @@ test("CLI: a partial mTLS set exits 2", () => {
 test("CLI: --help documents --allow-no-auth", () => {
   const res = runCli(["--help"]);
   assert.match(res.stdout, /--allow-no-auth/);
+});
+
+// RR-50 (CLI-4): a run with no instance URL never exits 0 by checking nothing.
+const NARROW = ["--only", "update-set-state"];
+
+test("CLI: CI with no instance URL exits 2, even with credentials or --allow-no-auth", () => {
+  const cases = [
+    [[], { CI: "true" }],
+    [[], { CI: "true", SNPF_INSTANCE: "" }],
+    [["--allow-no-auth"], { CI: "true" }],
+    [[], { CI: "true", SNPF_USER: "u", SNPF_PASS: "p" }],
+    [[], { TF_BUILD: "True" }],
+  ];
+  for (const [flags, env] of cases) {
+    const res = runCli(["run", ...NARROW, ...flags], env);
+    const label = `${flags.join(" ")} ${JSON.stringify(env)}`;
+    assert.equal(res.status, 2, `${label}: ${res.stderr}`);
+    assert.match(res.stderr, /No instance URL resolved and \w+ is set/, label);
+    assert.match(res.stderr, /--instance <url>, set SNPF_INSTANCE/, label);
+    assert.equal(res.stdout, "", label);
+  }
+});
+
+test("CLI: locally a narrowed run with no instance URL fails with a runner row", () => {
+  const res = runCli(["run", ...NARROW, "--json"]);
+  assert.equal(res.status, 1, res.stderr);
+  const rows = reportOf(res.stdout).results;
+  const row = rows.find((r) => r.name === "preflight:instance");
+  assert.ok(row, JSON.stringify(rows));
+  assert.equal(row.status, "fail");
+  assert.equal(row.kind, "runner");
+  assert.match(row.message, /No instance URL resolved/);
+});
+
+test("CLI: a full run with no instance URL keeps the check's own failure", () => {
+  const res = runCli(["run", "--json"]);
+  assert.equal(res.status, 1, res.stderr);
+  const rows = reportOf(res.stdout).results;
+  assert.ok(
+    rows.some(
+      (r) => r.name === "instance-url-configured" && r.status === "fail",
+    ),
+  );
+  assert.ok(!rows.some((r) => r.name === "preflight:instance"));
 });

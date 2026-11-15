@@ -11,6 +11,7 @@ import {
   and,
   assertIdentifier,
   chunk,
+  eq,
   inClause,
   resolveScope,
 } from "./http/query.js";
@@ -58,6 +59,13 @@ export interface ChangeSet {
    * every check.
    */
   ambiguous?: string[];
+  /**
+   * RR-50 (CLI-5): set when the configured update set (no `sys_update_set`
+   * row, with a pre-trim count of 0) or scope (no `sys_scope` row) was not
+   * found. "No changes" would be a guess, so selection must run every check
+   * and the run must fail.
+   */
+  missing?: true;
 }
 
 /** Collects the reads of one {@link changedTables} call that are not trustworthy. */
@@ -207,11 +215,17 @@ export async function changedTables(
   };
   try {
     if (updateSetId) {
-      const sets = await batchIds(
-        ctx,
-        audit,
-        assertIdentifier(updateSetId, "updateSetId"),
-      );
+      const root = assertIdentifier(updateSetId, "updateSetId");
+      const found = await auditedQuery(ctx, audit, "sys_update_set", {
+        sysparm_query: eq("sys_id", root),
+        sysparm_fields: "sys_id",
+      });
+      // A trimmed or count-less zero read is handled as untrusted below; only a
+      // clean zero read (X-Total-Count: 0) proves the set does not exist.
+      if (found.length === 0 && !audit.trimmed.size && !audit.ambiguous.size) {
+        return { tables: [], source: "update set", missing: true };
+      }
+      const sets = await batchIds(ctx, audit, root);
       for (const ids of chunk(sets)) {
         const rows = await auditedQuery(ctx, audit, "sys_update_xml", {
           sysparm_query: and(inClause("update_set", ids), window),
@@ -226,6 +240,8 @@ export async function changedTables(
     }
     if (scope) {
       const resolved = await resolveScope(ctx, scope);
+      if (!resolved.sysId)
+        return { tables: [], source: "scope", missing: true };
       const rows = await auditedQuery(ctx, audit, "sys_metadata", {
         sysparm_query: and(resolved.clause, window),
         sysparm_fields: "sys_class_name",
@@ -288,7 +304,11 @@ export interface IncrementalPlan {
   skip: string[];
   /** One line for stderr: how many checks were kept, and why. */
   preamble: string;
-  /** A `warn` runner row to add to the report (no changes, or none matched). */
+  /**
+   * A runner row to add to the report: `warn` when there were no changes but
+   * some checks still run; `fail` when nothing is left to run, or the update
+   * set or scope to read changes from was not found (RR-50).
+   */
   row?: CheckResult;
   /**
    * True when the selection had checks but none is left to run; the report is
@@ -318,6 +338,23 @@ export async function planIncremental(
       skip: [],
       empty: false,
       preamble: `${head}: the change read hit the row cap; running all ${String(checks.length)} checks.`,
+    };
+  }
+  if (change.missing) {
+    const what =
+      change.source === "update set"
+        ? `update set ${ctx.updateSetId?.trim() ?? ""}`
+        : `scope ${ctx.scope?.trim() ?? ""}`;
+    return {
+      skip: [],
+      empty: false,
+      preamble: `${head}: the ${what} was not found; running all ${String(checks.length)} checks.`,
+      row: {
+        name: INCREMENTAL_ROW,
+        status: "fail",
+        kind: "runner",
+        message: `The ${what} to read changes from was not found (or cannot be read), so changes since ${iso} are unknown. Fix the update set (updateSetId / SNPF_UPDATE_SET) or the scope.`,
+      },
     };
   }
   if (change.trimmed || change.ambiguous) {
@@ -350,7 +387,8 @@ export async function planIncremental(
   if (change.tables.length === 0) {
     plan.row = {
       name: INCREMENTAL_ROW,
-      status: "warn",
+      // RR-50 (CLI-5): a run that checked nothing cannot pass.
+      status: plan.empty ? "fail" : "warn",
       kind: "runner",
       message: `No changes since ${iso} in the ${change.source}; ${
         selected.length > 0
@@ -361,7 +399,7 @@ export async function planIncremental(
   } else if (plan.empty) {
     plan.row = {
       name: INCREMENTAL_ROW,
-      status: "warn",
+      status: "fail",
       kind: "runner",
       message: `No selected check reads the tables changed since ${iso} (${change.tables.join(", ")}); nothing ran.`,
     };
