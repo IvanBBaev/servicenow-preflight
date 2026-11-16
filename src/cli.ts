@@ -1,5 +1,6 @@
 import {
   closeSync,
+  constants,
   existsSync,
   fchmodSync,
   openSync,
@@ -8,7 +9,14 @@ import {
   writeSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { appendOutputs, appendSummary } from "./ci/github-env.js";
 import { writeAtomic } from "./atomic-write.js";
 import { commandConfig } from "./config-command.js";
@@ -1563,17 +1571,79 @@ interface TraceSink {
 }
 
 /**
+ * Where the trace goes (CFG-1): `--trace` wins; otherwise `SNPF_TRACE` from
+ * the real environment only. A `.env` file is repository content, so its
+ * `SNPF_TRACE` is ignored (with a warning) rather than letting a pull request
+ * choose a file the run truncates. An environment path must stay inside
+ * `cwd` (symlinked directories resolved); only the explicit flag may point
+ * elsewhere. Returns an absolute path, or `undefined` for no trace.
+ */
+function tracePathFor(
+  args: ParsedArgs,
+  cwd: string,
+  loadedEnv: NodeJS.ProcessEnv,
+): string | undefined {
+  if (args.tracePath !== undefined) return resolve(cwd, args.tracePath);
+  const fromEnv = process.env.SNPF_TRACE?.trim();
+  if (!fromEnv) {
+    if (loadedEnv.SNPF_TRACE?.trim()) {
+      warnConfigOnce(
+        "SNPF_TRACE in .env is ignored; set it in the environment or pass --trace.",
+      );
+    }
+    return undefined;
+  }
+  const path = resolve(cwd, fromEnv);
+  let inside: boolean;
+  try {
+    const rel = relative(
+      realpathSync(cwd),
+      resolve(realpathSync(dirname(path)), basename(path)),
+    );
+    inside =
+      rel !== "" &&
+      rel !== ".." &&
+      !rel.startsWith(`..${sep}`) &&
+      !isAbsolute(rel);
+  } catch {
+    inside = false;
+  }
+  if (!inside) {
+    throw new UsageError(
+      `SNPF_TRACE must name a file inside the working directory (got ${fromEnv}); ` +
+        `pass --trace <path> to write a trace elsewhere.`,
+    );
+  }
+  return path;
+}
+
+/**
  * Open the trace file once: created (or truncated) with mode 0600, and
- * re-chmodded in case it already existed with a wider mode.
+ * re-chmodded in case it already existed with a wider mode. A symbolic link
+ * at the path is refused (`O_NOFOLLOW`, CFG-1), so a link shipped in the
+ * repository cannot redirect the write.
  */
 function openTrace(sink: TraceSink, path: string): Tracer {
   if (sink.tracer) return sink.tracer;
   let fd: number;
   try {
-    fd = openSync(path, "w", 0o600);
+    fd = openSync(
+      path,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_TRUNC |
+        (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
     fchmodSync(fd, 0o600);
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+    const code = (err as NodeJS.ErrnoException).code;
+    const detail =
+      code === "ELOOP"
+        ? "it is a symbolic link"
+        : err instanceof Error
+          ? err.message
+          : String(err);
     throw new UsageError(`Cannot write the trace file ${path}: ${detail}`);
   }
   sink.path = path;
@@ -1923,10 +1993,9 @@ async function runOneInstance(
       ? parseBudget(envTimeout, "SNPF_CHECK_TIMEOUT")
       : undefined);
   // F-X-5: the trace file is opened once per command, on the first instance.
-  const envTrace = loaded.env.SNPF_TRACE?.trim();
-  const tracePath = args.tracePath ?? (envTrace ? envTrace : undefined);
+  const tracePath = tracePathFor(args, cwd, loaded.env);
   if (tracePath !== undefined) {
-    openTrace(trace, resolve(cwd, tracePath)).setRun({
+    openTrace(trace, tracePath).setRun({
       version: readVersion(),
       instanceHost: instanceHost(instanceUrl),
     });

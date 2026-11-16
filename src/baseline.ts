@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { writeAtomic } from "./atomic-write.js";
 import { UsageError, type FailOn } from "./config.js";
 import { PREFLIGHT_DIR } from "./registry.js";
 import type { CheckResult, CheckStatus, PreflightReport } from "./types.js";
@@ -186,8 +187,8 @@ export function writeBaseline(
       `Baseline file ${path} already exists; pass --force to overwrite it.`,
     );
   }
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(b, null, 2)}\n`, "utf8");
+  // CLI-19: atomic, so a crash never leaves half a baseline behind.
+  writeAtomic(path, `${JSON.stringify(b, null, 2)}\n`);
 }
 
 /** The comparable form of an instance URL: its lower-case origin, else the trimmed input. */

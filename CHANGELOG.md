@@ -636,6 +636,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Repo-controlled files cannot write outside the repo or redirect
+  credentials** (RR-51) — `writeAtomic` (config, init, `--output`, baseline)
+  creates its temp file under a random name with `O_EXCL`/`O_NOFOLLOW`, so a
+  planted symlink at the old `<path>.<pid>.tmp` name is never written through;
+  an existing file keeps its mode (a `0600` file stays `0600`) and the data is
+  fsynced before the rename (CFG-2, CFG-7). `writeBaseline` now writes
+  atomically too (CLI-19). The trace file is opened with `O_NOFOLLOW` (a
+  symlink is exit `2`); `SNPF_TRACE` is read from the real environment only
+  (`.env` is ignored with a warning) and must stay inside the working
+  directory (CFG-1). A `.env` key in the instance namespace
+  (`SNPF_PROD_INSTANCE`, `SNPF_PROD_OAUTH_TOKEN_URL`, `SNPF_PROD_PROXY`, …) no
+  longer outranks the same key set unprefixed in the real environment (CFG-3).
+  The registry rejects a `url` that does not parse, carries `user:password@`
+  or is cleartext `http://` on a non-loopback host, and any credential-looking
+  key; `sync` refuses an instance url with userinfo before it reads anything,
+  so it never lands in the committed manifest (ST-21). Error messages never
+  echo the credential.
+
 - **A run that checks nothing, an empty incremental plan or a foreign baseline
   fails closed** (RR-50, CLI-4, CLI-5, CLI-6, CLI-8) — `run` with no instance
   URL (`--instance ""`, `SNPF_INSTANCE=` or a renamed CI variable) and a

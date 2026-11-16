@@ -12,6 +12,7 @@ import {
   rmSync,
   existsSync,
   statSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -845,10 +846,11 @@ test("CLI run --all --format sarif emits a single SARIF log with a run per insta
 test("CLI run --all renders a pretty block per instance and a passing rollup", () => {
   // No --format: this is the default human-readable path an operator actually
   // sees. `staging` is deliberately http:// so the run also exercises the warn
-  // icon and proves a warning does NOT fail the aggregate gate.
+  // icon and proves a warning does NOT fail the aggregate gate. It is a
+  // loopback host: the registry refuses cleartext http elsewhere (ST-21).
   const dir = projectWithRegistry({
     dev: { url: "https://dev12345.service-now.com" },
-    staging: { url: "http://staging12345.service-now.com" },
+    staging: { url: "http://localhost:9" },
   });
   try {
     const res = runCli(["run", "--all", "--only", "instance-url-configured"], {
@@ -1719,6 +1721,73 @@ test("CLI reads SNPF_TRACE and narrows an existing trace file to 0600", async ()
     assert.equal(JSON.parse(first).type, "run.start");
   } finally {
     instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI ignores SNPF_TRACE from .env and warns (CFG-1)", async () => {
+  const instance = await startEmptyInstance();
+  const dir = projectDir("snpf-trace-dotenv-");
+  writeFileSync(join(dir, ".env"), "SNPF_TRACE=dotenv.ndjson\n");
+  try {
+    const res = await runCliAsync(
+      ["run", "--instance", instance.url, "--json"],
+      {
+        cwd: dir,
+        env: CREDS,
+      },
+    );
+    assert.ok(!existsSync(join(dir, "dotenv.ndjson")));
+    assert.match(res.stderr, /SNPF_TRACE in \.env is ignored/);
+  } finally {
+    instance.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI refuses an environment SNPF_TRACE outside the working directory (CFG-1)", () => {
+  const dir = projectDir("snpf-trace-outside-");
+  const outside = mkdtempSync(join(tmpdir(), "snpf-trace-victim-"));
+  try {
+    for (const value of [join(outside, "t.ndjson"), "../t.ndjson"]) {
+      const res = runCli(["run", "--instance", "https://x.service-now.com"], {
+        cwd: dir,
+        env: { ...CREDS, SNPF_TRACE: value },
+      });
+      assert.equal(res.status, 2, res.stderr);
+      assert.match(res.stderr, /SNPF_TRACE must name a file inside/);
+    }
+    assert.deepEqual(readdirSync(outside), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("CLI never writes a trace through a symbolic link (CFG-1)", () => {
+  const dir = projectDir("snpf-trace-link-");
+  try {
+    const victim = join(dir, "victim.txt");
+    writeFileSync(victim, "untouched\n");
+    symlinkSync(victim, join(dir, "t.ndjson"));
+    for (const extra of [
+      { args: ["--trace", "t.ndjson"] },
+      { env: { SNPF_TRACE: "t.ndjson" } },
+    ]) {
+      const res = runCli(
+        [
+          "run",
+          "--instance",
+          "https://x.service-now.com",
+          ...(extra.args ?? []),
+        ],
+        { cwd: dir, env: { ...CREDS, ...extra.env } },
+      );
+      assert.equal(res.status, 2, res.stderr);
+      assert.match(res.stderr, /symbolic link/);
+      assert.equal(readFileSync(victim, "utf8"), "untouched\n");
+    }
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

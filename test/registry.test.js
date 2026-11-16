@@ -347,6 +347,91 @@ test("loadRegistry throws when an instance is missing its url", async () => {
   }
 });
 
+// --- ST-21: no credentials or cleartext urls in the committed registry -----
+
+async function rejectsInstance(def, pattern) {
+  const dir = tempDir();
+  try {
+    writeRegistry(dir, { version: 1, instances: { dev: def } });
+    await assert.rejects(loadRegistry(dir), (err) => {
+      assert.ok(err instanceof UsageError, String(err));
+      assert.match(err.message, pattern);
+      assert.doesNotMatch(err.message, /S3cret|hunter2/);
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("loadRegistry rejects a url with user:password@ and never echoes it (ST-21)", async () => {
+  await rejectsInstance(
+    { url: "https://admin:S3cret@dev12345.service-now.com" },
+    /instance "dev": url carries credentials/,
+  );
+  await rejectsInstance(
+    { url: "https://admin@dev12345.service-now.com" },
+    /url carries credentials/,
+  );
+});
+
+test("loadRegistry rejects a cleartext http url on a non-loopback host (ST-21)", async () => {
+  await rejectsInstance(
+    { url: "http://dev12345.service-now.com" },
+    /url must use https:\/\/ \(got http:\)/,
+  );
+  await rejectsInstance({ url: "ftp://dev12345.service-now.com" }, /https/);
+});
+
+test("loadRegistry rejects an unparseable url (ST-21)", async () => {
+  await rejectsInstance({ url: "not a url" }, /url is not a valid URL/);
+  await rejectsInstance(
+    { url: "dev12345.service-now.com" },
+    /url is not a valid URL/,
+  );
+});
+
+test("loadRegistry rejects credential-looking keys and never echoes their value (ST-21)", async () => {
+  for (const key of ["password", "token", "clientSecret", "user", "apiKey"]) {
+    await rejectsInstance(
+      { url: "https://dev12345.service-now.com", [key]: "hunter2" },
+      new RegExp(`key "${key}" looks like a credential`),
+    );
+  }
+  const dir = tempDir();
+  try {
+    writeRegistry(dir, {
+      version: 1,
+      password: "hunter2",
+      instances: { dev: { url: "https://dev12345.service-now.com" } },
+    });
+    await assert.rejects(
+      loadRegistry(dir),
+      /key "password" looks like a credential/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadRegistry still accepts https and loopback http urls (ST-21 no false positive)", async () => {
+  const dir = tempDir();
+  try {
+    writeRegistry(dir, {
+      version: 1,
+      instances: {
+        dev: { url: "https://dev12345.service-now.com", envPrefix: "DEV" },
+        local: { url: "http://127.0.0.1:8080" },
+        named: { url: "http://localhost:9" },
+      },
+    });
+    const reg = await loadRegistry(dir);
+    assert.deepEqual(instanceNames(reg), ["dev", "local", "named"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("loadRegistry rejects an unsupported version (CC-37)", async () => {
   const dir = tempDir();
   try {

@@ -308,7 +308,10 @@ requests sent, `429` retries and read-cache hits per check, plus a total row.
 With `--format json` the same numbers go into each run's `timings` object
 instead, and stderr stays quiet.
 
-`--trace <path>` (or `SNPF_TRACE`) writes one JSON event per line:
+`--trace <path>` (or `SNPF_TRACE`) writes one JSON event per line. A symbolic
+link at the trace path is refused (exit `2`). `SNPF_TRACE` is read from the real
+environment only — a `SNPF_TRACE` in `.env` is ignored with a warning — and must
+name a file inside the working directory; pass `--trace` to write elsewhere:
 
 | Event         | Fields                                                                                                                       |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -539,9 +542,10 @@ a JWT key/assertion is, else `oauth-password` if user + pass are, else
 `oauth-client`) → `SNPF_TOKEN` → `SNPF_API_KEY` → `SNPF_USER` + `SNPF_PASS` → no
 header auth. Mutual TLS (`SNPF_MTLS_*`) resolves **independently** and attaches on
 top of whatever is selected. A `.env` file in the working directory is loaded
-automatically, but **real environment variables always win** over it. Its
-values are read into a private copy and are never exported into
-`process.env`. With no
+automatically, but **real environment variables always win** over it — also
+across an instance namespace: a `.env` `SNPF_PROD_PROXY` is dropped when the
+real environment sets `SNPF_PROXY`. Its values are read into a private copy and
+are never exported into `process.env`. With no
 credentials at all, `connectivity-auth` reports `warn` (not `fail`) and
 network-dependent checks degrade to advisory warnings.
 
@@ -733,7 +737,10 @@ guarantee is that a promote never drops validated coverage. That is what the
 
 The **registry** (`.preflight/instances.json`) is a committed description of the
 instances a project targets and the order they promote in — it holds **no
-credentials**. Each instance needs a `url`; `promotesTo` chains the pipeline (or
+credentials**: a credential-looking key (`password`, `token`, `clientSecret`,
+`user`, …) is rejected, and so is a `url` that does not parse, carries
+`user:password@`, or is not `https://` (cleartext `http://` only for a loopback
+host). Each instance needs a `url`; `promotesTo` chains the pipeline (or
 `null` for the terminal stage) and is enforced by `drift`; the optional `scope`,
 `stage` and `envPrefix` refine per-instance behaviour. A `promotesTo` that names
 an undeclared instance, the instance itself, or closes a cycle is rejected when

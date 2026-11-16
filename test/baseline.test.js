@@ -8,6 +8,10 @@ import {
   readFileSync,
   existsSync,
   rmSync,
+  chmodSync,
+  lstatSync,
+  statSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -266,6 +270,30 @@ test("writeBaseline round-trips and refuses to overwrite without force", () => {
     );
     writeBaseline(path, { ...b, entries: [] }, { force: true });
     assert.deepEqual(readBaseline(path).entries, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeBaseline --force writes atomically: keeps 0600, never writes through a symlink (CLI-19)", () => {
+  const dir = tempDir();
+  try {
+    const b = { version: 1, generatedAt: "2026-10-22T00:00:00Z", entries: [] };
+    const path = join(dir, "baseline.json");
+    writeFileSync(path, "{}\n");
+    chmodSync(path, 0o600);
+    writeBaseline(path, b, { force: true });
+    assert.deepEqual(readBaseline(path), b);
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+
+    const victim = join(dir, "victim.txt");
+    writeFileSync(victim, "untouched\n");
+    const linked = join(dir, "linked.json");
+    symlinkSync(victim, linked);
+    writeBaseline(linked, b, { force: true });
+    assert.equal(readFileSync(victim, "utf8"), "untouched\n");
+    assert.ok(lstatSync(linked).isFile());
+    assert.deepEqual(readBaseline(linked), b);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

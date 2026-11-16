@@ -118,6 +118,28 @@ function tracked(client) {
 // pullManifest — the raw instance snapshot (no merge).
 // ---------------------------------------------------------------------------
 
+test("pullManifest refuses a url with userinfo before any read and never echoes it (ST-21)", async () => {
+  const client = seededClient();
+  for (const fn of [
+    () =>
+      pullManifest(client, "dev", "https://admin:S3cret@dev.service-now.com"),
+    () =>
+      syncManifest(
+        client,
+        "dev",
+        "https://admin:S3cret@dev.service-now.com",
+        undefined,
+      ),
+  ]) {
+    await assert.rejects(fn(), (err) => {
+      assert.equal(err.name, "UsageError");
+      assert.match(err.message, /carries credentials/);
+      assert.doesNotMatch(err.message, /S3cret/);
+      return true;
+    });
+  }
+});
+
 test("pullManifest snapshots scoped tests with logical ids, sysIds and active flags", async () => {
   const client = seededClient();
   const m = await pullManifest(client, "dev", "https://dev.service-now.com", {

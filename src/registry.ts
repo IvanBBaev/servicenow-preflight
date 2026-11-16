@@ -271,6 +271,65 @@ function assertPromotionGraph(
   }
 }
 
+/** Same rule as the HTTP client's loopback exception for cleartext `http:`. */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "[::1]" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+  );
+}
+
+/**
+ * ST-21: a registry url must parse, use `https:` (cleartext `http:` only for a
+ * loopback host, the local-fake case) and carry no `user:pass@` userinfo. The
+ * value is never repeated in the error, as it may hold a password.
+ */
+function assertRegistryUrl(url: string, where: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    throw new UsageError(
+      `${where}: url is not a valid URL; use https://<host>.`,
+    );
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new UsageError(
+      `${where}: url carries credentials (user:password@); remove them and ` +
+        `supply credentials through SNPF_* environment variables.`,
+    );
+  }
+  if (parsed.protocol === "https:") return;
+  if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)) return;
+  throw new UsageError(
+    `${where}: url must use https:// (got ${parsed.protocol.slice(0, -1)}:); ` +
+      `cleartext http is accepted only for a loopback host.`,
+  );
+}
+
+/**
+ * Keys that look like credentials (`password`, `token`, `clientSecret`, …).
+ * The registry never holds credentials; such a key is a mistake that would
+ * commit a secret, so it is refused rather than ignored (ST-21).
+ */
+const SECRET_KEY =
+  /pass|pwd|secret|token|credential|api[-_]?key|private[-_]?key|^auth|^user(name)?$|^login$|cookie|bearer/i;
+
+function assertNoSecretKeys(def: object, where: string): void {
+  for (const key of Object.keys(def)) {
+    if (SECRET_KEY.test(key)) {
+      throw new UsageError(
+        `${where}: key "${key}" looks like a credential; the registry is ` +
+          `committed and must not hold secrets. Use SNPF_* environment ` +
+          `variables instead.`,
+      );
+    }
+  }
+}
+
 /** Minimal structural validation; throws a clear error on a malformed file. */
 function assertRegistry(value: unknown, path: string): InstanceRegistry {
   const reg = value as Partial<InstanceRegistry> | null;
@@ -302,6 +361,7 @@ function assertRegistry(value: unknown, path: string): InstanceRegistry {
   // The registry-level default scope is interpolated into encoded queries for
   // every instance that does not override it — validate it once (SR-1).
   assertSafeScope(reg.scope, `Registry ${path}`);
+  assertNoSecretKeys(reg, `Registry ${path}`);
   const lowered = new Map<string, string>();
   for (const [name, def] of Object.entries(reg.instances)) {
     // CC-14/CC-16: names build manifest paths — reject separators/`..`/whitespace.
@@ -323,6 +383,10 @@ function assertRegistry(value: unknown, path: string): InstanceRegistry {
         `Registry ${path}: instance "${name}" is missing a url.`,
       );
     }
+    // ST-21: the registry is committed and its url is copied into the
+    // committed state manifest, so it must never carry credentials.
+    assertNoSecretKeys(def, `Registry ${path}: instance "${name}"`);
+    assertRegistryUrl(def.url, `Registry ${path}: instance "${name}"`);
     // A per-instance scope override is interpolated into encoded queries too
     // (SR-1) — reject operator characters at load time.
     assertSafeScope(def.scope, `Registry ${path}: instance "${name}"`);

@@ -1483,3 +1483,55 @@ test("F-X-8: sources report env for env-only fields and omit unset ones", async 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- RR-51 (CFG-3): the real environment beats a namespaced .env key --------
+
+test("a namespaced .env key never outranks the real unprefixed env (CFG-3)", async () => {
+  const dir = tempDir();
+  writeFileSync(
+    join(dir, ".env"),
+    [
+      "SNPF_PROD_OAUTH_TOKEN_URL=https://evil.example/tok",
+      "SNPF_PROD_PROXY=http://evil.example:8080",
+      "SNPF_PROD_INSTANCE=https://evil.example",
+      "",
+    ].join("\n"),
+  );
+  try {
+    const loaded = await loadConfig(dir, {
+      envPrefix: "PROD",
+      env: {
+        SNPF_OAUTH_CLIENT_ID: "fake-id",
+        SNPF_OAUTH_CLIENT_SECRET: "fake-secret",
+        SNPF_OAUTH_TOKEN_URL: "https://real.example/oauth_token.do",
+        SNPF_PROXY: "http://corp-proxy:3128",
+        SNPF_INSTANCE: "https://real.example",
+      },
+    });
+    assert.equal(loaded.auth.tokenUrl, "https://real.example/oauth_token.do");
+    assert.equal(loaded.config.proxy, "http://corp-proxy:3128");
+    assert.equal(loaded.config.instanceUrl, "https://real.example");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a namespaced .env key still applies when the real env leaves it unset (CFG-3)", async () => {
+  const dir = tempDir();
+  writeFileSync(
+    join(dir, ".env"),
+    "SNPF_PROD_INSTANCE=https://prod.service-now.com\n",
+  );
+  try {
+    const unset = await loadConfig(dir, { envPrefix: "PROD", env: {} });
+    assert.equal(unset.config.instanceUrl, "https://prod.service-now.com");
+    // An empty real value does not count as set.
+    const empty = await loadConfig(dir, {
+      envPrefix: "PROD",
+      env: { SNPF_INSTANCE: "" },
+    });
+    assert.equal(empty.config.instanceUrl, "https://prod.service-now.com");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

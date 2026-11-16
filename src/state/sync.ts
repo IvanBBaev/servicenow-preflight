@@ -1,6 +1,7 @@
 import type { SnClient, TableQueryResult } from "../http/client.js";
 import { and, eq, inClause, scopeFilterClause } from "../http/query.js";
 import { triageZeroRead } from "../checks/cert-common.js";
+import { UsageError } from "../config.js";
 import {
   emptyManifest,
   logicalId,
@@ -599,6 +600,26 @@ async function pullApps(
 }
 
 /**
+ * ST-21: the url is written into the committed manifest, so one carrying
+ * `user:pass@` is refused before anything is read (the value is not echoed).
+ */
+function assertNoUserinfo(url: string | undefined): void {
+  if (url === undefined) return;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new UsageError(
+      `The instance url for the state manifest carries credentials ` +
+        `(user:password@); the manifest is committed, so remove them.`,
+    );
+  }
+}
+
+/**
  * Pull a fresh snapshot. Shared by {@link pullManifest} and
  * {@link syncManifest}. A trimmed ATF read or an unreadable `active` column
  * throws {@link IncompleteSnapshotError} before anything is merged (RR-47).
@@ -609,6 +630,7 @@ async function pullSnapshot(
   url: string | undefined,
   opts: SyncOptions,
 ): Promise<StateManifest> {
+  assertNoUserinfo(url);
   const tests = await pullTests(client, opts);
   if (opts.withLastRun) await attachLastRuns(client, tests, opts);
 

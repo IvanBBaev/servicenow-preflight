@@ -559,14 +559,29 @@ export async function readDotEnv(cwd: string): Promise<Record<string, string>> {
 /**
  * Overlay `.env` values onto a COPY of `env`, only for keys `env` leaves
  * unset, so real environment variables always win. Neither input is written.
+ *
+ * CFG-3: the rule holds per logical key, not per spelling. With an instance
+ * `prefix` (e.g. `PROD`), a `.env` `SNPF_PROD_INSTANCE` would otherwise beat a
+ * real `SNPF_INSTANCE` through {@link namespacedEnv} and send the real
+ * credentials to the URL a repository file chose. A `.env` key in the
+ * instance namespace is therefore dropped when the real environment sets the
+ * same logical key unprefixed (to a non-empty value).
  */
 function mergeDotEnv(
   env: NodeJS.ProcessEnv,
   dotenv: Record<string, string>,
+  prefix?: string,
 ): NodeJS.ProcessEnv {
+  const p = prefix?.trim().toUpperCase();
+  const ns = p ? `SNPF_${p}_` : undefined;
   const merged: NodeJS.ProcessEnv = { ...env };
   for (const [key, value] of Object.entries(dotenv)) {
-    if (merged[key] === undefined) merged[key] = value;
+    if (merged[key] !== undefined) continue;
+    if (ns !== undefined && key.startsWith(ns)) {
+      const real = env[`SNPF_${key.slice(ns.length)}`];
+      if (typeof real === "string" && real.length > 0) continue;
+    }
+    merged[key] = value;
   }
   return merged;
 }
@@ -1210,7 +1225,7 @@ export async function loadConfig(
   const useDotEnv = opts.dotenv ?? !opts.skipDotEnv;
   const baseEnv = opts.env ?? process.env;
   const fullEnv = useDotEnv
-    ? mergeDotEnv(baseEnv, await readDotEnv(cwd))
+    ? mergeDotEnv(baseEnv, await readDotEnv(cwd), opts.envPrefix)
     : { ...baseEnv };
 
   const configPath = findConfigFile(cwd, opts.configPath);
