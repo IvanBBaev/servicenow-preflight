@@ -199,7 +199,7 @@
       "type": "object",
       "properties": {
         "ok": {
-          "description": "`true` when no check returned a `fail` or `error` status.",
+          "description": "From `runPreflight`: `true` when no check returned a `fail` or `error` status (the raw verdict). In a `Verdict.report` (`evaluate`, `runGate`, the CLI's JSON) it is the gate decision instead, after policy, baseline and `failOn`, so it can be `false` with no `fail` row under `failOn: \"warn\"`.",
           "type": "boolean"
         },
         "results": {

@@ -117,15 +117,13 @@ import {
   type CheckDescriptor,
 } from "./catalogue.js";
 import {
-  applyPolicy,
   parseSeverityFlag,
   policySkips,
   validatePolicy,
   type SeverityPolicy,
 } from "./policy.js";
+import { evaluate } from "./core/evaluate.js";
 import {
-  applyBaseline,
-  applyFailOn,
   assertBaselineTarget,
   baselineFromReport,
   baselinePath,
@@ -1812,9 +1810,23 @@ function assertInstanceUnderCi(
  * selection (or the severity policy) leaves no `instance-url-configured`
  * failure in the report — nothing was checked against an instance.
  */
-function missingInstanceRow(report: PreflightReport): CheckResult | undefined {
-  const flagged = report.results.some(
-    (r) => r.name === "instance-url-configured" && r.status === "fail",
+function missingInstanceRow(
+  raw: PreflightReport,
+  policy: SeverityPolicy,
+): CheckResult | undefined {
+  // Read on the raw report, so decide as the policy will: a fail the policy
+  // demotes to warn no longer flags the gap, a warn it promotes to fail does.
+  const level = Object.prototype.hasOwnProperty.call(
+    policy,
+    "instance-url-configured",
+  )
+    ? policy["instance-url-configured"]
+    : undefined;
+  const flagged = raw.results.some(
+    (r) =>
+      r.name === "instance-url-configured" &&
+      ((r.status === "fail" && level !== "warn") ||
+        (r.status === "warn" && level === "fail")),
   );
   if (flagged) return undefined;
   return {
@@ -1994,8 +2006,8 @@ async function runOneInstance(
     }
   }
 
-  // Post-processing order: runPreflight → policy → baseline. Policy expresses
-  // intent; the baseline accepts the resulting state.
+  // Post-processing order: runPreflight → evaluate (policy → baseline →
+  // failOn). Policy expresses intent; the baseline accepts the resulting state.
   const envTimeout = loaded.env.SNPF_CHECK_TIMEOUT;
   const timeoutMs =
     args.timeoutMs ??
@@ -2034,10 +2046,9 @@ async function runOneInstance(
     version: readVersion(),
     checks: raw.results.map((r) => r.name),
   });
-  let report = applyPolicy(raw, policy);
   const noInstance = !replay && !instanceUrl?.trim();
-  const instanceRow = noInstance ? missingInstanceRow(report) : undefined;
-  if (instanceRow) report = summarizeResults([...report.results, instanceRow]);
+  const instanceRow = noInstance ? missingInstanceRow(raw, policy) : undefined;
+  if (instanceRow) raw = summarizeResults([...raw.results, instanceRow]);
   const failOn: FailOn =
     args.failOn ?? loaded.failOn ?? loaded.config.failOn ?? "fail";
   const extra = {
@@ -2047,7 +2058,10 @@ async function runOneInstance(
     failOn,
   };
 
+  // RR-12: the verdict is the library's evaluate(); a runner row is never
+  // touched by the policy or the baseline, so the instance row can join first.
   if (writePath) {
+    const { report } = evaluate(raw, { policy, failOn });
     const b = baselineFromReport(
       report,
       target.name,
@@ -2061,13 +2075,16 @@ async function runOneInstance(
       } → ${writePath}\n`,
     );
     // RR-50 (CLI-8): --fail-on still sets the exit when a baseline is written.
-    return { report: applyFailOn(report, failOn), ...extra };
+    return { report, ...extra };
   }
   // F-X-17: the threshold comes last, so baselined rows no longer count.
-  const accepted = baseline
-    ? applyBaseline(report, baseline, new Date())
-    : report;
-  return { report: applyFailOn(accepted, failOn), ...extra };
+  const { report } = evaluate(raw, {
+    policy,
+    ...(baseline ? { baseline } : {}),
+    failOn,
+    now: new Date(),
+  });
+  return { report, ...extra };
 }
 
 /**

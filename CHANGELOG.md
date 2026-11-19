@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Library gate verdict** (RR-12) — `runGate(ctx, checks?, opts?)` returns
+  the `Verdict` the CLI acts on (`ok`, `report`, `failOn`, `baselined`,
+  `expired`), applying severity policy, baseline and `failOn` in the CLI's
+  order; `evaluate(report, opts?)` is the same pure pipeline over an existing
+  report. The CLI now decides every run through `evaluate`, and a parity test
+  pins the CLI's JSON envelope and exit code to `runGate` across policy ×
+  baseline × `failOn`. `runPreflight`'s `report.ok` stays the raw verdict.
+  New exports: `runGate`, `evaluate`, `Verdict` (root); `evaluate`,
+  `EvaluateOptions`, `Verdict`, `FailOn`, `BaselineTarget`
+  (`servicenow-preflight/report`).
+
 - **Config precedence warning and opt-in** (F-X-8) — when `instanceUrl`,
   `updateSetId`, `proxy` or `noProxy` is set in both the config file and the
   environment (`SNPF_INSTANCE`, `SNPF_UPDATE_SET`, `SNPF_PROXY`,

@@ -1,7 +1,7 @@
 /**
  * `servicenow-preflight/report` — report envelope and output formats (JSON,
- * JUnit, SARIF, Markdown, GitHub annotations), the findings baseline, and run
- * tracing / timings.
+ * JUnit, SARIF, Markdown, GitHub annotations), the findings baseline, the
+ * gate verdict (`evaluate`), and run tracing / timings.
  *
  * @packageDocumentation
  */
@@ -39,7 +39,14 @@ export {
   BASELINE_ROW,
   type Baseline,
   type BaselineEntry,
+  type BaselineTarget,
 } from "../baseline.js";
+export {
+  evaluate,
+  type EvaluateOptions,
+  type Verdict,
+} from "../core/evaluate.js";
+export type { FailOn } from "../config.js";
 export {
   collectTimings,
   createTracer,

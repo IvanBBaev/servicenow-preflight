@@ -4,9 +4,11 @@
  * The entry point is {@link runPreflight}, which runs a list of {@link Check}s
  * against a target instance ({@link PreflightContext}) and returns an aggregate
  * {@link PreflightReport}. Call it with no explicit list to run
- * {@link defaultChecks}, or pass your own {@link CheckSelection}. The bundled
- * CLI (`servicenow-preflight` / `snpf`) is a thin wrapper over this same
- * function.
+ * {@link defaultChecks}, or pass your own {@link CheckSelection}. Its
+ * `report.ok` is the raw check verdict. The gate a CI job acts on (severity
+ * policy, baseline, `failOn`) is {@link runGate}, or {@link evaluate} over a
+ * report you already have; the bundled CLI (`servicenow-preflight` / `snpf`)
+ * decides every run through the same {@link evaluate}.
  *
  * The package root is a curated core: running checks, building a client,
  * loading config and writing a check. Everything else lives on a subpath —
@@ -15,6 +17,7 @@
  *
  * @packageDocumentation
  */
+import { assertBaselineTarget } from "./baseline.js";
 import { defaultChecks } from "./checks/index.js";
 import { isMissingTable, missingTableResult } from "./checks/cert-common.js";
 import { sanitizeFindings } from "./findings.js";
@@ -27,6 +30,13 @@ import {
   withSignal,
 } from "./http/client.js";
 import { cachedScope, linkRunContext } from "./http/query.js";
+import {
+  assertFailOn,
+  evaluate,
+  type EvaluateOptions,
+  type Verdict,
+} from "./core/evaluate.js";
+import { policySkips, validatePolicy } from "./policy.js";
 import { MissingTables, missingMessage } from "./runner/missing-tables.js";
 import { concurrencyProblem, runPool } from "./runner/pool.js";
 import { summarizeResults } from "./summary.js";
@@ -78,6 +88,7 @@ export {
   type CheckDescriptor,
 } from "./catalogue.js";
 export { defaultChecks } from "./checks/index.js";
+export { evaluate, type Verdict } from "./core/evaluate.js";
 
 /**
  * Apply a {@link CheckSelection} to a list of checks: keep only those named in
@@ -527,4 +538,51 @@ export async function runPreflight(
     summary: { ...report.summary },
   });
   return report;
+}
+
+/**
+ * Run the checks and decide the gate in one call (RR-12):
+ * `evaluate(await runPreflight(...))`, with the steps the CLI takes around
+ * them. Before anything runs, the policy's names are validated against
+ * `checks` (`UsageError` on an unknown name), `failOn` is validated
+ * (`RangeError`), and a baseline recorded for another instance is refused
+ * (`UsageError`; the target defaults to `ctx.instance` and, outside a replay,
+ * `ctx.instanceUrl`). Policy `"off"` entries join `ctx.select.skip`, so those
+ * checks do not run. The returned {@link Verdict} carries the same `ok` and
+ * report the CLI prints for the same inputs.
+ */
+export async function runGate(
+  ctx: PreflightContext,
+  checks: Check[] = defaultChecks,
+  opts: RunPreflightOptions & EvaluateOptions = {},
+): Promise<Verdict> {
+  const policy = opts.policy ?? {};
+  validatePolicy(
+    policy,
+    checks.map((c) => c.name),
+  );
+  assertFailOn(opts.failOn ?? "fail");
+  if (opts.baseline) {
+    assertBaselineTarget(
+      opts.baseline,
+      opts.baselineTarget ?? {
+        ...(ctx.instance !== undefined ? { instance: ctx.instance } : {}),
+        ...(!ctx.replay && ctx.instanceUrl ? { url: ctx.instanceUrl } : {}),
+      },
+    );
+  }
+  const skip = ctx.select?.skip ?? [];
+  const off = policySkips(policy).filter((n) => !skip.includes(n));
+  const runCtx: PreflightContext =
+    off.length > 0
+      ? { ...ctx, select: { ...ctx.select, skip: [...skip, ...off] } }
+      : ctx;
+  const raw = await runPreflight(runCtx, checks, opts);
+  // The target was checked up front, before any network call.
+  return evaluate(raw, {
+    policy,
+    baseline: opts.baseline,
+    failOn: opts.failOn,
+    now: opts.now,
+  });
 }

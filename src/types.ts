@@ -235,7 +235,13 @@ export interface Check {
 
 /** Aggregate outcome of a full preflight run. */
 export interface PreflightReport {
-  /** `true` when no check returned a `fail` or `error` status. */
+  /**
+   * From `runPreflight`: `true` when no check returned a `fail` or `error`
+   * status (the raw verdict). In a `Verdict.report` (`evaluate`, `runGate`,
+   * the CLI's JSON) it is the gate decision instead, after policy, baseline
+   * and `failOn`, so it can be `false` with no `fail` row under
+   * `failOn: "warn"`.
+   */
   ok: boolean;
   results: CheckResult[];
   summary: Record<CheckStatus, number>;

@@ -1068,7 +1068,7 @@ credentials when the instance or the checks change.
 ## Library API
 
 The package root ([src/index.ts](src/index.ts)) is a curated core: `runPreflight`,
-`selectChecks`, `defaultChecks`, `createSnClient` / `withSignal` and the
+`runGate` / `evaluate`, `selectChecks`, `defaultChecks`, `createSnClient` / `withSignal` and the
 `SnError` family, `makeFinding` / `findingId`, `loadConfig` / `UsageError`,
 `describeChecks` / `findCheck`, and the types a check or a caller needs
 (`Check`, `CheckResult`, `PreflightContext`, `PreflightReport`, `SnClient`, …).
@@ -1121,6 +1121,38 @@ console.log(report.ok, report.summary); // e.g. false { pass: 2, warn: 4, fail: 
   `ctx.http` bound to that signal, so a check that only uses `ctx.http` is
   cancelled with no extra code; pass `ctx.signal` on to any other async work.
   A cut-short check and every check not yet started become `fail` rows.
+  Its `report.ok` is the raw verdict (no `fail` / `error` row); severity
+  policy, baseline and `--fail-on` are not applied.
+- **`runGate(ctx, checks?, opts?)`** → `Promise<Verdict>`: the decision the
+  CLI makes. `opts` is `RunPreflightOptions` plus `policy`, `baseline` (a
+  loaded object, e.g. from `readBaseline`), `baselineTarget`, `failOn`
+  (`"fail"` default or `"warn"`) and `now`. Policy `"off"` entries are skipped,
+  not run. Inputs are validated before any check runs: an unknown policy name
+  or a baseline recorded for another instance throws `UsageError`, an invalid
+  `failOn` throws `RangeError`. The `Verdict` carries `ok`, `report` (after
+  policy and baseline; its `ok` equals the verdict), `failOn`, `baselined`
+  and `expired`.
+- **`evaluate(report, opts?)`** → `Verdict`: the same pipeline over a report
+  you already have (severity policy, then baseline, then the `failOn`
+  threshold). Pure: no file system, network or `process` access.
+  `EvaluateOptions` is on `servicenow-preflight/report`.
+
+  ```ts
+  import { runGate } from "servicenow-preflight";
+  import { readBaseline } from "servicenow-preflight/report";
+
+  const verdict = await runGate(
+    { instanceUrl, http, scope: "x_acme_app" },
+    undefined,
+    {
+      policy: { "cors-rules": "warn" },
+      baseline: readBaseline(".preflight-baseline.json"),
+      failOn: "warn",
+    },
+  );
+  process.exitCode = verdict.ok ? 0 : 1;
+  ```
+
 - **`withSignal(client, signal)`** → an `SnClient` that passes `signal` (merged
   with any per-call one) to every call. `table().get/query/queryWithMeta`,
   `cicd.runTestSuite` and `request` all accept `{ signal }` (`SnCallOptions`);
