@@ -57,6 +57,7 @@ import {
   type CicdTestSuiteResult,
   type SnClient,
   type SnRawResponse,
+  type SnRequestOptions,
   type SnTable,
   type TableQueryResult,
 } from "./client.js";
@@ -147,6 +148,9 @@ export interface FakeFixtures {
   /**
    * Canned raw responses for `request(method, path)`, keyed by `"METHOD path"`
    * (e.g. `"GET /api/now/table/x"`). Used when a check calls `request` directly.
+   * Without a canned entry, `GET /api/now/table/<name>` is served from
+   * `tables` like `table(name).query` (paging, `fail`), with an
+   * `x-total-count` header from `totalCounts` or the matching row count.
    */
   requests?: Record<string, SnRawResponse>;
   /**
@@ -165,7 +169,8 @@ export interface FakeFixtures {
    * `TableQueryResult.totalCount` (the real client reads this from the
    * `X-Total-Count` header). Set it above the number of visible rows to simulate
    * ACL security-trimming, so a test can assert a check reacts to the
-   * `securityTrimmed` signal. Ignored by the array-returning `query`.
+   * `securityTrimmed` signal. Also the `x-total-count` header of a raw
+   * `GET /api/now/table/<name>` request. Ignored by the array-returning `query`.
    */
   totalCounts?: Record<string, number>;
   /**
@@ -431,7 +436,31 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
     return globalFail?.table?.[name] ?? globalFail;
   }
 
-  return {
+  /**
+   * A raw Table API list read, as the real client answers it: the page the
+   * query selects plus the pre-trim `x-total-count`.
+   */
+  async function rawTableList(
+    name: string,
+    query: Record<string, string> | undefined,
+  ): Promise<SnRawResponse> {
+    const result = await client.table(name).query(query);
+    const all = await client
+      .table(name)
+      .query(
+        query?.sysparm_query === undefined
+          ? undefined
+          : { sysparm_query: query.sysparm_query },
+      );
+    const total = fixtures.totalCounts?.[name] ?? all.length;
+    return {
+      status: 200,
+      body: { result },
+      headers: { "x-total-count": String(total) },
+    };
+  }
+
+  const client: SnClient = {
     table(name: string): SnTable {
       const refs = referenceFieldsFor(name, fixtures.referenceFields);
       const tablePath = `/api/now/table/${name}`;
@@ -561,11 +590,22 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
         return Promise.resolve(canned[suiteSysId] ?? { status: "not_found" });
       },
     },
-    request(method: string, path: string): Promise<SnRawResponse> {
+    request(
+      method: string,
+      path: string,
+      opts?: SnRequestOptions,
+    ): Promise<SnRawResponse> {
       maybeThrow(globalFail, `request ${method} ${path}`, path);
       const key = `${method} ${path}`;
       const canned = fixtures.requests?.[key];
-      return Promise.resolve(canned ?? { status: 404, body: null });
+      if (canned) return Promise.resolve(canned);
+      const table =
+        method === "GET" ? /^\/api\/now\/table\/([^/?]+)$/.exec(path) : null;
+      if (table?.[1] !== undefined) {
+        return rawTableList(decodeURIComponent(table[1]), opts?.query);
+      }
+      return Promise.resolve({ status: 404, body: null });
     },
   };
+  return client;
 }

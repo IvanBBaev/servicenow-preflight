@@ -23,6 +23,8 @@ const INSTANCE = "https://dev12345.service-now.com";
 const BASIC = { kind: "basic", user: "ci.user", pass: "secret" };
 const USER_ID = "0123456789abcdef0123456789abcdef";
 const ROLE_ROW = "fedcba9876543210fedcba9876543210";
+/** Before restrictionOn()'s enforcement date, so the tests do not age. */
+const NOW = new Date("2026-06-01T12:00:00Z");
 
 const BIN = fileURLToPath(
   new URL("../bin/servicenow-preflight.cjs", import.meta.url),
@@ -89,6 +91,7 @@ async function doctor({
   instanceUrl = INSTANCE,
   selected = defaultChecks,
   nodeVersion,
+  now = NOW,
 }) {
   const rec = recording(http);
   const checks = doctorChecks({
@@ -97,6 +100,7 @@ async function doctor({
     instanceSource: "flag",
     lookup: async () => ({ address: "127.0.0.1", family: 4 }),
     env: {},
+    now: () => now,
     ...(nodeVersion ? { nodeVersion } : {}),
   });
   const report = await runPreflight(
@@ -175,7 +179,7 @@ test("doctor treats a Web Service Access Only account as exempt", async () => {
   assert.equal(row("doctor-account").status, "pass");
 });
 
-test("doctor warns (never fails) when sys_properties cannot be read", async () => {
+test("doctor warns on the basic-auth row when sys_properties cannot be read", async () => {
   const http = createFakeSnClient({
     tables: { sys_user: account(), sys_user_has_role: [] },
     fail: denied("sys_properties"),
@@ -185,7 +189,9 @@ test("doctor warns (never fails) when sys_properties cannot be read", async () =
   assert.equal(basic.status, "warn");
   assert.match(basic.message, /Cannot read sys_properties \(HTTP 403\)/);
   assert.match(basic.message, /ask an admin to confirm/);
-  assert.equal(report.ok, true);
+  // RR-53: a selected check needs sys_properties, so the access row fails.
+  assert.equal(row("doctor-table-access").status, "fail");
+  assert.equal(report.ok, false);
 });
 
 test("doctor warns with 'ask an admin' when the role table cannot be read", async () => {
@@ -199,16 +205,17 @@ test("doctor warns with 'ask an admin' when the role table cannot be read", asyn
   assert.equal(row("doctor-basic-auth").status, "warn");
 });
 
-test("doctor names the checks a refused table affects", async () => {
+test("doctor fails table access and names the checks a refused table affects", async () => {
   const http = createFakeSnClient({
     tables: { sys_user: account() },
     fail: denied("sys_update_set"),
   });
   const readers = tablesOf(defaultChecks).get("sys_update_set");
   assert.ok(readers && readers.length > 0);
-  const { row } = await doctor({ http });
+  const { row, report } = await doctor({ http });
   const access = row("doctor-table-access");
-  assert.equal(access.status, "warn");
+  assert.equal(access.status, "fail");
+  assert.equal(report.ok, false);
   assert.match(access.message, /HTTP 403/);
   assert.ok(
     access.message.includes(`sys_update_set (${readers.join(", ")})`),

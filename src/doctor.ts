@@ -6,9 +6,17 @@
  *
  * Every row is an ordinary {@link Check}, so the report goes through
  * `runPreflight` and every reporter works unchanged. Rows only read: Table API
- * GETs with `sysparm_limit=1` and one GET on the CI/CD API. A row that cannot
- * read what it needs warns ("cannot read …; ask an admin to confirm"); it
- * never fails on a permission it merely could not inspect.
+ * GETs (the access probe asks for one row and reads `X-Total-Count`) and one
+ * GET on the CI/CD API.
+ *
+ * Rows fail closed (RR-53): the table-access row fails when a table a selected
+ * check requires answers HTTP 403, or when read ACLs trim it (no row returned
+ * although the instance counts matching rows); a probe it cannot interpret
+ * (no rows and no count, a non-2xx, a malformed body) warns. The basic-auth
+ * row warns unless it sees both restriction switches, and treats an
+ * enforcement date that has passed as enforced. The CI/CD row passes only on an
+ * expected status carrying a ServiceNow JSON body. A row that cannot read the
+ * account's exemptions warns ("ask an admin to confirm").
  *
  * Unverified against a live instance (card Codability a–d): the basic-auth
  * property names, `sys_user.web_service_access_only`, a non-admin reading
@@ -23,6 +31,7 @@ import {
   SnError,
   SnHttpError,
   type SnClient,
+  type SnRawResponse,
 } from "./http/client.js";
 import { ProxyConfigError, redactedProxy, resolveProxy } from "./http/proxy.js";
 import { and, assertSysId, eq, eqUserName, inClause } from "./http/query.js";
@@ -54,6 +63,8 @@ export interface DoctorOptions {
   lookup?: (host: string) => Promise<unknown>;
   /** Node version (default `process.versions.node`); for tests. */
   nodeVersion?: string;
+  /** The current instant, for the enforcement-date comparison; for tests. */
+  now?: () => Date;
 }
 
 /** The role that exempts a basic-auth account from the API restriction. */
@@ -111,7 +122,7 @@ export function doctorChecks(opts: DoctorOptions): Check[] {
     configRow(opts),
     reachabilityRow(opts),
     authRow,
-    basicAuthRow(accountFacts),
+    basicAuthRow(accountFacts, opts.now ?? (() => new Date())),
     accountRow(accountFacts),
     tableAccessRow(opts.selected),
     cicdRow(opts.selected),
@@ -393,8 +404,21 @@ function exemption(facts: AccountFacts): string | undefined {
 
 const GRANT_EXEMPTION = `Grant the account the ${BASIC_AUTH_ROLE} role or mark it Web Service Access Only, or ${OAUTH_ADVICE.charAt(0).toLowerCase()}${OAUTH_ADVICE.slice(1)}`;
 
+/**
+ * Whether a `YYYY-MM-DD…` enforcement date is today or earlier (UTC). An
+ * unparseable date proves nothing and counts as not passed.
+ */
+function enforcementPassed(date: string | undefined, now: Date): boolean {
+  const day = /^(\d{4}-\d{2}-\d{2})(?:$|[ T])/.exec(date ?? "")?.[1];
+  if (day === undefined || Number.isNaN(Date.parse(`${day}T00:00:00Z`))) {
+    return false;
+  }
+  return day <= now.toISOString().slice(0, 10);
+}
+
 function basicAuthRow(
   accountFacts: (ctx: PreflightContext) => Promise<AccountFacts>,
+  now: () => Date,
 ): Check {
   return {
     name: NAMES.basicAuth,
@@ -415,14 +439,16 @@ function basicAuthRow(
         );
       }
       let props: Map<string, string>;
+      let trimmed: boolean;
       try {
-        const rows = await ctx.http.table("sys_properties").query({
+        const res = await ctx.http.table("sys_properties").queryWithMeta({
           sysparm_query: inClause("name", Object.values(BASIC_AUTH_PROPERTIES)),
           sysparm_fields: "name,value",
         });
         props = new Map(
-          rows.map((r) => [refValue(r.name), refValue(r.value)] as const),
+          res.rows.map((r) => [refValue(r.name), refValue(r.value)] as const),
         );
+        trimmed = res.securityTrimmed;
       } catch (err) {
         return row(
           NAMES.basicAuth,
@@ -433,7 +459,26 @@ function basicAuthRow(
       const active = truthy(props.get(BASIC_AUTH_PROPERTIES.active));
       const enforce = truthy(props.get(BASIC_AUTH_PROPERTIES.enforce));
       const date = props.get(BASIC_AUTH_PROPERTIES.enforcementDate)?.trim();
-      if (!active && !enforce) {
+      // RR-53 (ST-16): a passed enforcement date means enforced, whatever the
+      // switches say.
+      const passed = enforcementPassed(date, now());
+      if (!active && !enforce && !passed) {
+        // "Not active" needs proof: both switches visible and the read not
+        // security-trimmed. An absent row is unknown, not false.
+        const hidden = [
+          BASIC_AUTH_PROPERTIES.active,
+          BASIC_AUTH_PROPERTIES.enforce,
+        ].filter((name) => !props.has(name));
+        if (trimmed || hidden.length > 0) {
+          const why = trimmed
+            ? "read ACLs hide some sys_properties rows from this account"
+            : `the account sees no ${hidden.join(" or ")} property`;
+          return row(
+            NAMES.basicAuth,
+            "warn",
+            `Cannot confirm whether the basic-auth API restriction is active: ${why}; ask an admin to confirm whether it is active and when it is enforced. ${GRANT_EXEMPTION}`,
+          );
+        }
         return row(
           NAMES.basicAuth,
           "pass",
@@ -442,7 +487,9 @@ function basicAuthRow(
       }
       const state = enforce
         ? "is enforced"
-        : `is active and will be enforced${date ? ` on ${date}` : ""}`;
+        : passed
+          ? `is enforced (the enforcement date ${date ?? ""} has passed)`
+          : `is active and will be enforced${date ? ` on ${date}` : ""}`;
       const facts = await accountFacts(ctx);
       const exempt = exemption(facts);
       if (exempt) {
@@ -518,11 +565,34 @@ function accountRow(
   };
 }
 
+/**
+ * The tables some selected check needs: a table every reader lists in
+ * `meta.optionalTables` (a plugin table that may be absent) is not one.
+ */
+function requiredTables(selected: readonly Check[]): Set<string> {
+  const required = new Set<string>();
+  for (const check of selected) {
+    const optional = new Set(check.meta?.optionalTables ?? []);
+    for (const table of check.meta?.tables ?? []) {
+      if (!optional.has(table)) required.add(table);
+    }
+  }
+  return required;
+}
+
+/** What one access probe proved about a table. */
+type Probe =
+  | { kind: "readable" }
+  | { kind: "denied" }
+  | { kind: "trimmed"; total: number }
+  | { kind: "unconfirmed" }
+  | { kind: "unreadable"; why: string };
+
 function tableAccessRow(selected: readonly Check[]): Check {
   return {
     name: NAMES.tables,
     description: "The account can read every table the selected checks query.",
-    meta: { severity: "advisory", requires: "ALWAYS" },
+    meta: { severity: "blocker", requires: "ALWAYS" },
     async run(ctx) {
       if (!ctx.instanceUrl) return noInstance(NAMES.tables);
       const tables = tablesOf(selected);
@@ -533,23 +603,40 @@ function tableAccessRow(selected: readonly Check[]): Check {
           "The selected checks declare no tables to read.",
         );
       }
+      const required = requiredTables(selected);
       const denied: string[] = [];
+      const deniedOptional: string[] = [];
+      const trimmed: string[] = [];
+      const unconfirmed: string[] = [];
       const unreadable: string[] = [];
       await Promise.all(
         [...tables].map(async ([table, readers]) => {
-          try {
-            await probeTable(ctx.http, table);
-          } catch (err) {
-            const line = `${table} (${readers.join(", ")})`;
-            if (forbidden(err)) {
-              denied.push(line);
-            } else {
-              unreadable.push(`${line}: ${reason(err)}`);
-            }
+          const probe = await probeTable(ctx.http, table);
+          const line = `${table} (${readers.join(", ")})`;
+          switch (probe.kind) {
+            case "readable":
+              return;
+            case "denied":
+              (required.has(table) ? denied : deniedOptional).push(line);
+              return;
+            case "trimmed":
+              trimmed.push(
+                `${table} (${readers.join(", ")}; ${probe.total} matching rows)`,
+              );
+              return;
+            case "unconfirmed":
+              unconfirmed.push(line);
+              return;
+            case "unreadable":
+              unreadable.push(`${line}: ${probe.why}`);
+              return;
           }
         }),
       );
-      if (denied.length === 0 && unreadable.length === 0) {
+      const fails = denied.length + trimmed.length;
+      const warns =
+        deniedOptional.length + unconfirmed.length + unreadable.length;
+      if (fails === 0 && warns === 0) {
         return row(
           NAMES.tables,
           "pass",
@@ -559,7 +646,22 @@ function tableAccessRow(selected: readonly Check[]): Check {
       const parts: string[] = [];
       if (denied.length > 0) {
         parts.push(
-          `Read access refused (HTTP 403) to ${denied.sort().join("; ")} — those checks will fail or warn.`,
+          `Read access refused (HTTP 403) to ${denied.sort().join("; ")} — those checks cannot verify anything.`,
+        );
+      }
+      if (trimmed.length > 0) {
+        parts.push(
+          `Read ACLs trim ${trimmed.sort().join("; ")}: the instance counts matching rows but returned none, so those checks would judge a trimmed view.`,
+        );
+      }
+      if (deniedOptional.length > 0) {
+        parts.push(
+          `Read access refused (HTTP 403) to the optional tables ${deniedOptional.sort().join("; ")}.`,
+        );
+      }
+      if (unconfirmed.length > 0) {
+        parts.push(
+          `${unconfirmed.sort().join("; ")} returned no rows and no X-Total-Count, so read access cannot be confirmed (empty, or trimmed by read ACLs); ask an admin to confirm.`,
         );
       }
       if (unreadable.length > 0) {
@@ -568,15 +670,58 @@ function tableAccessRow(selected: readonly Check[]): Check {
       parts.push(
         "Grant the CI account read access (a role whose read ACLs cover these tables), or skip the affected checks with --skip.",
       );
-      return row(NAMES.tables, "warn", parts.join(" "));
+      return row(NAMES.tables, fails > 0 ? "fail" : "warn", parts.join(" "));
     },
   };
 }
 
-async function probeTable(http: SnClient, table: string): Promise<void> {
-  await http
-    .table(table)
-    .query({ sysparm_limit: "1", sysparm_fields: "sys_id" });
+/**
+ * Read one row of `table` and its `X-Total-Count` (the match count before
+ * read ACLs trim the rows). A raw request, because the table client's
+ * count-aware read refuses a row limit.
+ */
+async function probeTable(http: SnClient, table: string): Promise<Probe> {
+  let res: SnRawResponse;
+  try {
+    res = await http.request(
+      "GET",
+      `/api/now/table/${encodeURIComponent(table)}`,
+      { query: { sysparm_limit: "1", sysparm_fields: "sys_id" } },
+    );
+  } catch (err) {
+    return forbidden(err)
+      ? { kind: "denied" }
+      : { kind: "unreadable", why: reason(err) };
+  }
+  if (res.status === 403) return { kind: "denied" };
+  if (res.status < 200 || res.status >= 300) {
+    return { kind: "unreadable", why: `HTTP ${res.status}` };
+  }
+  const body = res.body;
+  const result =
+    body !== null && typeof body === "object" && "result" in body
+      ? body.result
+      : undefined;
+  if (!Array.isArray(result)) {
+    return {
+      kind: "unreadable",
+      why: `HTTP ${res.status} without a result array`,
+    };
+  }
+  if (result.length > 0) return { kind: "readable" };
+  const total = totalCount(res.headers);
+  if (total === undefined) return { kind: "unconfirmed" };
+  return total === 0 ? { kind: "readable" } : { kind: "trimmed", total };
+}
+
+/** `X-Total-Count` as a count, or `undefined` when absent or not digits. */
+function totalCount(
+  headers: Record<string, string> | undefined,
+): number | undefined {
+  const raw = headers?.["x-total-count"]?.trim();
+  if (raw === undefined || !/^\d+$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) ? n : undefined;
 }
 
 function cicdRow(selected: readonly Check[]): Check {
@@ -609,11 +754,13 @@ function cicdRow(selected: readonly Check[]): Check {
           `The CI/CD API refused the account (HTTP ${status}). ${plugin}`,
         );
       }
-      if (status >= 500 || (status === 404 && !cicdAnswered(body))) {
+      // RR-53 (ST-17): only an expected status with a ServiceNow JSON body is
+      // an answer; a login page, a redirect, a 429 or a gateway error is not.
+      if (!CICD_ANSWER_STATUSES.has(status) || !cicdAnswered(body)) {
         return row(
           NAMES.cicd,
           "warn",
-          `The CI/CD API did not answer (HTTP ${status}); it may not be installed. ${plugin}`,
+          `The CI/CD API did not answer (HTTP ${status}${isJsonObject(body) ? "" : ", no ServiceNow JSON body"}); it may not be installed, or something else answered. ${plugin}`,
         );
       }
       return row(
@@ -625,14 +772,25 @@ function cicdRow(selected: readonly Check[]): Check {
   };
 }
 
+/** The statuses the CI/CD API can give an unknown progress id. */
+const CICD_ANSWER_STATUSES = new Set([200, 400, 404]);
+
+function isJsonObject(body: unknown): body is Record<string, unknown> {
+  return body !== null && typeof body === "object" && !Array.isArray(body);
+}
+
 /**
- * A 404 from the CI/CD API itself (unknown progress id) carries a JSON error;
- * a 404 for a missing API says the URI is not a resource.
+ * The CI/CD API itself answers with a ServiceNow envelope: a `result`, or an
+ * `error` object. A 404 for a missing API says the URI is not a resource.
  */
 function cicdAnswered(body: unknown): boolean {
-  if (!body || typeof body !== "object") return false;
-  const text = JSON.stringify(body);
-  return !/does not represent any resource/i.test(text);
+  if (!isJsonObject(body)) return false;
+  const error = body.error;
+  const envelope =
+    "result" in body ||
+    (error !== null && typeof error === "object" && !Array.isArray(error));
+  if (!envelope) return false;
+  return !/does not represent any resource/i.test(JSON.stringify(body));
 }
 
 function runtimeRow(opts: DoctorOptions): Check {

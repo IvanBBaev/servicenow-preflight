@@ -664,6 +664,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`doctor` fails closed** (RR-53, ST-6, ST-15, ST-16, ST-17) — a doctor run
+  that proved nothing no longer passed. `doctor-table-access` is now a
+  blocker: it fails when a table a selected check requires answers HTTP 403
+  (a table every reader lists in `meta.optionalTables` still only warns) or
+  when read ACLs trim it (the one-row probe returns nothing although
+  `X-Total-Count` counts matching rows); no rows with no count, a non-2xx or
+  a body without a `result` array warns. The probe is a raw
+  `GET /api/now/table/<name>?sysparm_limit=1` that reads `X-Total-Count`.
+  `doctor-basic-auth` reports "not active" only when it sees both the
+  `…restriction.active` and `…restriction.enforce` properties set to false
+  in an untrimmed read, warns otherwise, and treats an enforcement date of
+  today or earlier as enforced. `doctor-cicd` passes only on HTTP 200, 400
+  or 404 carrying a ServiceNow `result` / `error` JSON envelope; a login
+  page, a redirect, a 429 or any other status warns. New `DoctorOptions.now`
+  (the clock for the date comparison). Fake: `request("GET",
+"/api/now/table/<name>", { query })` without a canned `requests` entry is
+  now served from `tables` (paging and `fail` as for `table().query`) with
+  an `x-total-count` header from `totalCounts` or the matching row count,
+  instead of a bare 404. Behaviour change: `doctor` exits `1` on a refused or
+  trimmed required table, where it warned before.
+
 - **Script scans no longer go blind** (RR-67, DEL-3, DEL-4, DEL-8, DEL-9,
   DEL-12) — the shared script-scan lexer could lose sync and blank every
   later line, so a secret or banned call below the trigger passed unseen. A
