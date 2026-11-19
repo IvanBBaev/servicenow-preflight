@@ -216,41 +216,41 @@ network either.
 
 Both `--flag value` and `--flag=value` forms are accepted.
 
-| Flag                          | Description                                                                                                                   |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--instance <url>`      | Target instance URL (single-instance, no registry); a bare host gets `https://`.                                              |
-| `-e`, `--env <name>`          | Select a registry instance (same as positional).                                                                              |
-| `--all`                       | `run`: sweep every instance in the registry.                                                                                  |
-| `--registry <path>`           | Registry file (default `.preflight/instances.json`); see below.                                                               |
-| `--config <path>`             | Config file (default: auto-discovered).                                                                                       |
-| `--only` / `--skip <csv>`     | Run only / skip these checks (comma-separated names).                                                                         |
-| `--changed-since <dur\|date>` | `run`: only the checks whose tables changed since `<dur>` ago (`24h`, `7d`) or an ISO date; see below.                        |
-| `--with-last-run`             | `sync`: also pull each test's most recent result.                                                                             |
-| `--allow-empty`               | `sync`: commit an empty snapshot over a non-empty manifest (never a proven security-trimmed one).                             |
-| `--allow-no-auth`             | `run`/`sync`: under CI, accept a run with no credentials (anonymous instance); without it that is exit `2`.                   |
-| `--allow-insecure-http`       | Accept an `http://` instance URL with credentials set (or `SNPF_ALLOW_INSECURE_HTTP=1`).                                      |
-| `--max-age <dur>`             | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                                |
-| `--allow-stage-skip`          | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                                   |
-| `--format <fmt>`              | `pretty` (default), `json`, `junit`, `sarif`, `markdown`, `github` (`list`/`explain`: `pretty` or `json`).                    |
-| `--json` / `-h`               | Shorthand for `--format json` / show help.                                                                                    |
-| `--baseline [path]`           | `run`: demote findings recorded in a baseline file to warnings (see [Baseline](#baseline-accepted-findings)).                 |
-| `--write-baseline [path]`     | `run`: record every non-pass result as a new baseline file.                                                                   |
-| `--force`                     | `--write-baseline`: overwrite an existing baseline file.                                                                      |
-| `--severity <check>=<level>`  | `run`: report a check's non-pass result as `fail` or `warn`, or skip it (`off`). Repeatable; wins over the config `severity`. |
-| `--timeout <dur>`             | `run`: fail any check still running after `<dur>` (e.g. `30s`, `500ms`) and move on. Default: none; `SNPF_CHECK_TIMEOUT`.     |
-| `--run-timeout <dur>`         | `run`: stop the run (per instance) after `<dur>`; unfinished checks become `fail` rows.                                       |
-| `--fail-on <level>`           | `run`: `fail` (default) exits `1` on a `fail` row only; `warn` also on a `warn` row no baseline accepted. `SNPF_FAIL_ON`.     |
-| `--output <format>=<path>`    | `run`: also write the report as `<format>` to `<path>` (atomic; folders created). Repeatable.                                 |
-| `--no-summary`                | `run`: inside GitHub Actions, skip the step summary. `SNPF_SUMMARY=0`.                                                        |
-| `--concurrency <n>`           | `run`: most checks running at once, 1–32. Default `4`; `SNPF_CONCURRENCY`.                                                    |
-| `--max-inflight <n>`          | Most requests in flight at once, 1–64. Default `4`; `SNPF_MAX_INFLIGHT`.                                                      |
-| `--rps <n>`                   | Requests started per second, 0.5–100. Default: unlimited; `SNPF_RPS`.                                                         |
-| `--no-cache`                  | `run`: fetch every read, instead of sharing identical reads between checks. Also `SNPF_CACHE=0`.                              |
-| `--timings`                   | `run`: print per-check time, requests, retries and cache hits to stderr; with `--format json`, a `timings` object per run.    |
-| `--trace <path>`              | `run`: write a local NDJSON trace of the run (mode `0600`). Also `SNPF_TRACE`. See [Diagnostics](#diagnostics).               |
-| `--record <dir>`              | `run`: also save every response, redacted, to `<dir>` for a later `--replay`. See [Record and replay](#record-and-replay).    |
-| `--record-raw`                | `run`: with `--record`, keep user and group names and emails (secrets are still redacted).                                    |
-| `--replay <dir>`              | `run`: answer every request from a recording — no network, no credentials.                                                    |
+| Flag                          | Description                                                                                                                                                                      |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--instance <url>`      | Target instance URL (single-instance, no registry); a bare host gets `https://`.                                                                                                 |
+| `-e`, `--env <name>`          | Select a registry instance (same as positional).                                                                                                                                 |
+| `--all`                       | `run`: sweep every instance in the registry.                                                                                                                                     |
+| `--registry <path>`           | Registry file (default `.preflight/instances.json`); see below.                                                                                                                  |
+| `--config <path>`             | Config file (default: auto-discovered).                                                                                                                                          |
+| `--only` / `--skip <csv>`     | Run only / skip these checks (comma-separated names).                                                                                                                            |
+| `--changed-since <dur\|date>` | `run`: only the checks whose tables changed since `<dur>` ago (`24h`, `7d`) or an ISO date; see below.                                                                           |
+| `--with-last-run`             | `sync`: also pull each test's most recent result.                                                                                                                                |
+| `--allow-empty`               | `sync`: commit an empty snapshot over a non-empty manifest (never a proven security-trimmed one).                                                                                |
+| `--allow-no-auth`             | `run`/`sync`: under CI, accept a run with no credentials (anonymous instance); without it that is exit `2`.                                                                      |
+| `--allow-insecure-http`       | Accept an `http://` instance URL with credentials set (or `SNPF_ALLOW_INSECURE_HTTP=1`).                                                                                         |
+| `--max-age <dur>`             | `drift`: fail if a compared manifest is older than `<dur>` (e.g. `7d`, `24h`).                                                                                                   |
+| `--allow-stage-skip`          | `drift`: warn instead of fail when `<dst>` skips a declared pipeline stage.                                                                                                      |
+| `--format <fmt>`              | `pretty` (default), `json`, `junit`, `sarif`, `markdown`, `github` (`list`/`explain`: `pretty` or `json`).                                                                       |
+| `--json` / `-h`               | Shorthand for `--format json` / show help.                                                                                                                                       |
+| `--baseline [path]`           | `run`: demote findings recorded in a baseline file to warnings (see [Baseline](#baseline-accepted-findings)).                                                                    |
+| `--write-baseline [path]`     | `run`: record every non-pass result as a new baseline file.                                                                                                                      |
+| `--force`                     | `--write-baseline`: overwrite an existing baseline file.                                                                                                                         |
+| `--severity <check>=<level>`  | `run`: report a check's non-pass result as `fail` or `warn`, or skip it (`off`). Repeatable; wins over the config `severity`.                                                    |
+| `--timeout <dur>`             | `run`: fail any check still running after `<dur>` (e.g. `30s`, `500ms`) and move on. Default: none; `SNPF_CHECK_TIMEOUT`.                                                        |
+| `--run-timeout <dur>`         | `run`: stop the run (per instance) after `<dur>`; unfinished checks become `fail` rows.                                                                                          |
+| `--fail-on <level>`           | `run`/`drift`: `fail` (default) exits `1` on a `fail` row only; `warn` also on a `warn` row no baseline accepted. `run` also reads `SNPF_FAIL_ON`; `sync` refuses it (exit `2`). |
+| `--output <format>=<path>`    | `run`/`drift`: also write the report as `<format>` to `<path>` (atomic; folders created). Repeatable; `sync` refuses it (exit `2`).                                              |
+| `--no-summary`                | `run`: inside GitHub Actions, skip the step summary. `SNPF_SUMMARY=0`.                                                                                                           |
+| `--concurrency <n>`           | `run`: most checks running at once, 1–32. Default `4`; `SNPF_CONCURRENCY`.                                                                                                       |
+| `--max-inflight <n>`          | Most requests in flight at once, 1–64. Default `4`; `SNPF_MAX_INFLIGHT`.                                                                                                         |
+| `--rps <n>`                   | Requests started per second, 0.5–100. Default: unlimited; `SNPF_RPS`.                                                                                                            |
+| `--no-cache`                  | `run`: fetch every read, instead of sharing identical reads between checks. Also `SNPF_CACHE=0`.                                                                                 |
+| `--timings`                   | `run`: print per-check time, requests, retries and cache hits to stderr; with `--format json`, a `timings` object per run.                                                       |
+| `--trace <path>`              | `run`: write a local NDJSON trace of the run (mode `0600`). Also `SNPF_TRACE`. See [Diagnostics](#diagnostics).                                                                  |
+| `--record <dir>`              | `run`: also save every response, redacted, to `<dir>` for a later `--replay`. See [Record and replay](#record-and-replay).                                                       |
+| `--record-raw`                | `run`: with `--record`, keep user and group names and emails (secrets are still redacted).                                                                                       |
+| `--replay <dir>`              | `run`: answer every request from a recording — no network, no credentials.                                                                                                       |
 
 Durations take a unit: `ms`, `s`, `m`, `h`, `d` or `w`. `--timeout` and
 `--run-timeout` accept at most `2147483647ms` (about 24.8 days). A timed-out check is
@@ -816,6 +816,12 @@ except each instance looks up a **namespaced** variable first: an instance whose
   `--allow-stage-skip`, for a deliberate hotfix); a target **upstream** of the
   source or on **no shared chain** always fails. With no registry, an
   undeclared instance, or no `promotesTo` anywhere, it is an advisory `warn`.
+  `drift` honours `--fail-on warn` (an extra downstream test then blocks) and
+  `--output <format>=<path>`, like `run`; the threshold comes from the flag
+  only. `sync` writes a manifest, not a report, so it refuses both flags
+  (exit `2`) instead of ignoring them. From code, `runDrift(opts)`
+  (`servicenow-preflight/state`) returns the same report `drift` prints; pass
+  it to `evaluate(report, { failOn })` for the exit decision.
 
 ```bash
 snpf sync staging                 # commit the two manifests, then gate the promote
@@ -1079,7 +1085,7 @@ Everything else is on a subpath ([src/api/](src/api/)):
 | `servicenow-preflight/checks`   | Every bundled check, the registry, findings helpers (`MAX_FINDINGS`, `capFindings`), the catalogue, `doctorChecks`, severity policy, incremental selection (`planIncremental`, …). |
 | `servicenow-preflight/http`     | The client, its errors and types, encoded-query helpers (`eq`, `inClause`, `resolveScope`, …), `resolveAuthFromEnv` / `resolveTlsFromEnv`.                                         |
 | `servicenow-preflight/report`   | `toEnvelope` / `formatJson`, JUnit, SARIF, Markdown, GitHub annotations, the baseline, tracing and timings.                                                                        |
-| `servicenow-preflight/state`    | Instance registry, state manifests, `syncManifest`, drift and promotion checks.                                                                                                    |
+| `servicenow-preflight/state`    | Instance registry, state manifests, `syncManifest`, `runDrift` (the `drift` gate as a report), drift and promotion checks.                                                         |
 | `servicenow-preflight/testing`  | `createFakeSnClient`, `createReplayClient`, `readRecording`.                                                                                                                       |
 | `servicenow-preflight/internal` | Helpers shared by the CLI and the checks. **No semver promise.**                                                                                                                   |
 

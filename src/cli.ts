@@ -96,13 +96,7 @@ import {
 import { loadManifest, writeManifest } from "./state/manifest.js";
 import { syncManifest } from "./state/sync.js";
 import { errorTail, summarizeResults } from "./summary.js";
-import {
-  DEFAULT_STALE_WARN_MS,
-  stalenessResults,
-  versionParityResults,
-  promotionOrderResult,
-  type DriftManifestRef,
-} from "./state/drift.js";
+import { runDrift } from "./state/gate.js";
 import { defaultChecks, testDrift } from "./checks/index.js";
 import {
   declaredTables,
@@ -219,9 +213,12 @@ interface ParsedArgs {
   recordRaw: boolean;
   /** `run`: `--replay <dir>` — answer every request from a recording. */
   replayDir?: string;
-  /** `run`: `--fail-on fail|warn`; `SNPF_FAIL_ON` / config `failOn` otherwise. */
+  /**
+   * `run` / `drift`: `--fail-on fail|warn`; for `run` also `SNPF_FAIL_ON` /
+   * config `failOn`.
+   */
   failOn?: FailOn;
-  /** `run`: `--output <format>=<path>` files, written besides stdout (F-X-16). */
+  /** `run` / `drift`: `--output <format>=<path>` files, written besides stdout (F-X-16). */
   outputs: OutputFile[];
   /** `run`: `--no-summary` — skip the GitHub step summary (`SNPF_SUMMARY=0`). */
   noSummary: boolean;
@@ -1043,12 +1040,14 @@ Options:
       --run-timeout <dur>
                          run: budget for each instance's whole run; checks
                          not finished in time fail as aborted
-      --fail-on <level>  run: exit 1 on fail rows only (fail, the default) or
-                         also on warn rows no baseline accepted (warn); env
-                         SNPF_FAIL_ON, config failOn. Rows are unchanged
+      --fail-on <level>  run/drift: exit 1 on fail rows only (fail, the
+                         default) or also on warn rows no baseline accepted
+                         (warn); run also reads env SNPF_FAIL_ON, config
+                         failOn. Rows are unchanged
       --output <format>=<path>
-                         run: also write the report as <format> to <path>
-                         (repeatable; written atomically, folders created)
+                         run/drift: also write the report as <format> to
+                         <path> (repeatable; written atomically, folders
+                         created)
       --no-summary       run: skip the GitHub step summary (env SNPF_SUMMARY=0)
       --concurrency <n>  run: most checks running at once, 1-32 (default 4;
                          env SNPF_CONCURRENCY). ATF checks always run alone,
@@ -1214,17 +1213,6 @@ interface NamedReport {
   url?: string;
   /** `--timings` counts for this instance's run. */
   timings?: RunTimings;
-}
-
-/**
- * Append extra results to a report, recomputing its summary and `ok`
- * fail-closed: an unrecognised status counts as a failure.
- */
-function mergeResults(
-  report: PreflightReport,
-  extra: CheckResult[],
-): PreflightReport {
-  return summarizeResults([...report.results, ...extra]);
 }
 
 /** A parsed SARIF log — enough shape to merge runs across instances. */
@@ -2329,8 +2317,8 @@ async function commandSync(args: ParsedArgs, cwd: string): Promise<void> {
   );
 }
 
-/** `drift <src> <dst>` — compare two committed manifests (no network). */
-async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
+/** `drift`'s two positionals, validated: exactly two different instance names. */
+function driftPair(args: ParsedArgs): [string, string] {
   const [src, dst] = args.positionals;
   if (!src || !dst) {
     throw new UsageError(
@@ -2360,6 +2348,16 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
       `drift needs two different instances; got "${src}" for both source and target.`,
     );
   }
+  return [src, dst];
+}
+
+/**
+ * `drift <src> <dst>` — compare two committed manifests (no network). The gate
+ * is the library's `runDrift` + `evaluate`, so `--fail-on` and `--output` act
+ * as they do for `run` (RR-13, ARC-5).
+ */
+async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
+  const [src, dst] = driftPair(args);
   // Delegated decision 2026-09-28 (wave 13): resolve the registry BEFORE the
   // manifests, so a mistyped explicit --registry is a usage error (exit 2)
   // rather than masked by a missing-manifest error.
@@ -2376,50 +2374,25 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
       `No manifest for "${dst}"; run: servicenow-preflight sync ${dst}.`,
     );
   }
-
-  // `test-drift` compares already-loaded manifests and never touches the
-  // network; the client is a placeholder to satisfy the context shape.
-  const http = createSnClient({ instanceUrl: "https://invalid.invalid" });
-  const ctx: PreflightContext = {
-    http,
-    instance: src,
-    manifest: source,
-    driftTarget: target,
-  };
-  const report = await runPreflight(ctx, [testDrift], {
+  const raw = await runDrift({
+    source: { name: src, manifest: source },
+    target: { name: dst, manifest: target },
+    ...(registry ? { registry } : {}),
+    ...(args.maxAgeMs !== undefined ? { maxAgeMs: args.maxAgeMs } : {}),
+    allowStageSkip: args.allowStageSkip,
     signal: interrupt.signal,
   });
-
-  // Fold in a manifest-freshness check: a manifest older than the warn
-  // threshold (30d) surfaces a warning; with --max-age, one older than that
-  // hard-fails the compare (a stale promote gate is worse than none).
-  const refs: DriftManifestRef[] = [
-    { role: "source", manifest: source },
-    { role: "target", manifest: target },
-  ];
-  const stale = stalenessResults(refs, {
-    warnAfterMs: DEFAULT_STALE_WARN_MS,
-    maxAgeMs: args.maxAgeMs,
-  });
-  // Fold in promotion order from the registry's promotesTo edges: a pair that
-  // skips a declared stage, runs upstream, or sits on no shared chain fails the
-  // gate (a skip only warns under --allow-stage-skip); a missing registry or
-  // pipeline yields an advisory warn, since the pipeline is opt-in.
-  const order = promotionOrderResult(registry, src, dst, {
-    allowStageSkip: args.allowStageSkip,
-  });
-  // Fold in version parity: platform identity (OPP-1) and installed app/plugin
-  // versions (OPP-5) recorded at sync time. A build-name mismatch or an app
-  // missing/downgraded on the target fails the promote gate; manifests written
-  // before version capture yield an advisory warn instead.
-  const parity = versionParityResults(source, target);
-  const extra = [order, ...stale, ...parity];
-  const finalReport = extra.length > 0 ? mergeResults(report, extra) : report;
-
-  process.stdout.write(
-    render(finalReport, args.format, undefined, [testDrift]),
-  );
-  process.exitCode = finalReport.ok ? 0 : 1;
+  // Only the flag: SNPF_FAIL_ON and config failOn are `run` settings.
+  const failOn: FailOn = args.failOn ?? "fail";
+  const { report, ok } = evaluate(raw, { failOn });
+  const renderAs = (format: OutputFormat): string =>
+    withFailOn(render(report, format, undefined, [testDrift]), format, failOn);
+  process.stdout.write(renderAs(args.format));
+  for (const output of args.outputs) {
+    writeAtomic(resolve(cwd, output.path), renderAs(output.format));
+  }
+  writeFailOnNote([{ report }]);
+  process.exitCode = ok ? 0 : 1;
 }
 
 /** `list` / `explain` print only pretty or json; any other format is exit 2. */
@@ -2532,6 +2505,16 @@ async function main(): Promise<void> {
   ) {
     throw new UsageError(
       `--baseline / --write-baseline / --severity apply to run only, not ${args.command}.`,
+    );
+  }
+  // RR-13 (ARC-5): `sync` writes a manifest, not a report, so a threshold or
+  // a report file would be silently dropped. Refuse them instead.
+  if (
+    args.command === "sync" &&
+    (args.failOn !== undefined || args.outputs.length > 0)
+  ) {
+    throw new UsageError(
+      "--fail-on / --output apply to run and drift, not sync: sync writes a manifest, not a report.",
     );
   }
   if (args.command !== "config" && (args.out !== undefined || args.write)) {

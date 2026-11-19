@@ -1,6 +1,6 @@
 /**
  * `servicenow-preflight/state` — the multi-instance registry, per-instance
- * state manifests, `sync` and the drift / promotion gate.
+ * state manifests, `sync` and the drift / promotion gate (`runDrift`).
  *
  * @packageDocumentation
  */
@@ -59,3 +59,8 @@ export {
   type StalenessOptions,
   type PromotionOrderOptions,
 } from "../state/drift.js";
+export {
+  runDrift,
+  type DriftSide,
+  type RunDriftOptions,
+} from "../state/gate.js";

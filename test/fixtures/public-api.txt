@@ -213,6 +213,7 @@
 ./state type DriftEntry
 ./state type DriftManifestRef
 ./state type DriftReport
+./state type DriftSide
 ./state value EmptySnapshotError
 ./state value FRESHNESS_CHECK
 ./state value INSTANCE_VERSION_CHECK
@@ -228,6 +229,7 @@
 ./state value REGISTRY_BASENAME
 ./state value RegistryNotFoundError
 ./state type ResolvedInstance
+./state type RunDriftOptions
 ./state value STATE_DIR
 ./state type StalenessOptions
 ./state type StateManifest
@@ -246,6 +248,7 @@
 ./state value readBuildInfo
 ./state value registryPath
 ./state value resolveInstance
+./state value runDrift
 ./state value stalenessResults
 ./state value syncManifest
 ./state value versionParityResults

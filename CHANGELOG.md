@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`drift` gates on `--fail-on` and writes `--output`** (RR-13, ARC-5) —
+  `snpf drift <src> <dst> --fail-on warn` exits `1` on a warn-only drift (e.g.
+  an extra downstream test), and `--output <format>=<path>` writes the drift
+  report like `run` does, also when the gate blocks. The threshold comes from
+  the flag only (`SNPF_FAIL_ON` / config `failOn` stay run settings). The
+  drift gate is a library function now: `runDrift(opts)` (source and target
+  manifests, optional registry, `maxAgeMs`, `allowStageSkip`, `now`, `signal`)
+  returns the report `drift` prints, and `evaluate(report, { failOn })` gives
+  its exit decision. New exports:
+  `runDrift`, `DriftSide`, `RunDriftOptions` (`servicenow-preflight/state`).
+
 - **Library gate verdict** (RR-12) — `runGate(ctx, checks?, opts?)` returns
   the `Verdict` the CLI acts on (`ok`, `report`, `failOn`, `baselined`,
   `expired`), applying severity policy, baseline and `failOn` in the CLI's
@@ -492,6 +503,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Release runbook (`docs/RELEASING.md`) and OIDC provenance publishing.
 
 ### Changed
+
+- **`sync` refuses `--fail-on` and `--output`** (RR-13, ARC-5; **breaking**
+  for a command line that passed them) — `sync` writes a manifest, not a
+  report, and used to drop both flags silently. It now exits `2` with a usage
+  error before any request. The GitHub Action and the CI templates always pass
+  `--fail-on` / `--output`, so they support `run` and `drift`, not `sync`.
 
 - **Unknown check names in the selection are a usage error** (RR-11b, DEV-9;
   **breaking** for a misspelled name) — `--only` / `--skip` (on `run` and
