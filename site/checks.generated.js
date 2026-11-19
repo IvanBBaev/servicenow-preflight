@@ -214,7 +214,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "No hard-coded sys_ids or non-instance URLs in in-scope scripts. Advisory.",
     "fail": "A script table read was security-trimmed.",
-    "warn": "A hard-coded sys_id or URL, no scope, or an ambiguous zero-row read.",
+    "warn": "A hard-coded sys_id or URL, no scope, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",
     "pass": "No hard-coded sys_id or URL in any in-scope script, or the scope ships none."
   },
   {
@@ -223,7 +223,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "No eval, Function constructor or client GlideRecord in client scripts, and no GlideScopedEvaluator.evaluateScript on the server.",
     "fail": "eval, new Function, client GlideRecord or GlideScopedEvaluator.evaluateScript found, or a script table read was security-trimmed.",
-    "warn": "No scope set, or an ambiguous zero-row read.",
+    "warn": "No scope set, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",
     "pass": "No unsafe dynamic code or client GlideRecord in any in-scope script, or the scope ships none."
   },
   {
@@ -259,7 +259,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "No console.log/debug/dir or debug alert() in client scripts and no gs.print/gs.log on the server. Advisory.",
     "fail": "A script table read was security-trimmed.",
-    "warn": "A console/alert call on the client or gs.print/gs.log on the server, no scope, or an ambiguous zero-row read.",
+    "warn": "A console/alert call on the client or gs.print/gs.log on the server, no scope, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",
     "pass": "No log leftover in any in-scope script, or the scope ships none."
   },
   {
@@ -268,7 +268,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "No Packages.* Java calls in server scripts, and no synchronous getXMLWait, callback-less g_form.getReference or gs.hasRole in client scripts.",
     "fail": "A Packages.* call in a server script, or a script table read was security-trimmed.",
-    "warn": "Only synchronous or server-only calls in client scripts (getXMLWait, callback-less g_form.getReference, gs.hasRole), no scope, or an ambiguous zero-row read.",
+    "warn": "Only synchronous or server-only calls in client scripts (getXMLWait, callback-less g_form.getReference, gs.hasRole), no scope, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",
     "pass": "No deprecated or scope-unavailable API call in any in-scope script, or the scope ships none."
   },
   {
@@ -331,7 +331,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "No hard-coded passwords, API keys, tokens or private keys in in-scope scripts.",
     "fail": "A possible hard-coded secret in an in-scope script, or a script table read was security-trimmed.",
-    "warn": "No scope, or an ambiguous zero-row read.",
+    "warn": "No scope, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",
     "pass": "No hard-coded secret pattern in any in-scope script, or the scope ships no scripts."
   }
 ];

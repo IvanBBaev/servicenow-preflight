@@ -3,6 +3,7 @@ import { resolveScope } from "../http/query.js";
 import { errorResult } from "./cert-common.js";
 import {
   ALL_SCRIPT_SOURCES,
+  blindNote,
   describeHits,
   hitsToFindings,
   scanScripts,
@@ -54,8 +55,8 @@ function result(status: CheckStatus, message: string): CheckResult {
  *
  * - **fail** — any script table read was security-trimmed (the scripts the
  *   account cannot see are the ones this check cannot clear).
- * - **warn** — a hard-coded identifier was found, the scope is unset, or a
- *   zero-row read was ambiguous.
+ * - **warn** — a hard-coded identifier was found, the scope is unset, a
+ *   zero-row read was ambiguous, or a script could not be fully scanned.
  * - **pass** — no hard-coded identifier in any in-scope script.
  */
 export const hardcodedIdentifiers: Check = {
@@ -71,7 +72,7 @@ export const hardcodedIdentifiers: Check = {
       "Replace literal sys_ids with GlideRecord lookups by name or a system property (sys_properties), and move endpoint URLs into system properties or a REST Message, so the app works unchanged on every instance.",
     verdicts: {
       pass: "No hard-coded sys_id or URL in any in-scope script, or the scope ships none.",
-      warn: "A hard-coded sys_id or URL, no scope, or an ambiguous zero-row read.",
+      warn: "A hard-coded sys_id or URL, no scope, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",
       fail: "A script table read was security-trimmed.",
     },
   },
@@ -114,10 +115,7 @@ export const hardcodedIdentifiers: Check = {
         );
       }
 
-      const blind =
-        scan.ambiguous.length > 0
-          ? ` (Not confirmed: no rows and no pre-trim count for ${scan.ambiguous.join(", ")}.)`
-          : "";
+      const blind = blindNote(scan.ambiguous, scan.unverified);
       if (total > 0) {
         return scanResult(
           "warn",
@@ -127,7 +125,7 @@ export const hardcodedIdentifiers: Check = {
       if (blind) {
         return scanResult(
           "warn",
-          `No hard-coded identifiers in ${scan.scanned} script artifact(s) in scope "${scope}", but some tables could not be confirmed.${blind}`,
+          `No hard-coded identifiers in ${scan.scanned} script artifact(s) in scope "${scope}", but some scripts could not be confirmed.${blind}`,
         );
       }
       if (scan.scanned === 0) {

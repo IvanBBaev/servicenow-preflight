@@ -103,7 +103,13 @@ test("secret-in-scripts is registered with blocker metadata and rule 1.7", () =>
   assert.match(meta.remediation, /Connection & Credential/);
   assert.deepEqual(
     SECRET_PATTERNS.map((p) => p.id),
-    ["key-assign", "known-token-shape", "basic-auth-header"],
+    [
+      "key-assign",
+      "quoted-key-assign",
+      "known-token-shape",
+      "basic-auth-header",
+      "auth-header-value",
+    ],
   );
 });
 
@@ -148,6 +154,24 @@ for (const [label, script] of [
   ["a commented-out assignment", `// var password = "${SENTINEL}";`],
   ["setBasicAuth with variables", "r.setBasicAuth(user, pass);"],
   ["a token shape outside a literal", "var AKIAX = 1; // " + AWS_KEY],
+  [
+    "prose about Basic authentication",
+    'var m = "Basic authentication required";',
+  ],
+  ["a Basic prefix concatenated with a variable", 'var h = "Basic " + enc;'],
+  ["a quoted key with an empty value", 'var cfg = {"password": ""};'],
+  [
+    "a quoted key with an expression template",
+    'var cfg = { "token": `${x}` };',
+  ],
+  [
+    "a quoted key that only starts with a secret name",
+    'var cfg = {"tokenUrl": "https://x"};',
+  ],
+  [
+    "an identifier that only starts with a secret name",
+    'var credentialAlias = "x_acme.alias";',
+  ],
 ]) {
   test(`passes on ${label}`, async () => {
     const result = await runScript(script);
@@ -165,6 +189,13 @@ for (const [id, script] of [
   ["key-assign", `var cfg = { api_key: '${SENTINEL}' };`],
   ["key-assign", `client_secret = \`${SENTINEL}\`;`],
   ["key-assign", `var Token = " ${SENTINEL}";`],
+  ["key-assign", `var db_password = "${SENTINEL}";`],
+  ["key-assign", `var apiToken = "${SENTINEL}";`],
+  ["key-assign", `this.clientSecret = '${SENTINEL}';`],
+  ["key-assign", `var password2 = "${SENTINEL}";`],
+  ["quoted-key-assign", `var cfg = {"password": "${SENTINEL}"};`],
+  ["quoted-key-assign", `cfg['api_key'] = '${SENTINEL}';`],
+  ["quoted-key-assign", `var o = { "db.password" : \`${SENTINEL}\` };`],
   ["known-token-shape", `var k = "${AWS_KEY}";`],
   ["known-token-shape", `var k = '${GITHUB_TOKEN}';`],
   ["known-token-shape", `var k = "${SLACK_TOKEN}";`],
@@ -172,6 +203,11 @@ for (const [id, script] of [
   ["known-token-shape", `var k = \`${JWT}\`;`],
   ["basic-auth-header", `r.setBasicAuth("admin", pw);`],
   ["basic-auth-header", `r.setBasicAuth( '${SENTINEL}', pw);`],
+  [
+    "auth-header-value",
+    `r.setRequestHeader("Authorization", "Basic ${SENTINEL}");`,
+  ],
+  ["auth-header-value", `var h = { Authorization: 'Bearer ${SENTINEL}' };`],
 ]) {
   test(`fails on ${id}: ${script.slice(0, 24)}…`, async () => {
     const result = await runScript(script);
@@ -282,6 +318,67 @@ test("warns when a zero-row read is ambiguous; a hit still fails", async () => {
   assert.equal(withHit.status, "fail");
   assert.match(withHit.message, /Lib \(script:1, known-token-shape\)/);
   assert.match(withHit.message, /Not confirmed: .*sys_script\.script/);
+});
+
+// RR-67 (DEL-3/DEL-8): constructs that used to desynchronise the lexer and
+// blank every later line, hiding the secret below them.
+for (const [label, script, line] of [
+  ["a regex after an if head", 'if (ok) /`/.test(s);\nvar password = "S";', 2],
+  [
+    "a regex after a block",
+    'function f() {}\n/[`]/.test(s);\nvar password = "S";',
+    3,
+  ],
+  ["a division after a postfix ++", 'n = a++ / 2; var password = "S";', 1],
+  ["a division after a postfix --", 'n = a-- / 2; var password = "S";', 1],
+  ["a lone CR line terminator", '// note\rvar password = "S";', 2],
+  ["a U+2028 line terminator", '// note var password = "S";', 2],
+  ["a U+2029 line terminator", '// note var password = "S";', 2],
+]) {
+  test(`fails on a secret after ${label} (RR-67)`, async () => {
+    const result = await runScript(script.replace('"S"', `"${SENTINEL}"`));
+    assert.equal(result.status, "fail", result.message);
+    assert.match(
+      result.message,
+      new RegExp(`Util \\(script:${line}, key-assign\\)`),
+    );
+    assert.ok(!result.message.includes(SENTINEL));
+  });
+}
+
+test("warns when a script field is not returned (RR-67)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: { sys_script_include: [{ sys_id: "i1", name: "Util" }] },
+    }),
+  );
+  assert.equal(result.status, "warn", result.message);
+  assert.match(
+    result.message,
+    /some scripts could not be confirmed\. \(Not confirmed: script not fully scanned in Util \(sys_script_include\.script: not returned\)\.\)/,
+  );
+});
+
+test("a blank script field is scanned and passes (RR-67)", async () => {
+  const result = await runScript("");
+  assert.equal(result.status, "pass", result.message);
+});
+
+test("warns on an unterminated literal; a hit still fails (RR-67)", async () => {
+  const bare = await runScript('var a = 1;\nvar s = "abc');
+  assert.equal(bare.status, "warn", bare.message);
+  assert.match(
+    bare.message,
+    /script not fully scanned in Util \(sys_script_include\.script:2: unterminated literal\)/,
+  );
+
+  const withHit = await runScript(
+    `var password = "${SENTINEL}";\nvar s = \`open \${x`,
+  );
+  assert.equal(withHit.status, "fail", withHit.message);
+  assert.match(withHit.message, /Util \(script:1, key-assign\)/);
+  assert.match(withHit.message, /script:2: unterminated literal/);
+  assert.ok(!withHit.message.includes(SENTINEL));
 });
 
 test("maps auth, network and HTTP errors", async () => {

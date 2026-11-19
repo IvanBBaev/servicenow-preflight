@@ -5,6 +5,7 @@ import {
   CLIENT_SCRIPT_SOURCES,
   MAX_SCAN_HITS,
   SERVER_SCRIPT_SOURCES,
+  blindNote,
   describeHits,
   hitsToFindings,
   scanScripts,
@@ -52,7 +53,8 @@ function result(status: CheckStatus, message: string): CheckResult {
  * - **fail** — a `Packages.` call, or any script table read was
  *   security-trimmed.
  * - **warn** — only synchronous / server-only client calls, the scope is
- *   unset, or a zero-row read was ambiguous.
+ *   unset, a zero-row read was ambiguous, or a script could not be fully
+ *   scanned.
  * - **pass** — none of the patterns in any in-scope script.
  */
 export const deprecatedApis: Check = {
@@ -68,7 +70,7 @@ export const deprecatedApis: Check = {
       "Replace Packages.* Java calls with the scoped Glide APIs; on the client use asynchronous GlideAjax (getXMLAnswer or getXML with a callback) instead of getXMLWait, pass a callback to g_form.getReference (or use g_scratchpad / GlideAjax), and use g_user.hasRole instead of gs.hasRole.",
     verdicts: {
       pass: "No deprecated or scope-unavailable API call in any in-scope script, or the scope ships none.",
-      warn: "Only synchronous or server-only calls in client scripts (getXMLWait, callback-less g_form.getReference, gs.hasRole), no scope, or an ambiguous zero-row read.",
+      warn: "Only synchronous or server-only calls in client scripts (getXMLWait, callback-less g_form.getReference, gs.hasRole), no scope, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",
       fail: "A Packages.* call in a server script, or a script table read was security-trimmed.",
     },
   },
@@ -114,6 +116,7 @@ export const deprecatedApis: Check = {
       const artifacts = new Set([...server.artifacts, ...client.artifacts]);
       const trimmed = [...server.trimmed, ...client.trimmed];
       const ambiguous = [...server.ambiguous, ...client.ambiguous];
+      const unverified = [...server.unverified, ...client.unverified];
       const scanned = server.scanned + client.scanned;
       const found =
         total > 0
@@ -134,10 +137,7 @@ export const deprecatedApis: Check = {
         );
       }
 
-      const blind =
-        ambiguous.length > 0
-          ? ` (Not confirmed: no rows and no pre-trim count for ${ambiguous.join(", ")}.)`
-          : "";
+      const blind = blindNote(ambiguous, unverified);
       if (total > 0) {
         return scanResult(
           blocking > 0 ? "fail" : "warn",
@@ -147,7 +147,7 @@ export const deprecatedApis: Check = {
       if (blind) {
         return scanResult(
           "warn",
-          `No deprecated API calls in ${scanned} script artifact(s) in scope "${scope}", but some tables could not be confirmed.${blind}`,
+          `No deprecated API calls in ${scanned} script artifact(s) in scope "${scope}", but some scripts could not be confirmed.${blind}`,
         );
       }
       if (scanned === 0) {

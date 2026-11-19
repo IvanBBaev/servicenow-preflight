@@ -138,6 +138,54 @@ test("lexLines: a regex is allowed after a keyword but not after an identifier",
   assert.deepEqual(lexLines("x = /open\ny();").code, ["x = /    ", "y();"]);
 });
 
+test("lexLines: a regex is allowed after a control head or a block (RR-67)", () => {
+  assert.equal(
+    lexLines("if (ok) /`/.test(s);").code[0],
+    "if (ok) / /.test(s);",
+  );
+  assert.equal(lexLines("while (a(b)) /x/;").code[0], "while (a(b)) / /;");
+  assert.equal(lexLines("}\n/[`]/.test(s);").code[1], "/   /.test(s);");
+  // A call or a grouping paren is still an operand: `/` there divides.
+  assert.equal(lexLines("f(a) / 2 / b").code[0], "f(a) / 2 / b");
+  assert.equal(lexLines("(a + b) / 2 / c").code[0], "(a + b) / 2 / c");
+});
+
+test("lexLines: a postfix ++/-- keeps the next / a division (RR-67)", () => {
+  assert.equal(
+    lexLines("n = a++ / 2; s = '/'").code[0],
+    "n = a++ / 2; s = ' '",
+  );
+  assert.equal(
+    lexLines("n = a-- / 2; s = '/'").code[0],
+    "n = a-- / 2; s = ' '",
+  );
+  // A prefix ++ before a regex position is still an operator.
+  assert.equal(lexLines("x = ++/a/.lastIndex").code[0], "x = ++/ /.lastIndex");
+});
+
+test("lexLines: CR, U+2028 and U+2029 end a line comment (RR-67)", () => {
+  for (const sep of ["\r", " ", " "]) {
+    const lexed = lexLines(`// c${sep}eval(x);`);
+    assert.deepEqual(lexed.code, ["    ", "eval(x);"], JSON.stringify(sep));
+    assert.equal(lexed.unterminatedLine, 0);
+  }
+});
+
+test("lexLines: unterminatedLine reports the first unterminated literal (RR-67)", () => {
+  for (const [src, line] of [
+    ["a();\nb();", 0],
+    ["a = 'ok';\nb = /ok/;\nc = `t ${d} e`;", 0],
+    ["a();\nvar s = 'open\nb();", 2],
+    ["x = /open\ny = 'also open", 1],
+    ["a();\n/* never closed\nb();", 2],
+    ["t = `l1\nl2", 1],
+    ["t = `a ${\nb", 1],
+    ["t = `a ${ `inner` \n b", 1],
+  ]) {
+    assert.equal(lexLines(src).unterminatedLine, line, JSON.stringify(src));
+  }
+});
+
 test("codeLines is the raw view: comments blanked, literals kept", () => {
   const src = "var u = '//x'; /* c */ var r = /a/; // d";
   assert.deepEqual(codeLines(src), lexLines(src).raw);

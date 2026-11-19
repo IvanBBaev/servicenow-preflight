@@ -5,6 +5,7 @@ import {
   CLIENT_SCRIPT_SOURCES,
   MAX_SCAN_HITS,
   SERVER_SCRIPT_SOURCES,
+  blindNote,
   describeHits,
   hitsToFindings,
   scanScripts,
@@ -45,8 +46,8 @@ function result(status: CheckStatus, message: string): CheckResult {
  *
  * - **fail** — any script table read was security-trimmed (the scripts the
  *   account cannot see are the ones this check cannot clear).
- * - **warn** — a log leftover was found, the scope is unset, or a zero-row
- *   read was ambiguous.
+ * - **warn** — a log leftover was found, the scope is unset, a zero-row
+ *   read was ambiguous, or a script could not be fully scanned.
  * - **pass** — no log leftover in any in-scope script.
  */
 export const logLeftovers: Check = {
@@ -62,7 +63,7 @@ export const logLeftovers: Check = {
       "Use jslog() instead of console.log/debug/dir on the client and remove debug alert() calls; use gs.info, gs.warn or gs.error instead of gs.print and gs.log on the server.",
     verdicts: {
       pass: "No log leftover in any in-scope script, or the scope ships none.",
-      warn: "A console/alert call on the client or gs.print/gs.log on the server, no scope, or an ambiguous zero-row read.",
+      warn: "A console/alert call on the client or gs.print/gs.log on the server, no scope, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",
       fail: "A script table read was security-trimmed.",
     },
   },
@@ -106,6 +107,7 @@ export const logLeftovers: Check = {
       const artifacts = new Set([...client.artifacts, ...server.artifacts]);
       const trimmed = [...client.trimmed, ...server.trimmed];
       const ambiguous = [...client.ambiguous, ...server.ambiguous];
+      const unverified = [...client.unverified, ...server.unverified];
       const scanned = client.scanned + server.scanned;
       const found =
         total > 0
@@ -120,10 +122,7 @@ export const logLeftovers: Check = {
         );
       }
 
-      const blind =
-        ambiguous.length > 0
-          ? ` (Not confirmed: no rows and no pre-trim count for ${ambiguous.join(", ")}.)`
-          : "";
+      const blind = blindNote(ambiguous, unverified);
       if (total > 0) {
         return scanResult(
           "warn",
@@ -133,7 +132,7 @@ export const logLeftovers: Check = {
       if (blind) {
         return scanResult(
           "warn",
-          `No log leftovers in ${scanned} script artifact(s) in scope "${scope}", but some tables could not be confirmed.${blind}`,
+          `No log leftovers in ${scanned} script artifact(s) in scope "${scope}", but some scripts could not be confirmed.${blind}`,
         );
       }
       if (scanned === 0) {

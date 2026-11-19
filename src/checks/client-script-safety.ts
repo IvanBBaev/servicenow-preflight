@@ -5,6 +5,7 @@ import {
   CLIENT_SCRIPT_SOURCES,
   MAX_SCAN_HITS,
   SERVER_SCRIPT_SOURCES,
+  blindNote,
   describeHits,
   hitsToFindings,
   scanScripts,
@@ -54,7 +55,8 @@ function result(status: CheckStatus, message: string): CheckResult {
  * matched text.
  *
  * - **fail** — any hit, or any script table read was security-trimmed.
- * - **warn** — the scope is unset, or a zero-row read was ambiguous.
+ * - **warn** — the scope is unset, a zero-row read was ambiguous, or a script could
+ *   not be fully scanned (field not returned, unterminated literal).
  * - **pass** — no hit in any in-scope script, or the scope ships none.
  */
 export const clientScriptSafety: Check = {
@@ -70,7 +72,7 @@ export const clientScriptSafety: Check = {
       "Remove eval() and new Function() from client code; fetch server data through GlideAjax with a client-callable Script Include or pass it via g_scratchpad instead of a client GlideRecord; never evaluate dynamic script with GlideScopedEvaluator.",
     verdicts: {
       pass: "No unsafe dynamic code or client GlideRecord in any in-scope script, or the scope ships none.",
-      warn: "No scope set, or an ambiguous zero-row read.",
+      warn: "No scope set, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",
       fail: "eval, new Function, client GlideRecord or GlideScopedEvaluator.evaluateScript found, or a script table read was security-trimmed.",
     },
   },
@@ -114,6 +116,8 @@ export const clientScriptSafety: Check = {
       const artifacts = new Set([...client.artifacts, ...server.artifacts]);
       const trimmed = [...client.trimmed, ...server.trimmed];
       const ambiguous = [...client.ambiguous, ...server.ambiguous];
+      const unverified = [...client.unverified, ...server.unverified];
+      const blind = blindNote(ambiguous, unverified);
       const scanned = client.scanned + server.scanned;
 
       const trimmedNote =
@@ -123,7 +127,7 @@ export const clientScriptSafety: Check = {
       if (total > 0) {
         return scanResult(
           "fail",
-          `${total} unsafe dynamic-code or client GlideRecord use(s) in ${artifacts.size} artifact(s): ${describeHits(hits, dropped)}. Use GlideAjax with a client-callable Script Include or g_scratchpad, and no dynamic code.${trimmedNote}`,
+          `${total} unsafe dynamic-code or client GlideRecord use(s) in ${artifacts.size} artifact(s): ${describeHits(hits, dropped)}. Use GlideAjax with a client-callable Script Include or g_scratchpad, and no dynamic code.${trimmedNote}${blind}`,
         );
       }
       if (trimmed.length > 0) {
@@ -132,10 +136,10 @@ export const clientScriptSafety: Check = {
           `Cannot fully scan scripts in scope "${scope}" for unsafe dynamic code.${trimmedNote}`,
         );
       }
-      if (ambiguous.length > 0) {
+      if (blind) {
         return scanResult(
           "warn",
-          `No unsafe dynamic code in ${scanned} script artifact(s) in scope "${scope}", but some tables could not be confirmed (no rows and no pre-trim count for ${ambiguous.join(", ")}).`,
+          `No unsafe dynamic code in ${scanned} script artifact(s) in scope "${scope}", but some scripts could not be confirmed.${blind}`,
         );
       }
       if (scanned === 0) {

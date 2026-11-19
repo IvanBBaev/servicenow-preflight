@@ -344,3 +344,16 @@ test("Packages. and getXMLWait( inside string literals are not findings (F-C-1)"
   );
   assert.equal(result.status, "pass", result.message);
 });
+
+test("warns instead of passing when a script field is not returned (RR-67)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: { sys_script_include: [{ sys_id: "i1", name: "Util" }] },
+    }),
+  );
+  assert.equal(result.status, "warn", result.message);
+  assert.match(
+    result.message,
+    /Not confirmed: script not fully scanned in Util \(sys_script_include\.script: not returned\)/,
+  );
+});

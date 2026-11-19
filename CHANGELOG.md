@@ -636,6 +636,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Script scans no longer go blind** (RR-67, DEL-3, DEL-4, DEL-8, DEL-9,
+  DEL-12) — the shared script-scan lexer could lose sync and blank every
+  later line, so a secret or banned call below the trigger passed unseen. A
+  regex literal is now recognised after the head of an `if` / `while` / `for`
+  / `with` and after a `}`, a postfix `++` / `--` keeps the next `/` a
+  division, and a lone CR, U+2028 and U+2029 end a line as in JavaScript.
+  A script whose quote, regex, template, `${` or block comment is never
+  closed, or whose script field the read did not return at all, is reported
+  as "script not fully scanned" and turns a pass into `warn` in all five scan
+  checks (`secret-in-scripts`, `log-leftovers`, `deprecated-apis`,
+  `hardcoded-identifiers`, `client-script-safety`); a hit still fails or
+  warns as before, with the note appended. `secret-in-scripts` now matches an
+  identifier that ends in a secret name (`db_password`, `apiToken`,
+  `clientSecret`, `password2`), a quoted key (`{"password": "…"}`,
+  `cfg['api_key'] = '…'`, new pattern id `quoted-key-assign`) and a literal
+  `Basic …` / `Bearer …` header value (new pattern id `auth-header-value`).
+  Behaviour change: these checks can now return `warn` where they passed
+  before. Rows of `sys_ui_action` whose instance does not return
+  `client_script` now warn until RR-22 settles that field.
+
 - **Delivery checks fail closed** (RR-66, DEL-1, DEL-2, DEL-5, DEL-6, DEL-7,
   DEL-10, DEL-13) — several delivery gates passed on reads that proved
   nothing. `atf-run` now fails a suite that reports success with no result id

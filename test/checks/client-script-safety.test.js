@@ -215,7 +215,7 @@ test("warns when a zero-row read is ambiguous", async () => {
   assert.equal(result.status, "warn");
   assert.match(
     result.message,
-    /could not be confirmed .*sys_transform_script\.script/,
+    /could not be confirmed\. \(Not confirmed: .*sys_transform_script\.script/,
   );
 });
 
