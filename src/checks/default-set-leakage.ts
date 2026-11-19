@@ -20,6 +20,7 @@ import {
   isMissingTable,
   missingTableResult,
   rowFinding,
+  triageZeroRead,
   withFindings,
 } from "./cert-common.js";
 
@@ -103,9 +104,11 @@ async function fetchLeakage(
   http: SnClient,
   defaultSetIds: readonly string[],
   appClause: string,
-): Promise<{ rows: Record<string, unknown>[]; securityTrimmed: boolean }> {
+): Promise<TableQueryResult> {
   const rows: Record<string, unknown>[] = [];
   let securityTrimmed = false;
+  // A pre-trim count only when every chunk reported one (RR-66, DEL-13).
+  let totalCount: number | undefined = 0;
   for (const ids of chunk(defaultSetIds)) {
     const page = await http.table("sys_update_xml").queryWithMeta({
       sysparm_query: and(inClause("update_set", ids), appClause),
@@ -113,8 +116,12 @@ async function fetchLeakage(
     });
     rows.push(...page.rows);
     securityTrimmed ||= page.securityTrimmed;
+    totalCount =
+      totalCount === undefined || page.totalCount === undefined
+        ? undefined
+        : totalCount + page.totalCount;
   }
-  return { rows, securityTrimmed };
+  return { rows, securityTrimmed, totalCount };
 }
 
 /** A human-friendly label for one leaked update row. */
@@ -155,7 +162,8 @@ function sampleList(labels: readonly string[], cap: number): string {
  *   read failed for auth/network reasons.
  * - **warn** — no scope is configured (nothing to verify); no Default set is
  *   visible at all (cannot verify); zero rows are visible but the
- *   security-trimming signal fired (unverified — never a false pass, SN-1); or
+ *   security-trimming signal fired, or no pre-trim count arrived (unverified —
+ *   never a false pass, SN-1, RR-66); or
  *   an unexpected/HTTP error left the leakage unverified.
  * - **pass** — Default sets were read cleanly and none holds a change in the
  *   target scope.
@@ -177,7 +185,7 @@ export const defaultSetLeakage: Check = {
       "Move the in-scope customer updates out of the Default update set into the deployable set (Move to Update Set on each sys_update_xml record), then re-run the check.",
     verdicts: {
       pass: "Every in-scope change is recorded in a deployable update set.",
-      warn: "No target scope configured, the list is security-trimmed, or an unexpected error.",
+      warn: "No target scope configured, the list is security-trimmed or unconfirmed (no pre-trim count), or an unexpected error.",
       fail: "In-scope changes sit in a Default set and will not ship.",
     },
   },
@@ -280,6 +288,12 @@ export const defaultSetLeakage: Check = {
       if (leaks.securityTrimmed) {
         unverified.push(
           "matching sys_update_xml rows exist that the account cannot see (security-trimmed)",
+        );
+      } else if (triageZeroRead(leaks) === "ambiguous") {
+        // No pre-trim count: "no leak" and "no read access" look the same
+        // (RR-66, DEL-13).
+        unverified.push(
+          "the sys_update_xml read returned no rows and no pre-trim count, so hidden rows cannot be ruled out",
         );
       }
       if (unverified.length > 0) {

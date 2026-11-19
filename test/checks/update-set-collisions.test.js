@@ -305,13 +305,41 @@ test("fails a zero-row update set read that was security-trimmed", async () => {
   assert.match(result.message, /4 match but 0 are visible/);
 });
 
-test("passes a target set the instance reports as empty", async () => {
+test("RR-66 — warns on a target set the instance reports as empty (ships nothing)", async () => {
   const { result } = await run({
     updateSetId: TARGET,
     totalCounts: { sys_update_xml: 0 },
   });
-  assert.equal(result.status, "pass");
-  assert.match(result.message, /carries no records/);
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /No records in/);
+  assert.match(result.message, /ships nothing/);
+});
+
+test("RR-66 DEL-5 — fails when updateSetId names no update set on the instance", async () => {
+  const missing = "f".repeat(32);
+  const { result } = await run({
+    updateSetId: missing,
+    totalCounts: { sys_update_xml: 0 },
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /was not found on the instance/);
+  assert.ok(result.findings?.some((f) => f.kind === "not-found"));
+});
+
+test("RR-66 DEL-10 — warns when every target record has a blank name (nothing compared)", async () => {
+  const { result } = await run({
+    updateSetId: TARGET,
+    xmls: [xml("", target), xml("", target)].map((row, i) => ({
+      ...row,
+      sys_id: `blank_${i}`,
+    })),
+    totalCounts: { sys_update_xml: 2 },
+  });
+  assert.equal(result.status, "warn");
+  assert.match(
+    result.message,
+    /2 of 2 target record\(s\) carry no readable name/,
+  );
 });
 
 test("warns when the target set's records read is ambiguous", async () => {

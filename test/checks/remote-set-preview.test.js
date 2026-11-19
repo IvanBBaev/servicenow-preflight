@@ -63,11 +63,33 @@ test("passes when every pending set is previewed with zero problems", async () =
         { sys_id: "r1", name: "Sprint fixes", state: "previewed" },
         { sys_id: "r2", name: "Hotfix", state: "previewed" },
       ],
+      totalCounts: { sys_update_preview_problem: 0 },
     }),
   );
   assert.equal(result.status, "pass");
   assert.match(result.message, /All 2 pending/);
   assert.match(result.message, /previewed cleanly/);
+});
+
+test("RR-66 DEL-13 — a zero problem read with no pre-trim count warns, never passes", async () => {
+  // The error-type problem exists but is hidden and no X-Total-Count arrived:
+  // "no problems" and "no read access" look the same.
+  const http = createFakeSnClient({
+    tables: {
+      sys_remote_update_set: [
+        { sys_id: "r1", name: "Sprint fixes", state: "previewed" },
+      ],
+      sys_update_preview_problem: [
+        { sys_id: "p1", remote_update_set: "r1", type: "error", status: "" },
+      ],
+    },
+    queryFilter: (table, rows) =>
+      table === "sys_update_preview_problem" ? [] : rows,
+  });
+  const result = await run(http);
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /no pre-trim count/);
+  assert.match(result.message, /unverified/);
 });
 
 test("fails when a pending set is loaded but never previewed", async () => {
@@ -313,6 +335,7 @@ test("focus by remote_sys_id gates only the matching set", async () => {
         // ignored when a focus is configured.
         { sys_id: "r2", name: "Unrelated", state: "loaded" },
       ],
+      totalCounts: { sys_update_preview_problem: 0 },
     }),
     { updateSetId: "abc123" },
   );
@@ -337,6 +360,7 @@ test("focus matches the remote row's own sys_id", async () => {
   const result = await run(
     makeHttp({
       remoteSets: [{ sys_id: "r9", name: "Direct", state: "previewed" }],
+      totalCounts: { sys_update_preview_problem: 0 },
     }),
     { updateSetId: "r9" },
   );
@@ -589,6 +613,7 @@ test("F-R-4: a cleanly previewed set carries no findings", async () => {
   const result = await run(
     makeHttp({
       remoteSets: [{ sys_id: "r1", name: "Sprint fixes", state: "previewed" }],
+      totalCounts: { sys_update_preview_problem: 0 },
     }),
   );
   assert.equal(result.status, "pass");

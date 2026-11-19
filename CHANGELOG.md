@@ -636,6 +636,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Delivery checks fail closed** (RR-66, DEL-1, DEL-2, DEL-5, DEL-6, DEL-7,
+  DEL-10, DEL-13) — several delivery gates passed on reads that proved
+  nothing. `atf-run` now fails a suite that reports success with no result id
+  (`no-result-id`), with zero test rows (`no-tests`) or with a security-trimmed
+  suite-result or test-result read (`results-trimmed`); a test row whose status
+  is neither green, red nor skipped (`cancelled`, `running`, an unknown value)
+  fails as `test-unverified` instead of being ignored. Both result reads use
+  `queryWithMeta`. `update-set-collisions` fails when `updateSetId` names no
+  `sys_update_set` row (`not-found`), warns instead of passing when the target
+  set is confirmed empty ("ships nothing"), and warns when target records carry
+  no readable name and so could not be compared. `update-set-state` reads
+  child sets and changes with `queryWithMeta`: a trimmed read fails (a hidden
+  child set may still be in progress) and a zero-row child read without a
+  pre-trim count warns. `default-set-leakage` and `remote-set-preview` warn
+  (unverified) instead of passing when their zero-row `sys_update_xml` /
+  `sys_update_preview_problem` read carries no pre-trim count. Behaviour
+  change: these checks can now return `warn` or `fail` where they passed
+  before; an instance that sends `X-Total-Count` keeps its passes.
+
 - **Missing-table skip needs a ServiceNow answer** (RR-39, N-2) — any HTTP
   404 from a read was taken for "plugin not installed" and turned the check
   into a `warn` skip, so a wrong instance path or a proxy/gateway 404 could

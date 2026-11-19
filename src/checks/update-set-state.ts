@@ -6,7 +6,7 @@ import {
   type SnClient,
 } from "../http/client.js";
 import { eq } from "../http/query.js";
-import { rowFinding, withFindings } from "./cert-common.js";
+import { rowFinding, triageZeroRead, withFindings } from "./cert-common.js";
 
 const NAME = "update-set-state";
 
@@ -82,36 +82,57 @@ interface BatchSet {
   changeCount: number;
 }
 
+/** How completely the batch could be read (RR-66, DEL-6). */
+interface ReadQuality {
+  /** A child-set or change read was security-trimmed. */
+  trimmed: boolean;
+  /** A zero-row child-set read arrived without a pre-trim count. */
+  ambiguous: boolean;
+}
+
+/** The batch rows plus how completely they could be read. */
+interface LoadedBatch extends ReadQuality {
+  rows: Record<string, unknown>[];
+}
+
 /**
  * Load the update-set batch rooted at `rootId`: the root plus every descendant
  * linked through `sys_update_set.parent` (London+ batches child sets under a
  * parent container). Returns the raw rows (root first, breadth-first) or `null`
  * when the root does not exist. Following the parent links is what stops a
- * "complete" parent container from masking an `in progress` child.
+ * "complete" parent container from masking an `in progress` child; the reads
+ * carry the pre-trim count, so an ACL-hidden child is reported instead of
+ * silently dropped (RR-66, DEL-6).
  */
 async function loadBatch(
   http: SnClient,
   rootId: string,
-): Promise<Record<string, unknown>[] | null> {
+): Promise<LoadedBatch | null> {
   const root = await http.table("sys_update_set").get(rootId);
   if (!root) return null;
 
   const byId = new Map<string, Record<string, unknown>>();
   const rootKey = str(root.sys_id) || rootId;
   byId.set(rootKey, root);
+  let trimmed = false;
+  let ambiguous = false;
 
   let frontier = [rootKey];
   while (frontier.length > 0) {
     const next: string[] = [];
     for (const parentId of frontier) {
-      const children = await http.table("sys_update_set").query({
+      const children = await http.table("sys_update_set").queryWithMeta({
         // `parentId` is user input (the root) or an instance sys_id — validated
         // through the query builder so neither can inject an encoded-query
         // operator (SR-1).
         sysparm_query: eq("parent", parentId),
         sysparm_fields: "sys_id,name,state,parent,base_update_set",
       });
-      for (const child of children) {
+      trimmed ||= children.securityTrimmed;
+      if (children.rows.length === 0) {
+        ambiguous ||= triageZeroRead(children) === "ambiguous";
+      }
+      for (const child of children.rows) {
         const cid = str(child.sys_id);
         if (cid && !byId.has(cid)) {
           byId.set(cid, child);
@@ -122,18 +143,24 @@ async function loadBatch(
     frontier = next;
   }
 
-  return [...byId.values()];
+  return { rows: [...byId.values()], trimmed, ambiguous };
 }
 
-/** Count the change rows (`sys_update_xml`) belonging to a single set. */
-async function countChanges(http: SnClient, setId: string): Promise<number> {
-  const rows = await http.table("sys_update_xml").query({
+/**
+ * Count the change rows (`sys_update_xml`) belonging to a single set, and
+ * whether the read was security-trimmed.
+ */
+async function countChanges(
+  http: SnClient,
+  setId: string,
+): Promise<{ count: number; trimmed: boolean }> {
+  const read = await http.table("sys_update_xml").queryWithMeta({
     // `setId` is the user-supplied root or an instance sys_id — validated
     // through the query builder to keep operators out of the query (SR-1).
     sysparm_query: eq("update_set", setId),
     sysparm_fields: "sys_id",
   });
-  return rows.length;
+  return { count: read.rows.length, trimmed: read.securityTrimmed };
 }
 
 /** Build a `CheckResult` for this check with the frozen name. */
@@ -175,11 +202,12 @@ function describeStates(sets: BatchSet[]): string {
  *   least one change (a pure container parent with changed children is not
  *   "empty").
  * - **warn** — no update set was specified, some set is in an unrecognised
- *   state, or a set is a merged/base
+ *   state, a zero-row child-set read carried no pre-trim count (a hidden child
+ *   cannot be ruled out), or a set is a merged/base
  *   set (deployable, but merges can carry collisions — review it).
  * - **fail** — the set does not exist; any set is still `in progress`; any set
- *   is `ignore` (explicitly do-not-migrate); or the batch is `complete` but
- *   empty.
+ *   is `ignore` (explicitly do-not-migrate); a child-set or change read was
+ *   security-trimmed; or the batch is `complete` but empty.
  * - **error** — the read failed (auth, HTTP 4xx/5xx or network): nothing was
  *   verified.
  *
@@ -199,8 +227,8 @@ export const updateSetState: Check = {
       "Mark the target update set (and every batched child set) Complete once it carries the intended changes; do not ship a set that is In progress, set to Ignore, or empty. Set updateSetId to the sys_id of the set you deploy.",
     verdicts: {
       pass: "Complete and carries at least one change.",
-      warn: "No update set id configured, an unrecognised state, or a merged/base set.",
-      fail: "Missing, still in progress, marked ignore, or complete but with zero changes.",
+      warn: "No update set id configured, an unrecognised state, an unconfirmed child-set read, or a merged/base set.",
+      fail: "Missing, still in progress, marked ignore, a security-trimmed read, or complete but with zero changes.",
     },
   },
   async run(ctx) {
@@ -213,9 +241,10 @@ export const updateSetState: Check = {
     }
 
     let sets: BatchSet[];
+    const quality: ReadQuality = { trimmed: false, ambiguous: false };
     try {
-      const rawSets = await loadBatch(ctx.http, updateSetId);
-      if (!rawSets) {
+      const batch = await loadBatch(ctx.http, updateSetId);
+      if (!batch) {
         return result(
           "fail",
           `Update set "${updateSetId}" was not found on the instance.`,
@@ -229,15 +258,19 @@ export const updateSetState: Check = {
           ],
         );
       }
+      quality.trimmed = batch.trimmed;
+      quality.ambiguous = batch.ambiguous;
       sets = [];
-      for (const raw of rawSets) {
+      for (const raw of batch.rows) {
         const id = str(raw.sys_id) || updateSetId;
+        const changes = await countChanges(ctx.http, id);
+        quality.trimmed ||= changes.trimmed;
         sets.push({
           id,
           label: readLabel(raw, id),
           state: readState(raw),
           merged: isMergedChild(raw),
-          changeCount: await countChanges(ctx.http, id),
+          changeCount: changes.count,
         });
       }
     } catch (err) {
@@ -317,6 +350,15 @@ export const updateSetState: Check = {
       );
     }
 
+    // A trimmed read may hide an in-progress child set or the changes
+    // themselves: the batch cannot be cleared (RR-66, DEL-6).
+    if (quality.trimmed) {
+      return result(
+        "fail",
+        `Cannot fully read update set ${isBatch ? `batch "${rootLabel}"` : `"${rootLabel}"`}: a sys_update_set or sys_update_xml read was security-trimmed, so a hidden child set may still be in progress. Grant the account read access to both tables.`,
+      );
+    }
+
     // Anything that is not `complete` at this point is an unrecognised state.
     const unrecognised = sets.filter((s) => s.state !== SHIPPABLE_STATE);
     if (unrecognised.length > 0) {
@@ -345,6 +387,13 @@ export const updateSetState: Check = {
           isBatch ? " across the batch" : ""
         } — nothing to deploy.`,
         setFindings([root], "empty"),
+      );
+    }
+
+    if (quality.ambiguous) {
+      return result(
+        "warn",
+        `Update set ${isBatch ? `batch "${rootLabel}"` : `"${rootLabel}"`} looks complete (${totalChanges} change(s)), but a child-set read returned no rows and no pre-trim count — cannot confirm no hidden child set is still in progress.`,
       );
     }
 

@@ -45,3 +45,27 @@ export function tracked(http) {
     calls,
   };
 }
+
+/**
+ * Wrap a fake client so every `queryWithMeta` read reports its own row count as
+ * the pre-trim `totalCount` (an honest, untrimmed instance that sends
+ * X-Total-Count), unless the fake already set one. Lets a test confirm a
+ * zero-row read is a real zero, not an ambiguous one (RR-66).
+ */
+export function counted(http) {
+  return {
+    ...http,
+    table(name) {
+      const t = http.table(name);
+      return {
+        ...t,
+        queryWithMeta: async (params) => {
+          const page = await t.queryWithMeta(params);
+          return page.totalCount === undefined
+            ? { ...page, totalCount: page.rows.length }
+            : page;
+        },
+      };
+    },
+  };
+}

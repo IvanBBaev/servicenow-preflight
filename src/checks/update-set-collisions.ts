@@ -106,9 +106,11 @@ function recordsOf(partners: readonly Partner[]): Set<string> {
  *
  * - **fail** — a collision with another `in progress` set, or a read was
  *   security-trimmed.
+ * - **fail** — also when `ctx.updateSetId` names a set that does not exist.
  * - **warn** — collisions only with completed (or otherwise closed) sets; no
- *   scope and no update set id; no target sets; an ambiguous zero-row read;
- *   or record keys that could not be queried safely.
+ *   scope and no update set id; no target sets; target sets that carry no
+ *   records; an ambiguous zero-row read; or record keys that are blank or
+ *   could not be queried safely.
  * - **pass** — no target record is captured anywhere else.
  *
  * Messages carry update set names and counts only — never record XML.
@@ -127,8 +129,8 @@ export const updateSetCollisions: Check = {
       "For each listed update set, merge it with the target, move the shared records into one set, or back the duplicate change out — otherwise whichever set commits last on the target wins.",
     verdicts: {
       pass: "No target record is captured in any other update set.",
-      warn: "Collisions only with completed sets, no scope or update set id, no target sets, an ambiguous read, or record keys that could not be queried safely.",
-      fail: "A target record is also captured in another in-progress update set, or a read was security-trimmed.",
+      warn: "Collisions only with completed sets, no scope or update set id, no target sets, an empty target set, an ambiguous read, or record keys that are blank or could not be queried safely.",
+      fail: "A target record is also captured in another in-progress update set, the update set id does not exist, or a read was security-trimmed.",
     },
   },
   async run(ctx): Promise<CheckResult> {
@@ -160,7 +162,22 @@ export const updateSetCollisions: Check = {
       // --- 2. The target sets. ------------------------------------------------
       let targetIds: string[];
       if (updateSetId) {
-        targetIds = [assertIdentifier(updateSetId, "updateSetId")];
+        const id = assertIdentifier(updateSetId, "updateSetId");
+        // A mistyped id reads zero sys_update_xml rows, which must not pass as
+        // "carries no records" (RR-66, DEL-5): prove the set exists first.
+        const target = await ctx.http
+          .table("sys_update_set")
+          .get(id, { sysparm_fields: "sys_id,name" });
+        if (!target) {
+          return withFindings(
+            result(
+              "fail",
+              `Update set "${updateSetId}" was not found on the instance — check updateSetId.`,
+            ),
+            [rowFinding(NAME, "sys_update_set", { sys_id: id }, "not-found")],
+          );
+        }
+        targetIds = [id];
       } else {
         const resolved = await resolveScope(ctx, scope as string);
         const app =
@@ -227,10 +244,12 @@ export const updateSetCollisions: Check = {
               } match but 0 are visible — the account is security-trimmed. Grant it read access to sys_update_xml.`,
             );
           case "empty":
+            // An empty target ships nothing, so there is nothing to clear
+            // (RR-66, DEL-5): never a pass.
             if (!trimmed) {
               return result(
-                "pass",
-                `No record in the target update set(s) is captured anywhere else (${subject} carries no records).`,
+                "warn",
+                `No records in ${subject} — it ships nothing, so there is nothing to compare. Check that the right update set is targeted.`,
               );
             }
             break;
@@ -249,6 +268,11 @@ export const updateSetCollisions: Check = {
       ];
       const safeNames = names.filter((n) => isSafeIdentifier(n));
       const skipped = names.length - safeNames.length;
+      // A row whose `name` did not arrive (field ACL, projection) cannot be
+      // looked up anywhere else (RR-66, DEL-10).
+      const unnamed = targetXml.rows.filter(
+        (r) => str(r, "name") === "",
+      ).length;
 
       // --- 4. Every capture of those keys, anywhere. --------------------------
       const captures = await readChunked(
@@ -353,6 +377,11 @@ export const updateSetCollisions: Check = {
           `${skipped} update record name(s) could not be queried safely.`,
         );
       }
+      if (unnamed > 0) {
+        notes.push(
+          `${unnamed} of ${targetXml.rows.length} target record(s) carry no readable name, so they could not be compared.`,
+        );
+      }
       if (defaultHits.size > 0) {
         notes.push(
           `${defaultHits.size} record(s) also sit in a Default update set (ignored).`,
@@ -384,7 +413,7 @@ export const updateSetCollisions: Check = {
           ].join(" "),
         );
       }
-      if (closed.length > 0 || skipped > 0) {
+      if (closed.length > 0 || skipped > 0 || unnamed > 0) {
         return done("warn", notes.join(" "));
       }
       const tail = defaultHits.size > 0 ? ` ${notes.join(" ")}` : "";

@@ -53,6 +53,18 @@ const SUCCESS_SUITE_STATUSES = new Set([
 ]);
 
 /**
+ * Per-test `status` values (on `sys_atf_test_result`) that count as a real
+ * pass. The list is an allow-list (RR-66, DEL-2): a status that is neither
+ * green, red nor skipped (`cancelled`, `running`, blank, …) is unverified.
+ */
+const SUCCESS_TEST_STATUSES = new Set([
+  "success",
+  "successful",
+  "passed",
+  "pass",
+]);
+
+/**
  * Per-test `status` values (on `sys_atf_test_result`) that count as red.
  * ServiceNow reports failed assertions as `failure` and unexpected script
  * errors as `error`.
@@ -269,10 +281,34 @@ function redFinding(t: RedTest): Finding {
   );
 }
 
+/** A test row whose status is neither green, red nor skipped (RR-66). */
+interface UnverifiedTest {
+  test: string;
+  status: string;
+  /** sys_id of the `sys_atf_test`; `""` when unreadable. */
+  sysId: string;
+}
+
 /** The per-test outcomes rolled up for one suite run. */
 interface SuiteOutcomes {
   red: RedTest[];
   skipped: number;
+  /** Rows with a status outside the green / red / skipped lists. */
+  unverified: UnverifiedTest[];
+  /** Every test row read for the run, whatever its status. */
+  seen: number;
+  /**
+   * `true` when a suite-result or test-result read was ACL-trimmed: rows the
+   * account cannot see may be red (RR-66, DEL-7).
+   */
+  trimmed: boolean;
+}
+
+/** A suite the run cannot count as green, and why (RR-66). */
+interface UnverifiedSuite {
+  suiteId: string;
+  kind: "no-result-id" | "no-tests" | "results-trimmed";
+  reason: string;
 }
 
 /**
@@ -284,18 +320,20 @@ interface SuiteOutcomes {
 async function collectSuiteResultIds(
   ctx: PreflightContext,
   rootId: string,
-): Promise<string[]> {
+): Promise<{ ids: string[]; trimmed: boolean }> {
   const ids = [rootId];
   const visited = new Set([rootId]);
+  let trimmed = false;
   let frontier = [rootId];
   while (frontier.length > 0) {
     const next: string[] = [];
     for (const parentId of frontier) {
-      const children = await ctx.http.table(SUITE_RESULT_TABLE).query({
+      const children = await ctx.http.table(SUITE_RESULT_TABLE).queryWithMeta({
         sysparm_query: eq("parent", parentId),
         sysparm_fields: "sys_id,parent",
       });
-      for (const child of children) {
+      trimmed ||= children.securityTrimmed;
+      for (const child of children.rows) {
         const cid = refValue(child.sys_id);
         if (cid && !visited.has(cid)) {
           visited.add(cid);
@@ -306,33 +344,35 @@ async function collectSuiteResultIds(
     }
     frontier = next;
   }
-  return ids;
+  return { ids, trimmed };
 }
 
 /**
  * Fetch the per-test rows for one suite run — across the root result id and
  * every nested child suite result id — and classify them. Rows are scoped by
- * each run's `test_suite_result`. When the CI/CD API did not expose a result id
- * we return empty outcomes rather than scanning the whole table (an unscoped
- * scan would attribute unrelated historical runs to this one); the caller still
- * fails the suite on a failed terminal status.
+ * each run's `test_suite_result`. The caller only reads rows for a run with a
+ * result id: an unscoped scan would attribute unrelated historical runs to
+ * this one.
  */
 async function collectTestOutcomes(
   ctx: PreflightContext,
-  resultId: string | undefined,
+  resultId: string,
 ): Promise<SuiteOutcomes> {
-  if (!resultId || !resultId.trim()) return { red: [], skipped: 0 };
-
-  const resultIds = await collectSuiteResultIds(ctx, resultId.trim());
+  const tree = await collectSuiteResultIds(ctx, resultId);
   const red: RedTest[] = [];
+  const unverified: UnverifiedTest[] = [];
   let skipped = 0;
+  let seen = 0;
+  let trimmed = tree.trimmed;
 
-  for (const rid of resultIds) {
-    const rows = await ctx.http.table(TEST_RESULT_TABLE).query({
+  for (const rid of tree.ids) {
+    const read = await ctx.http.table(TEST_RESULT_TABLE).queryWithMeta({
       sysparm_query: eq("test_suite_result", rid),
       sysparm_fields: "sys_id,status,output,test,test.name,test_suite_result",
     });
-    for (const row of rows) {
+    trimmed ||= read.securityTrimmed;
+    for (const row of read.rows) {
+      seen += 1;
       const status = asStatus(row.status);
       if (RED_TEST_STATUSES.has(status)) {
         red.push({
@@ -342,11 +382,61 @@ async function collectTestOutcomes(
         });
       } else if (SKIPPED_TEST_STATUSES.has(status)) {
         skipped += 1;
+      } else if (!SUCCESS_TEST_STATUSES.has(status)) {
+        unverified.push({
+          test: testName(row),
+          status,
+          sysId: refValue(row.test),
+        });
       }
     }
   }
 
-  return { red, skipped };
+  return { red, skipped, unverified, seen, trimmed };
+}
+
+/** No outcomes: the run exposed no result id to scope the test rows by. */
+const NO_OUTCOMES: SuiteOutcomes = {
+  red: [],
+  skipped: 0,
+  unverified: [],
+  seen: 0,
+  trimmed: false,
+};
+
+/**
+ * Why a suite that settled on a success status still cannot count as green
+ * (RR-66, DEL-1, DEL-7), or `undefined` when its test rows prove it.
+ */
+function unverifiedSuite(
+  suiteId: string,
+  resultId: string,
+  outcomes: SuiteOutcomes,
+): UnverifiedSuite | undefined {
+  if (resultId === "") {
+    return {
+      suiteId,
+      kind: "no-result-id",
+      reason:
+        "reported success without a result id, so no test result can be read",
+    };
+  }
+  if (outcomes.trimmed) {
+    return {
+      suiteId,
+      kind: "results-trimmed",
+      reason:
+        "some suite or test result rows are hidden from this account (security-trimmed), so a red test may be invisible",
+    };
+  }
+  if (outcomes.seen === 0) {
+    return {
+      suiteId,
+      kind: "no-tests",
+      reason: "reported success but no test result row was found for the run",
+    };
+  }
+  return undefined;
 }
 
 /** Build the failing-assertion detail carried in a `fail` message. */
@@ -360,6 +450,42 @@ function describeRedTests(red: RedTest[]): string {
   return `${shown.join("; ")}${more}`;
 }
 
+/** Name the unverified tests in a `fail` message: `name ("status")`. */
+function describeUnverifiedTests(tests: UnverifiedTest[]): string {
+  const shown = tests
+    .slice(0, 3)
+    .map((t) => `${t.test} ("${t.status || "empty"}")`);
+  const more =
+    tests.length > shown.length
+      ? ` (+${tests.length - shown.length} more)`
+      : "";
+  return `${shown.join(", ")}${more}`;
+}
+
+/** One `test-unverified` finding per test row with an unverified status. */
+function unverifiedTestFinding(t: UnverifiedTest): Finding {
+  return rowFinding(
+    NAME,
+    "sys_atf_test",
+    { sys_id: t.sysId, name: t.test },
+    "test-unverified",
+    "name",
+    `ATF test "${t.test}" ended with status "${t.status || "empty"}", which is neither a pass, a failure nor a skip`,
+  );
+}
+
+/** One finding per suite that reported success without proof (RR-66). */
+function unverifiedSuiteFinding(s: UnverifiedSuite): Finding {
+  return rowFinding(
+    NAME,
+    "sys_atf_test_suite",
+    { sys_id: s.suiteId },
+    s.kind,
+    "name",
+    `ATF suite "${s.suiteId}" ${s.reason}`,
+  );
+}
+
 /**
  * Runs the configured ATF test suite(s) via the CI/CD API, then reads the
  * per-test rows from `sys_atf_test_result` (across nested child suites):
@@ -368,6 +494,10 @@ function describeRedTests(red: RedTest[]): string {
  *   suite settled on a failed terminal status, or a suite settled on an
  *   unrecognised status (`unknown` / `not_found` / `timed_out` / …) — a suite
  *   that did not clearly pass is never counted green.
+ * - `fail`  — also when a suite reported success but the run cannot prove it
+ *   (RR-66): no result id, no test row at all, a security-trimmed suite or
+ *   test result read, or a test whose status is not on the green, red or
+ *   skipped list (`cancelled`, `running`, blank, …).
  * - `fail`  — also when a configured suite is still pending after the CI/CD
  *   poll budget (RR-6): nothing was verified, so the gate must not pass.
  * - `warn`  — no suite is configured, a run is still pending and
@@ -395,7 +525,7 @@ export const atfRun: Check = {
     verdicts: {
       pass: "Every configured suite settled green.",
       warn: 'No suite configured, some tests skipped, or a run still pending with atfPending: "warn".',
-      fail: "Any test is red (the message carries the failing assertion text), or a suite is still pending after the poll budget.",
+      fail: "Any test is red (the message carries the failing assertion text), a suite is still pending after the poll budget, or a suite reported success without readable proof (no result id, no test rows, trimmed rows, or a test that did not settle).",
     },
   },
   async run(ctx): Promise<CheckResult> {
@@ -411,6 +541,8 @@ export const atfRun: Check = {
     const red: RedTest[] = [];
     const unrecognised: string[] = [];
     const unrecognisedFindings: Finding[] = [];
+    const unverifiedTests: UnverifiedTest[] = [];
+    const unverifiedSuites: UnverifiedSuite[] = [];
     let skippedTotal = 0;
     let passedSuites = 0;
 
@@ -424,11 +556,16 @@ export const atfRun: Check = {
           continue;
         }
 
-        const outcomes = await collectTestOutcomes(ctx, run.resultId);
+        const resultId = asText(run.resultId);
+        const outcomes =
+          resultId === ""
+            ? NO_OUTCOMES
+            : await collectTestOutcomes(ctx, resultId);
         skippedTotal += outcomes.skipped;
         if (outcomes.red.length > 0) {
           red.push(...outcomes.red);
         }
+        unverifiedTests.push(...outcomes.unverified);
 
         if (FAILED_SUITE_STATUSES.has(status)) {
           if (outcomes.red.length === 0) {
@@ -442,7 +579,14 @@ export const atfRun: Check = {
             });
           }
         } else if (SUCCESS_SUITE_STATUSES.has(status)) {
-          if (outcomes.red.length === 0) passedSuites += 1;
+          const unproven = unverifiedSuite(suiteId, resultId, outcomes);
+          if (unproven) unverifiedSuites.push(unproven);
+          else if (
+            outcomes.red.length === 0 &&
+            outcomes.unverified.length === 0
+          ) {
+            passedSuites += 1;
+          }
         } else {
           // Terminal but unrecognised (unknown / not_found / timed_out / …):
           // fail closed, never count it as a passed suite.
@@ -488,7 +632,12 @@ export const atfRun: Check = {
     if (skippedTotal) extras.push(`${skippedTotal} test(s) skipped`);
     const suffix = extras.length ? ` (${extras.join("; ")})` : "";
 
-    if (red.length > 0 || unrecognised.length > 0) {
+    if (
+      red.length > 0 ||
+      unrecognised.length > 0 ||
+      unverifiedTests.length > 0 ||
+      unverifiedSuites.length > 0
+    ) {
       const parts: string[] = [];
       if (red.length > 0) {
         parts.push(
@@ -502,9 +651,25 @@ export const atfRun: Check = {
           )}`,
         );
       }
+      if (unverifiedTests.length > 0) {
+        parts.push(
+          `${unverifiedTests.length} ATF test(s) did not settle green, red or skipped: ${describeUnverifiedTests(
+            unverifiedTests,
+          )}`,
+        );
+      }
+      if (unverifiedSuites.length > 0) {
+        parts.push(
+          `${unverifiedSuites.length} suite(s) could not be verified: ${unverifiedSuites
+            .map((s) => `${s.suiteId} (${s.reason})`)
+            .join("; ")}`,
+        );
+      }
       return makeResult("fail", `${parts.join("; ")}${suffix}`, [
         ...red.map(redFinding),
         ...unrecognisedFindings,
+        ...unverifiedTests.map(unverifiedTestFinding),
+        ...unverifiedSuites.map(unverifiedSuiteFinding),
       ]);
     }
 

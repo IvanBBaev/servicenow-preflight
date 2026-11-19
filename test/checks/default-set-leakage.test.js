@@ -120,10 +120,29 @@ test("passes on a clean zero — scope changes live only in real update sets", a
     // Another scope's change in the global Default is NOT this scope's leak.
     update(GLOBAL_DEFAULT_ID, "foreign", { application: OTHER_SCOPE_ID }),
   ];
-  const result = await run(makeHttp({ updates }));
+  // The instance's pre-trim count confirms the zero (RR-66, DEL-13).
+  const result = await run(
+    makeHttp({ updates, totalCounts: { sys_update_xml: 0 } }),
+  );
   assert.equal(result.status, "pass");
   assert.match(result.message, /No changes in scope "x_acme_app"/);
   assert.match(result.message, /2 Default set\(s\) checked/);
+});
+
+test("RR-66 DEL-13 — a zero leak read with no pre-trim count warns, never passes", async () => {
+  // Without X-Total-Count, "no leak" and "no read access" look the same.
+  const updates = [update(SCOPED_DEFAULT_ID, "widget-a")];
+  const http = createFakeSnClient({
+    tables: {
+      sys_scope: [scopeRow()],
+      sys_update_set: [globalDefault, scopedDefault, namedSet],
+      sys_update_xml: updates,
+    },
+    queryFilter: (table, rows) => (table === "sys_update_xml" ? [] : rows),
+  });
+  const result = await run(http);
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /no pre-trim count/);
 });
 
 test("fails when scope changes sit in the scope's Default set", async () => {
@@ -235,7 +254,10 @@ test("warns when a Default set row carries an unusable sys_id (not silently drop
 
 test("filters sys_update_xml by the RESOLVED scope sys_id, unpaginated (SN-4)", async () => {
   const { http, calls } = tracked(
-    makeHttp({ updates: [update(NAMED_SET_ID, "widget-a")] }),
+    makeHttp({
+      updates: [update(NAMED_SET_ID, "widget-a")],
+      totalCounts: { sys_update_xml: 0 },
+    }),
   );
   const result = await run(http);
   assert.equal(result.status, "pass");
@@ -300,7 +322,9 @@ test("batches the leak lookup into ⌈N/100⌉ membership queries (SN-6)", async
     name: `Default ${i}`,
     is_default: "true",
   }));
-  const { http, calls } = tracked(makeHttp({ sets, updates: [] }));
+  const { http, calls } = tracked(
+    makeHttp({ sets, updates: [], totalCounts: { sys_update_xml: 0 } }),
+  );
   const result = await run(http);
   assert.equal(result.status, "pass");
 
@@ -379,7 +403,10 @@ test("F-R-4: one default-set-update finding per leaked sys_update_xml row", asyn
 
 test("F-R-4: a clean scope carries no findings", async () => {
   const result = await run(
-    makeHttp({ updates: [update(NAMED_SET_ID, "widget-a")] }),
+    makeHttp({
+      updates: [update(NAMED_SET_ID, "widget-a")],
+      totalCounts: { sys_update_xml: 0 },
+    }),
   );
   assert.equal(result.status, "pass");
   assert.equal(result.findings, undefined);

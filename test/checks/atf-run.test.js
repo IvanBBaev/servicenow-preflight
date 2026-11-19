@@ -60,8 +60,9 @@ test("passes when the suite settles green with no red tests", async () => {
   assert.match(result.message, /all atf tests passed/i);
 });
 
-test("passes when the suite reports no per-test rows", async () => {
-  // A green suite run with an empty result table should still pass.
+test("RR-66 DEL-1 — a green suite with no per-test rows fails (nothing proved)", async () => {
+  // A "success" suite whose result tree holds zero test rows proved nothing:
+  // it must never be counted as a passed suite.
   const result = await atfRun.run(
     ctx({
       options: { atfSuites: ["suite-1"] },
@@ -71,7 +72,92 @@ test("passes when the suite reports no per-test rows", async () => {
       },
     }),
   );
-  assert.equal(result.status, "pass");
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /could not be verified/);
+  assert.match(result.message, /no test result row/);
+  assert.ok(result.findings?.some((f) => f.kind === "no-tests"));
+});
+
+test("RR-66 DEL-1 — a green suite with no resultId fails (results unreadable)", async () => {
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1" },
+      fixtures: {
+        cicd: { runTestSuite: { status: "success" } },
+        tables: {
+          sys_atf_test_result: [
+            { sys_id: "t1", test: "T1", status: "success" },
+          ],
+        },
+      },
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /could not be verified/);
+  assert.ok(result.findings?.some((f) => f.kind === "no-result-id"));
+});
+
+test("RR-66 DEL-2 — cancelled / running / unknown test rows fail closed", async () => {
+  for (const status of ["cancelled", "running", "waiting", "mystery"]) {
+    const result = await atfRun.run(
+      ctx({
+        options: { atfSuiteId: "suite-1" },
+        fixtures: {
+          cicd: { runTestSuite: { status: "success", resultId: "run-1" } },
+          tables: {
+            sys_atf_test_result: [
+              { sys_id: "t1", test: "Green", status: "success" },
+              { sys_id: "t2", test: "Odd one", status },
+            ],
+          },
+        },
+      }),
+    );
+    assert.equal(result.status, "fail", status);
+    assert.match(result.message, /did not settle green, red or skipped/);
+    assert.match(result.message, /Odd one/);
+    assert.ok(result.findings?.some((f) => f.kind === "test-unverified"));
+  }
+});
+
+test("RR-66 DEL-7 — a security-trimmed test-result read fails (rows hidden)", async () => {
+  // Visible rows are green, but the pre-trim count says more exist.
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1" },
+      fixtures: {
+        cicd: { runTestSuite: { status: "success", resultId: "run-1" } },
+        tables: {
+          sys_atf_test_result: [
+            { sys_id: "t1", test: "T1", status: "success" },
+          ],
+        },
+        totalCounts: { sys_atf_test_result: 3 },
+      },
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.ok(result.findings?.some((f) => f.kind === "results-trimmed"));
+});
+
+test("RR-66 DEL-7 — a security-trimmed child-suite read fails (nested suite hidden)", async () => {
+  const result = await atfRun.run(
+    ctx({
+      options: { atfSuiteId: "suite-1" },
+      fixtures: {
+        cicd: { runTestSuite: { status: "success", resultId: "run-1" } },
+        tables: {
+          sys_atf_test_result: [
+            { sys_id: "t1", test: "T1", status: "success" },
+          ],
+          sys_atf_test_suite_result: [],
+        },
+        totalCounts: { sys_atf_test_suite_result: 2 },
+      },
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.ok(result.findings?.some((f) => f.kind === "results-trimmed"));
 });
 
 test("fails and carries the failing assertion text when a test is red", async () => {
@@ -290,7 +376,20 @@ test("passes when every suite in a multi-suite list is green", async () => {
         },
       },
       tables: {
-        sys_atf_test_result: [{ sys_id: "a", test: "T1", status: "success" }],
+        sys_atf_test_result: [
+          {
+            sys_id: "a",
+            test: "T1",
+            status: "success",
+            test_suite_result: "run-1",
+          },
+          {
+            sys_id: "b",
+            test: "T2",
+            status: "success",
+            test_suite_result: "run-2",
+          },
+        ],
       },
     }),
   });
@@ -350,8 +449,28 @@ test("derives the suite sys_ids from ctx.manifest when no suite is configured", 
       ],
     },
     http: createFakeSnClient({
-      cicd: { runTestSuite: { status: "success" } },
-      tables: { sys_atf_test_result: [] },
+      cicd: {
+        runTestSuite: {
+          su1: { status: "success", resultId: "run-1" },
+          su2: { status: "success", resultId: "run-2" },
+        },
+      },
+      tables: {
+        sys_atf_test_result: [
+          {
+            sys_id: "a",
+            test: "T1",
+            status: "success",
+            test_suite_result: "run-1",
+          },
+          {
+            sys_id: "b",
+            test: "T2",
+            status: "success",
+            test_suite_result: "run-2",
+          },
+        ],
+      },
     }),
   });
   assert.equal(result.status, "pass");
@@ -376,8 +495,28 @@ test("narrows the manifest suites by options.atfSuiteNames (logical id or name)"
       ],
     },
     http: createFakeSnClient({
-      cicd: { runTestSuite: { status: "success" } },
-      tables: { sys_atf_test_result: [] },
+      cicd: {
+        runTestSuite: {
+          su1: { status: "success", resultId: "run-1" },
+          su2: { status: "success", resultId: "run-2" },
+        },
+      },
+      tables: {
+        sys_atf_test_result: [
+          {
+            sys_id: "a",
+            test: "T1",
+            status: "success",
+            test_suite_result: "run-1",
+          },
+          {
+            sys_id: "b",
+            test: "T2",
+            status: "success",
+            test_suite_result: "run-2",
+          },
+        ],
+      },
     }),
   });
   assert.equal(result.status, "pass");
@@ -419,7 +558,16 @@ test("explicit options.atfSuiteId wins over the manifest suites", async () => {
           su1: { status: "failure" },
         },
       },
-      tables: { sys_atf_test_result: [] },
+      tables: {
+        sys_atf_test_result: [
+          {
+            sys_id: "x",
+            test: "TX",
+            status: "success",
+            test_suite_result: "run-x",
+          },
+        ],
+      },
     }),
   });
   // The explicit suite resolved (mapped success), not the manifest's failing su1.

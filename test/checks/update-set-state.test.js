@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { updateSetState } from "../../build/checks/update-set-state.js";
 import { createFakeSnClient } from "../../build/http/fake.js";
+import { counted } from "../helpers/seed.js";
 
 const INSTANCE = "https://dev12345.service-now.com";
 const SET_ID = "us_abc";
@@ -39,15 +40,17 @@ test("update-set-state: the no-update-set message names the real mechanisms (U-1
 });
 
 test("update-set-state: passes when set is complete with changes", async () => {
-  const http = createFakeSnClient({
-    tables: {
-      sys_update_set: [{ sys_id: SET_ID, name: "My set", state: "complete" }],
-      sys_update_xml: [
-        { sys_id: "x1", update_set: SET_ID },
-        { sys_id: "x2", update_set: SET_ID },
-      ],
-    },
-  });
+  const http = counted(
+    createFakeSnClient({
+      tables: {
+        sys_update_set: [{ sys_id: SET_ID, name: "My set", state: "complete" }],
+        sys_update_xml: [
+          { sys_id: "x1", update_set: SET_ID },
+          { sys_id: "x2", update_set: SET_ID },
+        ],
+      },
+    }),
+  );
   const result = await updateSetState.run(ctx(http));
   assert.equal(result.name, "update-set-state");
   assert.equal(result.status, "pass");
@@ -183,23 +186,25 @@ test("update-set-state: SN-2 — a container parent with changed children is not
   // The parent holds 0 change rows itself but its complete children carry the
   // changes — the batch has something to deploy, so this must pass, not fail
   // "0 changes".
-  const http = createFakeSnClient({
-    tables: {
-      sys_update_set: [
-        { sys_id: "us_parent", name: "Parent", state: "complete" },
-        {
-          sys_id: "us_child",
-          name: "Child",
-          state: "complete",
-          parent: "us_parent",
-        },
-      ],
-      sys_update_xml: [
-        { sys_id: "x1", update_set: "us_child" },
-        { sys_id: "x2", update_set: "us_child" },
-      ],
-    },
-  });
+  const http = counted(
+    createFakeSnClient({
+      tables: {
+        sys_update_set: [
+          { sys_id: "us_parent", name: "Parent", state: "complete" },
+          {
+            sys_id: "us_child",
+            name: "Child",
+            state: "complete",
+            parent: "us_parent",
+          },
+        ],
+        sys_update_xml: [
+          { sys_id: "x1", update_set: "us_child" },
+          { sys_id: "x2", update_set: "us_child" },
+        ],
+      },
+    }),
+  );
   const result = await updateSetState.run(ctx(http, "us_parent"));
   assert.equal(result.status, "pass");
   assert.match(result.message, /2 change/);
@@ -396,13 +401,68 @@ test("update-set-state: F-R-4 — a missing set and an empty set each emit a fin
 });
 
 test("update-set-state: F-R-4 — a passing set carries no findings", async () => {
+  const http = counted(
+    createFakeSnClient({
+      tables: {
+        sys_update_set: [{ sys_id: SET_ID, name: "My set", state: "complete" }],
+        sys_update_xml: [{ sys_id: "x1", update_set: SET_ID }],
+      },
+    }),
+  );
+  const result = await updateSetState.run(ctx(http));
+  assert.equal(result.status, "pass");
+  assert.equal(result.findings, undefined);
+});
+
+/** A complete parent whose in-progress child the account cannot see. */
+function hiddenChildFixture(extra = {}) {
+  return {
+    tables: {
+      sys_update_set: [
+        { sys_id: "us_parent", name: "Parent", state: "complete" },
+        {
+          sys_id: "us_child",
+          name: "Hidden child",
+          state: "in progress",
+          parent: "us_parent",
+        },
+      ],
+      sys_update_xml: [{ sys_id: "x1", update_set: "us_parent" }],
+    },
+    queryFilter: (table, rows) =>
+      table === "sys_update_set"
+        ? rows.filter((r) => r.sys_id !== "us_child")
+        : rows,
+    ...extra,
+  };
+}
+
+test("update-set-state: RR-66 DEL-6 — a trimmed child-set read fails (hidden in-progress child)", async () => {
+  const http = createFakeSnClient(
+    hiddenChildFixture({ totalCounts: { sys_update_set: 1 } }),
+  );
+  const result = await updateSetState.run(ctx(http, "us_parent"));
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /security-trimmed/);
+  assert.match(result.message, /hidden child set may still be in progress/);
+});
+
+test("update-set-state: RR-66 DEL-6 — a zero child read with no pre-trim count warns, never passes", async () => {
+  const http = createFakeSnClient(hiddenChildFixture());
+  const result = await updateSetState.run(ctx(http, "us_parent"));
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /no pre-trim count/);
+});
+
+test("update-set-state: RR-66 DEL-6 — a trimmed change read fails", async () => {
   const http = createFakeSnClient({
     tables: {
       sys_update_set: [{ sys_id: SET_ID, name: "My set", state: "complete" }],
       sys_update_xml: [{ sys_id: "x1", update_set: SET_ID }],
     },
+    totalCounts: { sys_update_set: 0, sys_update_xml: 4 },
   });
   const result = await updateSetState.run(ctx(http));
-  assert.equal(result.status, "pass");
-  assert.equal(result.findings, undefined);
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /security-trimmed/);
 });

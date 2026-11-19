@@ -24,8 +24,8 @@ window.PREFLIGHT_CHECKS = [
     "name": "update-set-state",
     "tag": "updateSetId",
     "desc": "The target update set, and any batched child sets, are complete and carry changes.",
-    "fail": "Missing, still in progress, marked ignore, or complete but with zero changes.",
-    "warn": "No update set id configured, an unrecognised state, or a merged/base set.",
+    "fail": "Missing, still in progress, marked ignore, a security-trimmed read, or complete but with zero changes.",
+    "warn": "No update set id configured, an unrecognised state, an unconfirmed child-set read, or a merged/base set.",
     "pass": "Complete and carries at least one change."
   },
   {
@@ -34,7 +34,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "No captured work for the target scope is stranded in a Default-flagged update set.",
     "fail": "In-scope changes sit in a Default set and will not ship.",
-    "warn": "No target scope configured, the list is security-trimmed, or an unexpected error.",
+    "warn": "No target scope configured, the list is security-trimmed or unconfirmed (no pre-trim count), or an unexpected error.",
     "pass": "Every in-scope change is recorded in a deployable update set."
   },
   {
@@ -43,7 +43,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "ALWAYS",
     "desc": "Every pending retrieved update set is previewed with all preview problems resolved.",
     "fail": "A retrieved set was never previewed, or preview problems remain unresolved.",
-    "warn": "No credentials configured, a stale preview, or the list is security-trimmed.",
+    "warn": "No credentials configured, a stale preview, or the list is security-trimmed or unconfirmed (no pre-trim count).",
     "pass": "No pending retrieved update sets — nothing awaiting preview or commit."
   },
   {
@@ -60,7 +60,7 @@ window.PREFLIGHT_CHECKS = [
     "name": "atf-run",
     "tag": "atfSuites",
     "desc": "The configured ATF test suites run green — no failing or errored tests.",
-    "fail": "Any test is red (the message carries the failing assertion text), or a suite is still pending after the poll budget.",
+    "fail": "Any test is red (the message carries the failing assertion text), a suite is still pending after the poll budget, or a suite reported success without readable proof (no result id, no test rows, trimmed rows, or a test that did not settle).",
     "warn": "No suite configured, some tests skipped, or a run still pending with atfPending: \"warn\".",
     "pass": "Every configured suite settled green."
   },
@@ -312,8 +312,8 @@ window.PREFLIGHT_CHECKS = [
     "name": "update-set-collisions",
     "tag": "updateSetId or scope",
     "desc": "Records in the target update set(s) are not also captured in other open or completed update sets.",
-    "fail": "A target record is also captured in another in-progress update set, or a read was security-trimmed.",
-    "warn": "Collisions only with completed sets, no scope or update set id, no target sets, an ambiguous read, or record keys that could not be queried safely.",
+    "fail": "A target record is also captured in another in-progress update set, the update set id does not exist, or a read was security-trimmed.",
+    "warn": "Collisions only with completed sets, no scope or update set id, no target sets, an empty target set, an ambiguous read, or record keys that are blank or could not be queried safely.",
     "pass": "No target record is captured in any other update set."
   },
   {

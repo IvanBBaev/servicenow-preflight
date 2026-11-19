@@ -7,7 +7,7 @@ import {
 } from "../http/client.js";
 import { chunk, inClause } from "../http/query.js";
 import { makeFinding } from "../findings.js";
-import { rowFinding, withFindings } from "./cert-common.js";
+import { rowFinding, triageZeroRead, withFindings } from "./cert-common.js";
 
 const NAME = "remote-set-preview";
 
@@ -262,6 +262,8 @@ function tallyProblems(
  * injected into (SR-1). Uses `queryWithMeta` so ACL security-trimming of the
  * problem rows is surfaced: hidden problems mean a "clean" preview cannot be
  * trusted, so the caller must degrade to unverified rather than pass (OPP-4).
+ * A zero-row read with no pre-trim count is `ambiguous`: "no problems" and
+ * "no read access" look the same, so it degrades the same way (RR-66, DEL-13).
  */
 async function fetchProblemsBySet(
   http: SnClient,
@@ -269,26 +271,30 @@ async function fetchProblemsBySet(
 ): Promise<{
   bySet: Map<string, Record<string, unknown>[]>;
   trimmed: boolean;
+  ambiguous: boolean;
 }> {
   const bySet = new Map<string, Record<string, unknown>[]>();
   for (const id of setIds) bySet.set(id, []);
   let trimmed = false;
+  let ambiguous = false;
   for (const ids of chunk(setIds)) {
     // No `sysparm_limit`: the client auto-paginates, so a set with more
     // problems than a single page can never look cleaner through truncation.
-    const { rows, securityTrimmed } = await http
-      .table("sys_update_preview_problem")
-      .queryWithMeta({
-        sysparm_query: inClause("remote_update_set", ids),
-        sysparm_fields: "sys_id,remote_update_set,type,status,description",
-      });
+    const page = await http.table("sys_update_preview_problem").queryWithMeta({
+      sysparm_query: inClause("remote_update_set", ids),
+      sysparm_fields: "sys_id,remote_update_set,type,status,description",
+    });
+    const { rows, securityTrimmed } = page;
     if (securityTrimmed) trimmed = true;
+    if (rows.length === 0 && triageZeroRead(page) === "ambiguous") {
+      ambiguous = true;
+    }
     for (const row of rows) {
       const list = bySet.get(str(row.remote_update_set));
       if (list) list.push(row);
     }
   }
-  return { bySet, trimmed };
+  return { bySet, trimmed, ambiguous };
 }
 
 /** Build a `CheckResult` for this check with the frozen name. */
@@ -347,7 +353,7 @@ export const remoteSetPreview: Check = {
       "On the target instance, preview every retrieved update set and resolve each preview problem (accept the remote update or skip it) before committing; re-preview a set whose preview is stale.",
     verdicts: {
       pass: "No pending retrieved update sets — nothing awaiting preview or commit.",
-      warn: "No credentials configured, a stale preview, or the list is security-trimmed.",
+      warn: "No credentials configured, a stale preview, or the list is security-trimmed or unconfirmed (no pre-trim count).",
       fail: "A retrieved set was never previewed, or preview problems remain unresolved.",
     },
   },
@@ -445,7 +451,11 @@ export const remoteSetPreview: Check = {
         }
       }
 
-      const { bySet, trimmed: problemsTrimmed } = await fetchProblemsBySet(
+      const {
+        bySet,
+        trimmed: problemsTrimmed,
+        ambiguous: problemsAmbiguous,
+      } = await fetchProblemsBySet(
         ctx.http,
         previewed.map((set) => set.id),
       );
@@ -502,6 +512,10 @@ export const remoteSetPreview: Check = {
       if (problemsTrimmed) {
         warns.push(
           "some sys_update_preview_problem rows are hidden by ACL security-trimming — preview cleanliness is unverified",
+        );
+      } else if (problemsAmbiguous) {
+        warns.push(
+          "a sys_update_preview_problem read returned no rows and no pre-trim count, so hidden problems cannot be ruled out — preview cleanliness is unverified",
         );
       }
 
