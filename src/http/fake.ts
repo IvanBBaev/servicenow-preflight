@@ -117,6 +117,15 @@ export interface ForcedFailure {
   response?: boolean;
   /** Message override for the thrown error. */
   message?: string;
+  /**
+   * The parsed body an `http` failure carries as {@link SnHttpError.body}.
+   * Defaults to the ServiceNow JSON error envelope
+   * `{ error: { message, detail: null }, status: "failure" }`, as the instance
+   * itself answers. Set it to what the real client keeps for a non-ServiceNow
+   * answer — `{ raw: "<html>…" }` for a proxy page, `null` for an empty body —
+   * to test that such a 404 is not taken for a missing table (RR-39).
+   */
+  body?: unknown;
 }
 
 /** Fixtures accepted by {@link createFakeSnClient}. */
@@ -398,7 +407,11 @@ function maybeThrow(
   if (f.http !== undefined && f.http !== false) {
     const status = typeof f.http === "number" ? f.http : 500;
     if (status === 401 || status === 403) throw authError(status, msg, path);
-    throw new SnHttpError(status, msg);
+    const body =
+      "body" in f
+        ? (f.body ?? undefined)
+        : { error: { message: msg, detail: null }, status: "failure" };
+    throw new SnHttpError(status, msg, body);
   }
 }
 

@@ -1167,10 +1167,15 @@ maxInFlight?, rps?, cache? }`),
   fail on a finding), the `tables` it reads, the `optionalTables` among them
   (tables a plugin provides, which may be absent), a `remediation` paragraph
   and the `verdicts` wording for pass / warn / fail. A table read that answers
-  HTTP 404 (or 400 "Invalid table") is a "plugin not installed" skip `warn`
-  only for a table in `optionalTables`; any other missing table turns the
-  check's row into `error` — a wrong instance path, a proxy or a missing read
-  grant, not a missing plugin. `formatSarif(report, checks?)`
+  HTTP 404 (or 400 "Invalid table") with the ServiceNow JSON error body
+  (`error.message`) is a "plugin not installed" skip `warn` only for a table
+  in `optionalTables`; any other missing table turns the check's row into
+  `error` — a wrong instance path, a proxy or a missing read grant, not a
+  missing plugin. A 404 with an HTML, plain-text or empty body (a proxy, a
+  gateway, a wrong base path) is never taken for a missing table: it is an
+  `error` row. In `createFakeSnClient`, a forced `http` failure carries that
+  envelope by default; `fail.body` sets another (`{ raw: "…" }` for a proxy
+  page, `null` for an empty body). `formatSarif(report, checks?)`
   uses it to fill each SARIF rule's `shortDescription`, `fullDescription` and
   `properties`; a check without `meta` keeps working everywhere.
 

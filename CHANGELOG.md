@@ -636,6 +636,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Missing-table skip needs a ServiceNow answer** (RR-39, N-2) — any HTTP
+  404 from a read was taken for "plugin not installed" and turned the check
+  into a `warn` skip, so a wrong instance path or a proxy/gateway 404 could
+  skip every check that hit it, the runner catch included. The skip now
+  requires the ServiceNow JSON error envelope (`error.message`) on the 404 or
+  the "Invalid table" 400; an HTML, plain-text, empty or non-envelope body
+  stays an `error` row. The fake client's forced `http` failures now carry
+  that envelope by default, and a new `ForcedFailure.body` sets the body
+  (`{ raw: "…" }` for a proxy page, `null` for an empty one). Library users:
+  a custom check or test double that throws `new SnHttpError(404, …)` without
+  a body no longer gets the skip — pass the envelope as the third argument.
+
 - **The HTTP client validates its numeric options and never prints credential
   bytes** (RR-52, HTTP-4, HTTP-5, HTTP-6, CLI-9) — an oauth token or api key
   with a control character (a token file with an interior newline) or a

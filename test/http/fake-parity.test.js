@@ -87,6 +87,13 @@ async function caught(read) {
   assert.fail("expected the read to reject");
 }
 
+/** The shape of an error body the client kept: envelope, raw text or none. */
+function bodyKind(body) {
+  if (body === undefined || body === null) return "none";
+  if (typeof body.error?.message === "string") return "envelope";
+  return typeof body.raw === "string" ? "raw" : "other";
+}
+
 const CASES = [
   { label: "401", real: () => response(401), fake: { http: 401 } },
   { label: "401 (auth)", real: () => response(401), fake: { auth: true } },
@@ -97,6 +104,28 @@ const CASES = [
     fake: { forbidden: true },
   },
   { label: "404", real: () => response(404), fake: { http: 404 } },
+  {
+    // RR-39: a proxy's HTML 404 is not a missing table — an error row on both.
+    label: "404 (proxy HTML page)",
+    real: () => ({
+      status: 404,
+      statusText: "Not Found",
+      text: () => Promise.resolve("<html><body>404 Not Found</body></html>"),
+    }),
+    fake: {
+      http: 404,
+      body: { raw: "<html><body>404 Not Found</body></html>" },
+    },
+  },
+  {
+    label: "404 (empty body)",
+    real: () => ({
+      status: 404,
+      statusText: "Not Found",
+      text: () => Promise.resolve(""),
+    }),
+    fake: { http: 404, body: null },
+  },
   {
     label: "429 (retry budget exhausted)",
     real: () => response(429, "throttled"),
@@ -134,6 +163,7 @@ for (const { label, real, fake } of CASES) {
       errorResult("c", TABLE, fakeErr).status,
       errorResult("c", TABLE, realErr).status,
     );
+    assert.equal(bodyKind(fakeErr.body), bodyKind(realErr.body));
   });
 }
 

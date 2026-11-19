@@ -128,13 +128,33 @@ export function withFindings(
 }
 
 /**
+ * Whether `body` is the ServiceNow REST error envelope —
+ * `{ "error": { "message": "…" }, … }` with a non-empty message. A reverse
+ * proxy, a load balancer or a wrong base path answers with HTML, plain text or
+ * nothing, which the client keeps as `{ raw }` or `undefined` (RR-39).
+ */
+function isSnErrorEnvelope(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  const error = (body as { error?: unknown }).error;
+  if (!error || typeof error !== "object") return false;
+  const message = (error as { message?: unknown }).message;
+  return typeof message === "string" && message.trim() !== "";
+}
+
+/**
  * Whether a failed read means the table (or API) does not exist on the
  * instance — HTTP 404, or the Table API's HTTP 400 "Invalid table" — as
  * opposed to a read that exists but failed. A missing table is almost always
  * a plugin that is not installed, so there is nothing to verify.
+ *
+ * RR-39: only an answer from ServiceNow itself counts — the body must be its
+ * JSON error envelope. A 404 from a proxy, a gateway or a wrong instance path
+ * (HTML, plain text or an empty body) proves nothing about the table and stays
+ * an `error` row.
  */
 export function isMissingTable(err: unknown): err is SnHttpError {
   if (!(err instanceof SnHttpError)) return false;
+  if (!isSnErrorEnvelope(err.body)) return false;
   if (err.status === 404) return true;
   return err.status === 400 && /invalid table/i.test(err.message);
 }

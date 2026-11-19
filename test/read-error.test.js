@@ -10,6 +10,11 @@ import { applyPolicy } from "../build/api/checks.js";
 import { errorResult } from "../build/checks/cert-common.js";
 import { corsRules } from "../build/checks/cors-rules.js";
 import { logLeftovers } from "../build/checks/log-leftovers.js";
+import { aclRoleSanity } from "../build/checks/acl-role-sanity.js";
+import { atfEnablement } from "../build/checks/atf-enablement.js";
+import { defaultSetLeakage } from "../build/checks/default-set-leakage.js";
+import { i18nCompleteness } from "../build/checks/i18n-completeness.js";
+import { scopedAppDeps } from "../build/checks/scoped-app-deps.js";
 import { createFakeSnClient } from "../build/http/fake.js";
 import {
   SnAuthError,
@@ -53,13 +58,33 @@ for (const [label, err] of READ_ERRORS) {
   });
 }
 
+/** The ServiceNow REST error envelope, as the instance itself answers. */
+function snBody(message, detail = null) {
+  return { error: { message, detail }, status: "failure" };
+}
+
 // RR-3 follow-up: a missing table (plugin not installed) is a skip warn —
 // HTTP 404, or the Table API's 400 "Invalid table" — never an error row.
+// RR-39: only when ServiceNow itself says so (its JSON error envelope).
 const MISSING_TABLE = [
-  ["HTTP 404", new SnHttpError(404, "Not Found")],
+  [
+    "HTTP 404",
+    new SnHttpError(
+      404,
+      "ServiceNow API error (404): No Record found",
+      snBody(
+        "No Record found",
+        "Record doesn't exist or ACL restricts the record retrieval",
+      ),
+    ),
+  ],
   [
     'HTTP 400 "Invalid table"',
-    new SnHttpError(400, "ServiceNow API error (400): Invalid table x_missing"),
+    new SnHttpError(
+      400,
+      "ServiceNow API error (400): Invalid table x_missing",
+      snBody("Invalid table x_missing"),
+    ),
   ],
 ];
 
@@ -69,6 +94,45 @@ for (const [label, err] of MISSING_TABLE) {
     assert.equal(r.status, "warn");
     assert.match(r.message, /^Skipped demo things: .*not found/);
     assert.match(r.message, /plugin .* likely not installed/);
+  });
+}
+
+// RR-39: a 404 (or "Invalid table" 400) that did not come from ServiceNow —
+// a proxy or load-balancer page, a wrong base path, an empty body — proves
+// nothing about the table: an error row, never the skip warn.
+const NOT_FROM_SERVICENOW = [
+  [
+    "an HTML 404 (proxy page)",
+    new SnHttpError(404, "ServiceNow API error (404): HTTP 404", {
+      raw: "<html><body><h1>404 Not Found</h1>nginx</body></html>",
+    }),
+  ],
+  [
+    "an empty-body 404",
+    new SnHttpError(404, "ServiceNow API error (404): HTTP 404", undefined),
+  ],
+  [
+    "a 404 with a JSON body that is not the ServiceNow envelope",
+    new SnHttpError(404, "ServiceNow API error (404): HTTP 404", {
+      message: "Not Found",
+    }),
+  ],
+  [
+    "a 404 whose envelope has an empty message",
+    new SnHttpError(404, "ServiceNow API error (404): HTTP 404", snBody("")),
+  ],
+  [
+    'a non-ServiceNow 400 "Invalid table"',
+    new SnHttpError(400, "ServiceNow API error (400): Invalid table x", {
+      raw: "Invalid table x",
+    }),
+  ],
+];
+
+for (const [label, err] of NOT_FROM_SERVICENOW) {
+  test(`errorResult maps ${label} to error, not a skip warn`, () => {
+    const r = errorResult("demo", "demo things", err);
+    assert.equal(r.status, "error", r.message);
   });
 }
 
@@ -109,6 +173,42 @@ for (const check of [corsRules, logLeftovers]) {
   });
 }
 
+// RR-39: the five checks that call isMissingTable themselves, and the two
+// that go through errorResult, all follow the envelope rule.
+// Each entry: the check plus the context it needs to reach its first read.
+const MISSING_TABLE_CHECKS = [
+  [aclRoleSanity, {}],
+  [atfEnablement, { auth: { kind: "basic", user: "admin", pass: "secret" } }],
+  [defaultSetLeakage, {}],
+  [i18nCompleteness, { options: { languages: ["fr", "de"] } }],
+  [scopedAppDeps, { options: { requiredApps: [{ id: "x_acme_dep" }] } }],
+  [corsRules, {}],
+  [logLeftovers, {}],
+];
+const PROXY_404 = {
+  http: 404,
+  body: { raw: "<html><body>404 Not Found</body></html>" },
+};
+for (const [check, extra] of MISSING_TABLE_CHECKS) {
+  test(`${check.name}: a ServiceNow 404 is a skip warn, a proxy or empty 404 an error row`, async () => {
+    const run = (fail) =>
+      check.run({
+        instanceUrl: INSTANCE,
+        http: createFakeSnClient({ tables: {}, fail }),
+        scope: SCOPE,
+        updateSetId: "0123456789abcdef0123456789abcdef",
+        ...extra,
+      });
+    const sn = await run({ http: 404 });
+    assert.equal(sn.status, "warn", sn.message);
+    assert.match(sn.message, /^Skipped /);
+    for (const fail of [PROXY_404, { http: 404, body: null }]) {
+      const r = await run(fail);
+      assert.equal(r.status, "error", r.message);
+    }
+  });
+}
+
 // RR-49 (CLI-1): a 404 the check did not get from a table it declares
 // optional (meta.optionalTables) is not a missing plugin — it is an error.
 test("the runner turns a thrown 404 from no optional table into an error", async () => {
@@ -117,12 +217,30 @@ test("the runner turns a thrown 404 from no optional table into an error", async
       name: "throws-404",
       description: "d",
       run() {
-        throw new SnHttpError(404, "Not Found");
+        throw new SnHttpError(404, "Not Found", snBody("Not Found"));
       },
     },
   ]);
   assert.equal(out.results[0].status, "error");
   assert.match(out.results[0].message, /^Required table not found/);
+  assert.equal(out.ok, false);
+});
+
+test("the runner keeps a thrown non-ServiceNow 404 an error row; ok is false", async () => {
+  const out = await runPreflight(
+    { instanceUrl: INSTANCE },
+    NOT_FROM_SERVICENOW.map(([label, err], i) => ({
+      name: `throws-${i}`,
+      description: label,
+      run() {
+        throw err;
+      },
+    })),
+  );
+  assert.deepEqual(
+    out.results.map((r) => r.status),
+    NOT_FROM_SERVICENOW.map(() => "error"),
+  );
   assert.equal(out.ok, false);
 });
 
