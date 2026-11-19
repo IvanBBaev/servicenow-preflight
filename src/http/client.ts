@@ -1002,6 +1002,7 @@ async function acquireToken(
       "OAuth token endpoint did not return an access_token.",
     );
   }
+  assertSendable(token, "The OAuth access_token");
   const expiresRaw =
     body && typeof body === "object"
       ? (body as { expires_in?: unknown }).expires_in
@@ -1127,6 +1128,54 @@ function basicMfaProvider(
   };
 }
 
+/** Longest delay a Node timer honours; above it the timer fires after 1 ms. */
+export const MAX_TIMER_MS = 2_147_483_647;
+
+/** RR-52: whole-number {@link SnClientConfig} options and their bounds. */
+const NUMERIC_OPTIONS = [
+  ["timeoutMs", 1, MAX_TIMER_MS],
+  ["cicdPollIntervalMs", 0, MAX_TIMER_MS],
+  ["cicdMaxPolls", 1, Number.MAX_SAFE_INTEGER],
+  ["maxRows", 1, Number.MAX_SAFE_INTEGER],
+] as const;
+
+/**
+ * RR-52 (HTTP-4): a header value with a control character (a token read from
+ * a file with an interior newline) or a character outside Latin-1 cannot be
+ * sent, and the transport's error message would quote the whole value.
+ */
+function unsendable(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f || code > 0xff) return true;
+  }
+  return false;
+}
+
+/**
+ * Throw a value-free {@link SnAuthError} when `value` cannot travel as a
+ * header value. The message names the field, never the value.
+ */
+function assertSendable(value: string, field: string): void {
+  if (unsendable(value)) {
+    throw new SnAuthError(
+      `${field} contains a control character or a non-Latin-1 character and cannot be sent in an HTTP header (value not shown).`,
+    );
+  }
+}
+
+/**
+ * HTTP-4, defence in depth: remove the credential header value, and its token
+ * part, from a transport error message before it is quoted.
+ */
+function withoutSecret(message: string, headerValue?: string): string {
+  if (!headerValue) return message;
+  let out = message.split(headerValue).join("[redacted]");
+  const token = headerValue.replace(/^(?:Bearer|Basic) /, "");
+  if (token.length >= 8) out = out.split(token).join("[redacted]");
+  return out;
+}
+
 /**
  * Build the {@link AuthProvider} for the configured auth. Static credentials
  * yield a fixed header; grant flows lazily acquire, cache (until ~30s before
@@ -1150,8 +1199,10 @@ function buildAuthProvider(
         ? basicMfaProvider(auth, auth.mfa)
         : staticHeader("Authorization", basicHeader(auth.user, auth.pass));
     case "oauth":
+      assertSendable(auth.token, "SnAuth oauth token");
       return staticHeader("Authorization", `Bearer ${auth.token}`);
     case "apikey":
+      assertSendable(auth.apiKey, "SnAuth apikey");
       return staticHeader("x-sn-apikey", auth.apiKey);
     default: {
       const grant = auth;
@@ -1577,6 +1628,23 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
       throw new SnError(`SnClientConfig.${name} ${problem} (got ${value}).`);
     }
   }
+  // RR-52 (HTTP-5, HTTP-6): a NaN, negative, fractional or oversized option
+  // would throw a raw RangeError per request, disable the row cap, or turn the
+  // CI/CD poll budget into zero or unbounded polling. Refuse it here instead.
+  for (const [name, min, max] of NUMERIC_OPTIONS) {
+    const value: unknown = cfg[name];
+    if (value === undefined) continue;
+    if (
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < min ||
+      value > max
+    ) {
+      throw new SnError(
+        `SnClientConfig.${name} must be a whole number between ${min} and ${max} (got ${typeof value === "number" ? value : typeof value}).`,
+      );
+    }
+  }
   // F-X-1: no limiter at all unless one is configured, so the default path
   // adds nothing.
   const limiter: Limiter | undefined =
@@ -1682,9 +1750,10 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
           throw abortedError(caller as AbortSignal);
         }
       }
-      init.signal = anySignal([AbortSignal.timeout(timeoutMs), caller]);
       const startedAt = performance.now();
       try {
+        // HTTP-5: inside the try, so a throw here still frees the slot.
+        init.signal = anySignal([AbortSignal.timeout(timeoutMs), caller]);
         // Race the signal too, so a transport that ignores it cannot hang us.
         const res = await raceAbort(transport(url, init), init.signal);
         status = res.status;
@@ -1714,7 +1783,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         throw new SnNetworkError(
           timedOut
             ? `Request to ${origin} timed out after ${timeoutMs}ms.`
-            : `Could not reach ServiceNow at ${origin}: ${err.message}`,
+            : `Could not reach ServiceNow at ${origin}: ${withoutSecret(err.message, cred?.value)}`,
         );
       } finally {
         release?.();

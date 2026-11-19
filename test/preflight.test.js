@@ -539,8 +539,31 @@ test("a pre-aborted signal runs no check at all", async () => {
   assert.equal(report.results[0].status, "fail");
 });
 
+test("RR-52: a 30-day budget is refused instead of timing every check out at once", async () => {
+  const slow = {
+    name: "slow",
+    description: "d",
+    run: () =>
+      new Promise((resolve) =>
+        setTimeout(
+          () => resolve({ name: "slow", status: "pass", message: "ok" }),
+          50,
+        ),
+      ),
+  };
+  await assert.rejects(
+    runPreflight(ctx(), [slow], { timeoutMs: 30 * 86_400_000 }),
+    (err) => err instanceof RangeError && /up to 2147483647/.test(err.message),
+  );
+  const report = await runPreflight(ctx(), [slow], {
+    timeoutMs: 2 ** 31 - 1,
+  });
+  assert.equal(report.results.find((r) => r.name === "slow")?.status, "pass");
+});
+
 test("runPreflight rejects a budget that is not a positive finite number", async () => {
-  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+  // RR-52 (CLI-9): above 2^31-1 ms a Node timer fires after 1 ms.
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31]) {
     await assert.rejects(
       runPreflight(ctx(), [], { timeoutMs: bad }),
       RangeError,

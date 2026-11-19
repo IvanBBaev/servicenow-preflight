@@ -20,6 +20,7 @@ import { isMissingTable, missingTableResult } from "./checks/cert-common.js";
 import { sanitizeFindings } from "./findings.js";
 import { anySignal } from "./http/abort.js";
 import {
+  MAX_TIMER_MS,
   SnAuthError,
   SnHttpError,
   SnNetworkError,
@@ -191,12 +192,21 @@ export interface RunPreflightOptions {
   concurrency?: number;
 }
 
-/** Reject a budget that is not a positive, finite number of milliseconds. */
+/**
+ * Reject a budget that is not a positive, finite number of milliseconds, or
+ * one above {@link MAX_TIMER_MS}: a longer timer fires after 1 ms, so every
+ * check would time out at once (RR-52, CLI-9).
+ */
 function assertBudget(name: string, value: number | undefined): void {
   if (value === undefined) return;
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    value > MAX_TIMER_MS
+  ) {
     throw new RangeError(
-      `runPreflight: ${name} must be a positive number of milliseconds (got ${String(value)}).`,
+      `runPreflight: ${name} must be a positive number of milliseconds up to ${MAX_TIMER_MS} (got ${String(value)}).`,
     );
   }
 }

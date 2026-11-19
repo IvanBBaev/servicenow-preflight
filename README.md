@@ -252,7 +252,8 @@ Both `--flag value` and `--flag=value` forms are accepted.
 | `--record-raw`                | `run`: with `--record`, keep user and group names and emails (secrets are still redacted).                                    |
 | `--replay <dir>`              | `run`: answer every request from a recording — no network, no credentials.                                                    |
 
-Durations take a unit: `ms`, `s`, `m`, `h`, `d` or `w`. A timed-out check is
+Durations take a unit: `ms`, `s`, `m`, `h`, `d` or `w`. `--timeout` and
+`--run-timeout` accept at most `2147483647ms` (about 24.8 days). A timed-out check is
 cancelled — its in-flight requests are aborted — and reported as
 `Check timed out after 30000 ms (--timeout).`; the per-request HTTP timeout
 still applies inside it.
@@ -1114,8 +1115,8 @@ console.log(report.ok, report.summary); // e.g. false { pass: 2, warn: 4, fail: 
   the run), `timeoutMs` (per check), `runTimeoutMs` (whole run) and
   `concurrency` (checks at once, 1–32, default `1`; checks with
   `meta.serial` run alone after the others, and results keep registry order).
-  A budget that is not a positive finite number, or a concurrency out of
-  range, throws `RangeError`. Every check gets
+  A budget that is not a positive finite number up to 2147483647 ms, or a
+  concurrency out of range, throws `RangeError`. Every check gets
   its own `ctx.signal`, aborted when it times out or the run stops, and a
   `ctx.http` bound to that signal, so a check that only uses `ctx.http` is
   cancelled with no extra code; pass `ctx.signal` on to any other async work.
@@ -1139,6 +1140,11 @@ maxInFlight?, rps?, cache? }`),
   `SNPF_NO_PROXY` and `NO_PROXY` / `no_proxy`.
   `maxInFlight` (1–64) and `rps` (0.5–100) are unset by default, so a library
   client is unlimited unless you opt in; out-of-range values throw `SnError`.
+  So do a `timeoutMs` outside 1–2147483647, a `cicdPollIntervalMs` outside
+  0–2147483647, and a `maxRows` or `cicdMaxPolls` that is not a whole number
+  of at least 1. An oauth `token` or `apiKey` with a control character or a
+  non-Latin-1 character throws `SnAuthError` at construction; the message
+  never contains the value.
   `loadConfig` returns them from the environment as `limits`. `cache: true`
   shares identical `query` / `queryWithMeta` reads for the client's lifetime
   (default `false`; the CLI turns it on per run). Cached rows are frozen.

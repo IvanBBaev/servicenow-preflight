@@ -51,6 +51,7 @@ import {
 } from "./config.js";
 import {
   createSnClient,
+  MAX_TIMER_MS,
   SnAuthError,
   SnError,
   TRANSPORT_WRAP,
@@ -369,11 +370,20 @@ function parseChangedSince(value: string, now = Date.now()): Date {
   return new Date(at);
 }
 
-/** Parse a time budget: a {@link parseDuration} value that must not be zero. */
+/**
+ * Parse a time budget: a {@link parseDuration} value above zero and at most
+ * {@link MAX_TIMER_MS} (about 24.8 days). A longer timer fires after 1 ms, and
+ * a value with hundreds of digits parses to Infinity (RR-52, CLI-9).
+ */
 function parseBudget(value: string, flag: string): number {
   const ms = Math.ceil(parseDuration(value, flag));
   if (ms <= 0) {
     throw new UsageError(`Invalid ${flag} "${value}": it must be above zero.`);
+  }
+  if (!Number.isFinite(ms) || ms > MAX_TIMER_MS) {
+    throw new UsageError(
+      `Invalid ${flag} "${value}": it must be at most ${MAX_TIMER_MS}ms (about 24 days).`,
+    );
   }
   return ms;
 }

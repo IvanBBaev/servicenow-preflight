@@ -636,6 +636,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The HTTP client validates its numeric options and never prints credential
+  bytes** (RR-52, HTTP-4, HTTP-5, HTTP-6, CLI-9) — an oauth token or api key
+  with a control character (a token file with an interior newline) or a
+  non-Latin-1 character is refused at `createSnClient` with an `SnAuthError`
+  that names the field, not the value; a server-issued `access_token` gets the
+  same check, and a transport error that quotes the credential header has it
+  replaced with `[redacted]`. Before, the transport's "invalid header value"
+  message printed the whole secret (HTTP-4). `timeoutMs` (1 to 2147483647),
+  `maxRows` and `cicdMaxPolls` (whole numbers from 1) and `cicdPollIntervalMs`
+  (0 to 2147483647) are checked at construction and throw `SnError`: a NaN,
+  negative or infinite `timeoutMs` threw a raw `RangeError` and then hung the
+  next call on a leaked limiter slot, and `maxRows: NaN` turned off the
+  truncation cap (HTTP-5, HTTP-6). The request timeout signal is now built
+  inside the block that frees the slot. `--timeout`, `--run-timeout`,
+  `SNPF_CHECK_TIMEOUT` and the `runPreflight` budgets refuse values above
+  2147483647 ms (about 24.8 days; a longer Node timer fires after 1 ms, so
+  every check timed out) and a value that parses to Infinity, which exited `3`
+  instead of `2` (CLI-9).
+
 - **Repo-controlled files cannot write outside the repo or redirect
   credentials** (RR-51) — `writeAtomic` (config, init, `--output`, baseline)
   creates its temp file under a random name with `O_EXCL`/`O_NOFOLLOW`, so a

@@ -2094,6 +2094,106 @@ test("F-X-1: out-of-range maxInFlight / rps are refused with SnError", () => {
   }
 });
 
+// --- RR-52 (HTTP-4, HTTP-5, HTTP-6): numeric options and credential bytes ----
+
+test("RR-52: a NaN, negative, fractional or oversized numeric option is refused at construction", () => {
+  for (const extra of [
+    { timeoutMs: Number.NaN },
+    { timeoutMs: -1 },
+    { timeoutMs: 0 },
+    { timeoutMs: Number.POSITIVE_INFINITY },
+    { timeoutMs: 1.5 },
+    { timeoutMs: 2 ** 31 },
+    { timeoutMs: "1000" },
+    { maxRows: Number.NaN },
+    { maxRows: 0 },
+    { maxRows: -5 },
+    { maxRows: 10.5 },
+    { cicdMaxPolls: Number.NaN },
+    { cicdMaxPolls: 0 },
+    { cicdMaxPolls: Number.POSITIVE_INFINITY },
+    { cicdPollIntervalMs: -1 },
+    { cicdPollIntervalMs: Number.NaN },
+    { cicdPollIntervalMs: 2 ** 31 },
+  ]) {
+    const [name] = Object.keys(extra);
+    assert.throws(
+      () => client(extra),
+      (err) =>
+        err instanceof SnError &&
+        err.message.includes(`SnClientConfig.${name} must be a whole number`),
+      `${name}=${String(extra[name])}`,
+    );
+  }
+});
+
+test("RR-52: boundary numeric options are accepted", () => {
+  assert.doesNotThrow(() =>
+    client({
+      timeoutMs: 2 ** 31 - 1,
+      maxRows: 1,
+      cicdMaxPolls: 1,
+      cicdPollIntervalMs: 0,
+    }),
+  );
+});
+
+test("RR-52: a static token or api key with a control character is refused without printing it", () => {
+  for (const auth of [
+    { kind: "oauth", token: "SECRET-part1\nSECRET-part2" },
+    { kind: "oauth", token: "SECRET-tab\tpart" },
+    { kind: "apikey", apiKey: "KEY-SECRET\r\nxy" },
+    { kind: "apikey", apiKey: "KEY-SECRET-\u20ac" },
+  ]) {
+    assert.throws(
+      () => client({ auth }),
+      (err) =>
+        err instanceof SnAuthError &&
+        /cannot be sent in an HTTP header \(value not shown\)/.test(
+          err.message,
+        ) &&
+        !/SECRET/.test(err.message),
+    );
+  }
+});
+
+test("RR-52: a server-issued access_token with a newline fails as SnAuthError without printing it", async () => {
+  handler = (url) =>
+    url.includes("/oauth_token.do")
+      ? fakeResponse({
+          body: { access_token: "TOKSECRET-a\nTOKSECRET-b", expires_in: 1800 },
+        })
+      : fakeResponse({ body: { result: { sys_id: "a" } } });
+  await assert.rejects(
+    client({
+      auth: { kind: "oauth-client", clientId: "id", clientSecret: "cs" },
+    })
+      .table("incident")
+      .get("a"),
+    (err) =>
+      err instanceof SnAuthError &&
+      /access_token/.test(err.message) &&
+      !/TOKSECRET/.test(err.message),
+  );
+});
+
+test("RR-52: a transport error that quotes the credential header is redacted", async () => {
+  handler = (_url, init) => {
+    throw new TypeError(
+      `Headers.append: "${init.headers.Authorization}" is an invalid header value.`,
+    );
+  };
+  await assert.rejects(
+    client({ auth: { kind: "oauth", token: "TOKEN-SECRET-123" } })
+      .table("incident")
+      .get("a"),
+    (err) =>
+      err instanceof SnNetworkError &&
+      err.message.includes("[redacted]") &&
+      !err.message.includes("TOKEN-SECRET-123"),
+  );
+});
+
 // --- F-X-2: per-run read cache -----------------------------------------------
 
 test("F-X-2: with cache on, identical queries share one fetch", async () => {

@@ -1293,6 +1293,12 @@ for (const [label, args, env] of [
   ["--timeout=0s", ["--timeout=0s"], {}],
   ["--run-timeout=-5s", ["--run-timeout=-5s"], {}],
   ["SNPF_CHECK_TIMEOUT=abc", [], { SNPF_CHECK_TIMEOUT: "abc" }],
+  // RR-52 (CLI-9): above 2^31-1 ms a timer fires after 1 ms; 400 digits parse
+  // to Infinity and used to exit 3.
+  ["--timeout 30d", ["--timeout", "30d"], {}],
+  ["--run-timeout=25d", ["--run-timeout=25d"], {}],
+  ["--timeout <400 digits>h", ["--timeout", `${"9".repeat(400)}h`], {}],
+  ["SNPF_CHECK_TIMEOUT=30d", [], { SNPF_CHECK_TIMEOUT: "30d" }],
 ]) {
   test(`CLI rejects an invalid budget (${label}) with exit 2`, () => {
     const res = runCli(
