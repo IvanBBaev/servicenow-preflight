@@ -664,6 +664,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Auto-pagination survives a table that changes mid-walk** (RR-55, HTTP-2,
+  HTTP-15) — offset windows over a live table skipped a row whenever one was
+  deleted behind the current page and repeated one on each insert, and a
+  caller's `ORDERBY` on a non-unique field (`sys_created_on`) left ties free
+  to reorder between pages; the walk returned the damaged set as complete.
+  `table().query()` / `queryWithMeta()` now page along a `sys_id` keyset
+  (`sys_id>last^ORDERBYsys_id`, with `sys_id` added to `sysparm_fields` for
+  the walk and stripped from the rows again). A query with its own `ORDERBY`
+  or an `^NQ` keeps offset windows, gains an `ORDERBYsys_id` tiebreak unless
+  `sys_id` is already an order key, and treats a moved `X-Total-Count` or a
+  repeated `sys_id` as a changed set. A keyset walk whose rows do not add up
+  to the first count re-reads the count with one `sysparm_limit=1` request.
+  A changed set is walked once more; if it changes again the query throws
+  `SnError` instead of returning rows that may be missing or doubled. A row
+  without a usable `sys_id` in keyset mode is an `SnResponseError`. The RR-1
+  security-trimming and RR-46 count rules are unchanged; on a heavily trimmed
+  set the `maxRows` cap counts windows read and may trip slightly earlier.
+
 - **`drift` proves identity and parity** (RR-54, ST-7, ST-8, ST-9, ST-10,
   ST-24) — a promote gate that compared the wrong things no longer passed.
   A new `manifest-identity` result fails when a manifest's `url` is not the

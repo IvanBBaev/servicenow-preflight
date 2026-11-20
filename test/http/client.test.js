@@ -113,6 +113,69 @@ function client(extra = {}) {
   });
 }
 
+/** `n` zero-padded sys_ids, so lexical order is numeric order. */
+function idsOf(n, prefix = "r") {
+  return Array.from(
+    { length: n },
+    (_, i) => `${prefix}${String(i).padStart(5, "0")}`,
+  );
+}
+
+/**
+ * A ServiceNow-like Table API stand-in. It honours a `sys_id>X` keyset
+ * condition in sysparm_query, cuts the [offset, offset+limit) window from the
+ * matching ids and only then drops ACL-denied rows (RR-1: the count is
+ * pre-trim). `ids` may be a function of the request number, so a test can
+ * change the set mid-walk. `count(n, request)` returns the X-Total-Count
+ * header (undefined omits it).
+ */
+function tableApi(
+  ids,
+  {
+    denied = () => false,
+    count = (n) => String(n),
+    row = (id) => ({ sys_id: id }),
+  } = {},
+) {
+  let request = 0;
+  return (url) => {
+    const params = new URL(url).searchParams;
+    const query = params.get("sysparm_query") ?? "";
+    const cursor = /(?:^|\^)sys_id>([^^]+)/.exec(query)?.[1];
+    const all = typeof ids === "function" ? ids(request) : ids;
+    const sorted = [...all].sort();
+    const matching =
+      cursor === undefined ? sorted : sorted.filter((id) => id > cursor);
+    const offset = Number(params.get("sysparm_offset") ?? 0);
+    const limit = Number(params.get("sysparm_limit"));
+    const result = [];
+    for (let i = offset; i < Math.min(offset + limit, matching.length); i++) {
+      const id = matching[i];
+      if (!denied(sorted.indexOf(id), id)) result.push(row(id));
+    }
+    const header = count(matching.length, request);
+    request++;
+    return fakeResponse({
+      body: { result },
+      headers: header === undefined ? undefined : { "X-Total-Count": header },
+    });
+  };
+}
+
+function offsetsOf(list) {
+  return list.map((c) =>
+    Number(new URL(c.url).searchParams.get("sysparm_offset")),
+  );
+}
+
+/** The keyset cursor (`sys_id>X`) of each request, or null on the first window. */
+function cursorsOf(list) {
+  return list.map((c) => {
+    const q = new URL(c.url).searchParams.get("sysparm_query") ?? "";
+    return /(?:^|\^)sys_id>([^^]+)/.exec(q)?.[1] ?? null;
+  });
+}
+
 test("table().get returns the record on a 200 with a result object", async () => {
   handler = () =>
     fakeResponse({ body: { result: { sys_id: "abc", name: "Set" } } });
@@ -225,34 +288,21 @@ test("table().query honours a caller-supplied sysparm_limit as a single page", a
   assert.match(calls[0].url, /sysparm_limit=10/);
 });
 
-test("table().query auto-paginates until a short page ends the run", async () => {
-  const fullPage = Array.from({ length: 1000 }, (_, i) => ({
-    sys_id: `r${i}`,
-  }));
-  handler = (url) => {
-    const offset = Number(new URL(url).searchParams.get("sysparm_offset"));
-    const rows = offset === 0 ? fullPage : [{ sys_id: "last" }];
-    return fakeResponse({ body: { result: rows } });
-  };
+test("table().query auto-paginates along a sys_id keyset until a short page ends the run", async () => {
+  handler = tableApi(idsOf(1001), { count: () => undefined });
   const rows = await client().table("sys_user_role").query();
   // 1000 (full) + 1 (short) rows, fetched across two pages.
   assert.equal(rows.length, 1001);
   assert.equal(calls.length, 2);
-  assert.match(calls[0].url, /sysparm_offset=0\b/);
-  assert.match(calls[1].url, /sysparm_offset=1000\b/);
+  // RR-55: the second window starts after the last id, not at an offset.
+  assert.deepEqual(cursorsOf(calls), [null, "r00999"]);
+  assert.deepEqual(offsetsOf(calls), [0, 0]);
 });
 
 // --- CC-10: the sysparm_limit / sysparm_offset contract ---------------------
 
 test("table().query treats an empty-string sysparm_limit as absent and auto-paginates", async () => {
-  handler = (url) => {
-    const offset = Number(new URL(url).searchParams.get("sysparm_offset"));
-    const rows =
-      offset === 0
-        ? Array.from({ length: 1000 }, (_, i) => ({ sys_id: `r${i}` }))
-        : [{ sys_id: "last" }];
-    return fakeResponse({ body: { result: rows } });
-  };
+  handler = tableApi(idsOf(1001), { count: () => undefined });
   const rows = await client()
     .table("sys_user_role")
     .query({ sysparm_limit: "" });
@@ -303,25 +353,33 @@ test("auto-pagination sets ORDERBYsys_id even with no query at all", async () =>
   assert.equal(q, "ORDERBYsys_id");
 });
 
-test("auto-pagination preserves a caller's own ORDERBY clause", async () => {
+test("auto-pagination keeps a caller's ORDERBY and adds a sys_id tiebreak (RR-55, HTTP-15)", async () => {
   handler = () => fakeResponse({ body: { result: [] } });
   await client()
     .table("sys_user_role")
     .query({ sysparm_query: "active=true^ORDERBYDESCsys_created_on" });
   const q = new URL(calls[0].url).searchParams.get("sysparm_query");
-  assert.equal(q, "active=true^ORDERBYDESCsys_created_on");
+  assert.equal(q, "active=true^ORDERBYDESCsys_created_on^ORDERBYsys_id");
+});
+
+test("auto-pagination adds no tiebreak when sys_id already is an order key (RR-55)", async () => {
+  handler = () => fakeResponse({ body: { result: [] } });
+  for (const query of [
+    "ORDERBYDESCsys_id",
+    "active=true^ORDERBYname^ORDERBYsys_id",
+  ]) {
+    calls.length = 0;
+    await client().table("sys_user_role").query({ sysparm_query: query });
+    const q = new URL(calls[0].url).searchParams.get("sysparm_query");
+    assert.equal(q, query);
+  }
 });
 
 // --- CC-9: fail closed at the row cap instead of silently truncating --------
 
 test("auto-pagination throws SnTruncationError at the row cap rather than truncating", async () => {
   // Every page is full, so the run never reaches a natural (short-page) end.
-  handler = () =>
-    fakeResponse({
-      body: {
-        result: Array.from({ length: 1000 }, (_, i) => ({ sys_id: `r${i}` })),
-      },
-    });
+  handler = tableApi(idsOf(5000), { count: () => undefined });
   await assert.rejects(
     () => client({ maxRows: 1500 }).table("sys_user_role").query(),
     (err) => {
@@ -340,17 +398,7 @@ test("auto-pagination does NOT throw when a full final page reaches X-Total-Coun
   // maxRows (here 2000 = 2×1000) would trip the cap on the last full page. The
   // pre-trim X-Total-Count says the set is exhausted, so it must resolve, not
   // throw a false truncation error.
-  handler = (url) => {
-    const offset = Number(new URL(url).searchParams.get("sysparm_offset"));
-    return fakeResponse({
-      headers: { "X-Total-Count": "2000" },
-      body: {
-        result: Array.from({ length: 1000 }, (_, i) => ({
-          sys_id: `r${offset + i}`,
-        })),
-      },
-    });
-  };
+  handler = tableApi(idsOf(2000));
   const rows = await client({ maxRows: 2000 }).table("sys_user_role").query();
   assert.equal(rows.length, 2000);
   // Exactly two pages; the X-Total-Count break fired before the cap throw.
@@ -1563,16 +1611,12 @@ test("SN-1: an empty sysparm_limit is absent, not a pinned page", async () => {
 });
 
 test("SN-1: auto-pagination captures X-Total-Count from the first page", async () => {
-  handler = (url) => {
-    const offset = Number(new URL(url).searchParams.get("sysparm_offset"));
-    const rows =
-      offset === 0
-        ? Array.from({ length: 1000 }, (_, i) => ({ sys_id: `r${i}` }))
-        : [{ sys_id: "last" }];
-    // Only the first page carries the (pre-trim) count header.
-    const headers = offset === 0 ? { "x-total-count": "1500" } : undefined;
-    return fakeResponse({ body: { result: rows }, headers });
-  };
+  // 1500 matches, all but one of the second window denied; only the first
+  // page carries the (pre-trim) count header.
+  handler = tableApi(idsOf(1500), {
+    denied: (i) => i > 1000,
+    count: (n, request) => (request === 0 ? String(n) : undefined),
+  });
   const res = await client().table("sys_user_role").queryWithMeta();
   assert.equal(res.rows.length, 1001);
   assert.equal(res.totalCount, 1500);
@@ -1581,56 +1625,42 @@ test("SN-1: auto-pagination captures X-Total-Count from the first page", async (
 
 // --- RR-1: a security-trimmed short page does not end pagination -------------
 
-function offsetsOf(list) {
-  return list.map((c) =>
-    Number(new URL(c.url).searchParams.get("sysparm_offset")),
-  );
-}
-
-function pagedHandler(total, sizes) {
-  return (url) => {
-    const offset = Number(new URL(url).searchParams.get("sysparm_offset"));
-    const size = sizes[offset / 1000] ?? 0;
-    return fakeResponse({
-      headers: { "X-Total-Count": String(total) },
-      body: {
-        result: Array.from({ length: size }, (_, i) => ({
-          sys_id: `r${offset + i}`,
-        })),
-      },
-    });
-  };
-}
-
 test("RR-1: a short trimmed page mid-set keeps paging up to X-Total-Count", async () => {
-  // 2500 pre-trim matches; ACLs hide 10 rows of the first window.
-  handler = pagedHandler(2500, [990, 1000, 500]);
+  // 2500 pre-trim matches; ACLs hide the last 10 rows of the first window.
+  // The next window starts after the last visible row, so the denied tail is
+  // read (and denied) again before the walk moves on.
+  const denied = (i) => i >= 990 && i < 1000;
+  handler = tableApi(idsOf(2500), { denied });
   const res = await client().table("sys_user_role").queryWithMeta();
-  assert.deepEqual(offsetsOf(calls), [0, 1000, 2000]);
+  assert.deepEqual(cursorsOf(calls), [null, "r00989", "r01989", null]);
+  // The last request re-reads the count (limit 1): the rows do not add up.
+  assert.equal(new URL(calls[3].url).searchParams.get("sysparm_limit"), "1");
   assert.equal(res.rows.length, 2490);
   assert.equal(res.totalCount, 2500);
   assert.equal(res.securityTrimmed, true);
 });
 
 test("RR-1: query() also returns the rows after a short trimmed page", async () => {
-  handler = pagedHandler(2500, [990, 1000, 500]);
+  handler = tableApi(idsOf(2500), { denied: (i) => i >= 990 && i < 1000 });
   const rows = await client().table("sys_user_role").query();
   assert.equal(rows.length, 2490);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
 });
 
 test("RR-1: a fully trimmed (empty) window does not end pagination", async () => {
-  handler = pagedHandler(2500, [1000, 0, 500]);
+  handler = tableApi(idsOf(2500), { denied: (i) => i >= 1000 && i < 2000 });
   const res = await client().table("sys_user_role").queryWithMeta();
-  assert.deepEqual(offsetsOf(calls), [0, 1000, 2000]);
+  // The empty window keeps the cursor and steps the offset past itself.
+  assert.deepEqual(cursorsOf(calls), [null, "r00999", "r00999", null]);
+  assert.deepEqual(offsetsOf(calls), [0, 0, 1000, 0]);
   assert.equal(res.rows.length, 1500);
   assert.equal(res.securityTrimmed, true);
 });
 
 test("RR-1: an untrimmed set stops at X-Total-Count without an extra request", async () => {
-  handler = pagedHandler(1500, [1000, 500]);
+  handler = tableApi(idsOf(1500));
   const res = await client().table("sys_user_role").queryWithMeta();
-  assert.deepEqual(offsetsOf(calls), [0, 1000]);
+  assert.deepEqual(cursorsOf(calls), [null, "r00999"]);
   assert.equal(res.rows.length, 1500);
   assert.equal(res.securityTrimmed, false);
 });
@@ -1655,7 +1685,7 @@ test("RR-1: without X-Total-Count a short page still ends pagination", async () 
 test("RR-1: trimmed windows still stop at the row cap (fail closed)", async () => {
   // Every window is short, so the rows never reach the cap; the walked
   // windows do, and the count says more remain.
-  handler = pagedHandler(5000, [10, 10, 10, 10, 10]);
+  handler = tableApi(idsOf(5000), { denied: (i) => i % 100 !== 0 });
   await assert.rejects(
     () => client({ maxRows: 2000 }).table("sys_user_role").query(),
     (err) => {
@@ -1664,34 +1694,21 @@ test("RR-1: trimmed windows still stop at the row cap (fail closed)", async () =
       return true;
     },
   );
-  assert.deepEqual(offsetsOf(calls), [0, 1000]);
+  assert.equal(calls.length, 2);
 });
 
 // --- RR-46: an empty or low X-Total-Count never ends the walk early ----------
 
 /** A 2500-row table that answers every page with the given count header. */
 function headerHandler(count, size = 2500) {
-  return (url) => {
-    const params = new URL(url).searchParams;
-    const offset = Number(params.get("sysparm_offset"));
-    const limit = Number(params.get("sysparm_limit"));
-    const n = Math.max(0, Math.min(limit, size - offset));
-    return fakeResponse({
-      headers: { "X-Total-Count": count },
-      body: {
-        result: Array.from({ length: n }, (_, i) => ({
-          sys_id: `r${offset + i}`,
-        })),
-      },
-    });
-  };
+  return tableApi(idsOf(size), { count: () => count });
 }
 
 for (const blank of ["", "   "]) {
   test(`RR-46: a blank X-Total-Count (${JSON.stringify(blank)}) is absent, not 0`, async () => {
     handler = headerHandler(blank);
     const res = await client().table("sys_update_xml").queryWithMeta();
-    assert.deepEqual(offsetsOf(calls), [0, 1000, 2000]);
+    assert.deepEqual(cursorsOf(calls), [null, "r00999", "r01999"]);
     assert.equal(res.rows.length, 2500);
     assert.equal(res.totalCount, undefined);
     assert.equal(res.securityTrimmed, false);
@@ -1701,7 +1718,7 @@ for (const blank of ["", "   "]) {
 test("RR-46: a count below the rows delivered is dropped; page length decides", async () => {
   handler = headerHandler("10");
   const res = await client().table("sys_update_xml").queryWithMeta();
-  assert.deepEqual(offsetsOf(calls), [0, 1000, 2000]);
+  assert.deepEqual(cursorsOf(calls), [null, "r00999", "r01999"]);
   assert.equal(res.rows.length, 2500);
   // The contradicted count is not reported: it would claim 10 matches.
   assert.equal(res.totalCount, undefined);
@@ -1718,7 +1735,7 @@ test("RR-46: a contradicted count still stops at the row cap (fail closed)", asy
       return true;
     },
   );
-  assert.deepEqual(offsetsOf(calls), [0, 1000]);
+  assert.deepEqual(cursorsOf(calls), [null, "r00999"]);
 });
 
 test("RR-46: only a plain digit run is a count", async () => {
@@ -2404,4 +2421,159 @@ test("a non-http(s) instanceUrl scheme is refused", () => {
       err instanceof SnError &&
       /only https:\/\/ is supported/.test(err.message),
   );
+});
+
+// --- RR-55 (HTTP-2): pagination survives a set that changes mid-walk ---------
+
+test("RR-55: a row deleted ahead of the cursor makes the walk re-run on the settled set", async () => {
+  // The second request onwards no longer sees r02000.
+  handler = tableApi((request) =>
+    request === 0 ? idsOf(2500) : idsOf(2500).filter((id) => id !== "r02000"),
+  );
+  const res = await client().table("sys_user_role").queryWithMeta();
+  // Walk 1 (3 windows) ends 1 row short of its first count; the limit-1
+  // re-count sees 2499, so the walk re-runs and now adds up.
+  assert.equal(calls.length, 7);
+  assert.equal(new URL(calls[3].url).searchParams.get("sysparm_limit"), "1");
+  assert.equal(res.rows.length, 2499);
+  assert.equal(res.totalCount, 2499);
+  assert.equal(res.securityTrimmed, false);
+  assert.ok(!res.rows.some((r) => r.sys_id === "r02000"));
+});
+
+test("RR-55: a row inserted behind the cursor neither repeats nor shifts rows", async () => {
+  // Offset windows would hand back r00999 twice here; the keyset cannot.
+  handler = tableApi((request) =>
+    request === 0 ? idsOf(2500) : [...idsOf(2500), "r00500a"],
+  );
+  const res = await client().table("sys_user_role").queryWithMeta();
+  assert.equal(calls.length, 3);
+  const ids = res.rows.map((r) => r.sys_id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.deepEqual(ids, idsOf(2500));
+  assert.equal(res.totalCount, 2500);
+});
+
+test("RR-55: a row inserted ahead of the cursor is picked up on the re-walk", async () => {
+  handler = tableApi((request) =>
+    request === 0 ? idsOf(2500) : [...idsOf(2500), "r01500a"],
+  );
+  const res = await client().table("sys_user_role").queryWithMeta();
+  const ids = res.rows.map((r) => r.sys_id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.equal(ids.length, 2501);
+  assert.ok(ids.includes("r01500a"));
+  assert.equal(res.totalCount, 2501);
+});
+
+test("RR-55: a set that keeps changing fails closed after two walks", async () => {
+  // Every request sees one more row than the last.
+  handler = tableApi((request) => [
+    ...idsOf(1500),
+    ...Array.from({ length: request + 1 }, (_, k) => `z${k}`),
+  ]);
+  await assert.rejects(
+    () => client().table("sys_user_role").query(),
+    (err) => {
+      assert.ok(err instanceof SnError);
+      assert.ok(!(err instanceof SnTruncationError));
+      assert.match(err.message, /change during pagination on 2 walks/);
+      assert.match(err.message, /X-Total-Count moved/);
+      return true;
+    },
+  );
+  // Two walks of 2 windows plus a re-count each — never a third walk.
+  assert.equal(calls.length, 6);
+});
+
+test("RR-55: offset paging (caller ORDERBY) re-walks when X-Total-Count moves", async () => {
+  handler = tableApi((request) =>
+    request === 0 ? idsOf(1500) : idsOf(1500).slice(1),
+  );
+  const res = await client()
+    .table("sys_user_role")
+    .queryWithMeta({ sysparm_query: "ORDERBYname" });
+  assert.deepEqual(offsetsOf(calls), [0, 1000, 0, 1000]);
+  assert.deepEqual(cursorsOf(calls), [null, null, null, null]);
+  assert.equal(res.rows.length, 1499);
+  assert.equal(res.totalCount, 1499);
+});
+
+test("RR-55: offset paging re-walks on a repeated sys_id when no count is sent", async () => {
+  // A row inserted at the front shifts every later window by one.
+  handler = tableApi(
+    (request) => (request === 0 ? idsOf(1500) : ["a0", ...idsOf(1500)]),
+    { count: () => undefined },
+  );
+  const rows = await client()
+    .table("sys_user_role")
+    .query({ sysparm_query: "ORDERBYname" });
+  assert.equal(calls.length, 4);
+  const ids = rows.map((r) => r.sys_id);
+  assert.equal(new Set(ids).size, 1501);
+  assert.ok(ids.includes("a0"));
+});
+
+test("RR-55: a ^NQ query pages by offset with the sys_id tiebreak", async () => {
+  handler = tableApi(idsOf(1500));
+  const rows = await client()
+    .table("sys_user_role")
+    .query({ sysparm_query: "active=true^NQactive=false" });
+  assert.equal(rows.length, 1500);
+  assert.deepEqual(offsetsOf(calls), [0, 1000]);
+  assert.deepEqual(cursorsOf(calls), [null, null]);
+  assert.equal(
+    new URL(calls[0].url).searchParams.get("sysparm_query"),
+    "active=true^NQactive=false^ORDERBYsys_id",
+  );
+});
+
+test("RR-55: sysparm_fields without sys_id is widened for the keyset, then trimmed back", async () => {
+  handler = tableApi(idsOf(1500), {
+    row: (id) => ({ sys_id: id, name: `n-${id}` }),
+  });
+  const rows = await client()
+    .table("sys_user_role")
+    .query({ sysparm_fields: "name" });
+  assert.equal(
+    new URL(calls[0].url).searchParams.get("sysparm_fields"),
+    "name,sys_id",
+  );
+  assert.equal(rows.length, 1500);
+  assert.deepEqual(rows[0], { name: "n-r00000" });
+});
+
+test("RR-55: sysparm_fields that already names sys_id is sent and returned as is", async () => {
+  handler = tableApi(idsOf(10));
+  const rows = await client()
+    .table("sys_user_role")
+    .query({ sysparm_fields: "sys_id,name" });
+  assert.equal(
+    new URL(calls[0].url).searchParams.get("sysparm_fields"),
+    "sys_id,name",
+  );
+  assert.equal(rows[0].sys_id, "r00000");
+});
+
+test("RR-55: display_value=all sys_id objects drive the keyset by their value", async () => {
+  handler = tableApi(idsOf(1500), {
+    row: (id) => ({ sys_id: { value: id, display_value: id } }),
+  });
+  const rows = await client()
+    .table("sys_user_role")
+    .query({ sysparm_display_value: "all" });
+  assert.equal(rows.length, 1500);
+  assert.deepEqual(cursorsOf(calls), [null, "r00999"]);
+});
+
+test("RR-55: a keyset row without a usable sys_id is a response error", async () => {
+  for (const row of [{ name: "x" }, { sys_id: "a^b" }, { sys_id: "" }]) {
+    calls.length = 0;
+    handler = () => fakeResponse({ body: { result: [row] } });
+    await assert.rejects(
+      () => client().table("sys_user_role").query(),
+      (err) => err instanceof SnResponseError,
+      JSON.stringify(row),
+    );
+  }
 });

@@ -351,8 +351,14 @@ test("pullManifest pulls every test across pagination pages — no 1000-row cap 
     const limit = Number(u.searchParams.get("sysparm_limit") ?? "0");
     const result = [];
     if (table === "sys_atf_test") {
-      const end = Math.min(offset + limit, TOTAL);
-      for (let i = offset; i < end; i++) {
+      // Honour the client's `sys_id>X` keyset cursor (RR-55), like the
+      // instance does: lexical sys_id order, then the window.
+      const query = u.searchParams.get("sysparm_query") ?? "";
+      const cursor = /(?:^|\^)sys_id>([^^]+)/.exec(query)?.[1];
+      const ids = Array.from({ length: TOTAL }, (_, i) => i)
+        .sort((a, b) => (`t${a}` < `t${b}` ? -1 : 1))
+        .filter((i) => cursor === undefined || `t${i}` > cursor);
+      for (const i of ids.slice(offset, offset + limit)) {
         result.push({ sys_id: `t${i}`, name: `Test ${i}`, active: "true" });
       }
     }

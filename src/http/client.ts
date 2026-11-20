@@ -1398,19 +1398,251 @@ function paramPresent(value: string | undefined): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
+/** Rows per auto-paginated window (the Table API's practical page size). */
+const PAGE_SIZE = 1000;
+
 /**
- * Auto-pagination walks `sysparm_offset` in fixed windows, so it needs a stable
- * total order or rows can be skipped or repeated across pages. When the caller's
- * `sysparm_query` carries no `ORDERBY` clause of its own, pin one on `sys_id`
- * (unique and always present). A caller-supplied ordering is left untouched.
+ * RR-55: how many times an auto-paginated walk runs before a result set that
+ * keeps changing underneath it fails the query. The first walk plus one re-walk.
  */
-function withStableOrder(rawQuery: string | undefined): string {
-  const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
-  // A ServiceNow order clause is `ORDERBY<field>` / `ORDERBYDESC<field>` at the
-  // start of the query or after a `^` operator boundary.
-  const hasOrderBy = /(?:^|\^)ORDERBY/.test(query);
-  if (hasOrderBy) return query;
-  return query ? `${query}^ORDERBYsys_id` : "ORDERBYsys_id";
+const PAGINATION_ATTEMPTS = 2;
+
+/**
+ * A ServiceNow order clause is `ORDERBY<field>` / `ORDERBYDESC<field>` at the
+ * start of the query or after a `^` operator boundary.
+ */
+const ORDER_CLAUSE = /(?:^|\^)ORDERBY/;
+
+/**
+ * Offset windows need a stable total order or rows can be skipped or repeated
+ * across pages. Without an `ORDERBY` of the caller's own, pin one on `sys_id`
+ * (unique and always present). RR-55 (HTTP-15): a caller ordering on a
+ * non-unique field (`ORDERBYDESCsys_created_on`) gets `sys_id` as the final
+ * tiebreak, unless `sys_id` already is one of its order keys.
+ */
+function withStableOrder(query: string): string {
+  if (!ORDER_CLAUSE.test(query)) {
+    return query ? `${query}^ORDERBYsys_id` : "ORDERBYsys_id";
+  }
+  if (/(?:^|\^)ORDERBY(?:DESC)?sys_id(?:\^|$)/.test(query)) return query;
+  return `${query}^ORDERBYsys_id`;
+}
+
+/**
+ * RR-55 (HTTP-2): whether the walk can use a `sys_id` keyset instead of offset
+ * windows. Not when the caller orders the rows (the keyset needs `sys_id`
+ * order), and not when the query has a `^NQ` (new query) part: a `sys_id>`
+ * condition appended to it would bind only to the last OR-ed query.
+ */
+function keysetPaginable(query: string): boolean {
+  return !ORDER_CLAUSE.test(query) && !/(?:^|\^)NQ/.test(query);
+}
+
+/** The encoded query of one keyset window: rows after `cursor`, in id order. */
+function keysetQuery(filter: string, cursor: string | undefined): string {
+  return [
+    filter,
+    cursor === undefined ? "" : `sys_id>${cursor}`,
+    "ORDERBYsys_id",
+  ]
+    .filter(Boolean)
+    .join("^");
+}
+
+/**
+ * The `sys_id` of a row, as a plain string. A `sysparm_display_value=all` row
+ * carries `{ value, display_value }`; the raw value is the key.
+ */
+function rowSysId(row: Record<string, unknown>): string | undefined {
+  const raw = row.sys_id;
+  if (typeof raw === "string") return raw;
+  if (raw !== null && typeof raw === "object" && "value" in raw) {
+    const value = raw.value;
+    if (typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+/**
+ * The walk keys on `sys_id` (keyset cursor, duplicate detection), so a caller
+ * `sysparm_fields` list without it gets `sys_id` added; `added` tells the walk
+ * to strip it again so the caller sees exactly the fields it asked for.
+ */
+function fieldsWithSysId(raw: string | undefined): {
+  fields: string | undefined;
+  added: boolean;
+} {
+  if (!paramPresent(raw)) return { fields: raw, added: false };
+  const listed = raw.split(",").map((f) => f.trim());
+  if (listed.includes("sys_id")) return { fields: raw, added: false };
+  return { fields: `${raw.trim()},sys_id`, added: true };
+}
+
+/** One auto-pagination request: a window of `limit` rows at `offset`. */
+type FetchPage = (
+  query: string,
+  offset: number,
+  limit: number,
+) => Promise<{ rows: Record<string, unknown>[]; count?: number }>;
+
+/**
+ * A finished walk, or (RR-55) a sentence saying how the result set changed
+ * underneath it, so the caller re-walks instead of returning the rows.
+ */
+type WalkOutcome = TableQueryResult | string;
+
+/** A `sys_id` is safe to put into an encoded query as a keyset cursor. */
+const CURSOR_SAFE = /^[0-9A-Za-z_-]+$/;
+
+/**
+ * RR-55 (HTTP-2): walk the set as a `sys_id` keyset — each window asks for the
+ * rows after the last id received (`sys_id>last^ORDERBYsys_id`), so a row
+ * deleted or inserted elsewhere in the set cannot shift a later window: every
+ * row that exists for the whole walk comes back exactly once.
+ *
+ * RR-1 still holds per window: ServiceNow cuts the window before it drops
+ * ACL-denied rows, and `X-Total-Count` is the pre-trim count of the rows after
+ * the cursor. A window with visible rows moves the cursor past its last one (a
+ * trimmed tail is read again, and denied again, by the next window); an empty
+ * window keeps the cursor and steps `sysparm_offset` past it. With a count,
+ * the walk ends once a window reaches it; without one, at a short window.
+ *
+ * The pre-trim total is the first window's count. When the rows do not add up
+ * to it, the set may have changed mid-walk rather than been trimmed, so one
+ * cheap request re-reads the count: a different count is a change.
+ */
+async function keysetWalk(
+  filter: string,
+  fetchPage: FetchPage,
+  checkCap: (walked: number) => void,
+): Promise<WalkOutcome> {
+  const all: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  let skip = 0;
+  let firstCount: number | undefined;
+  // RR-46: set once a window held more rows than its own count allows; from
+  // then on the header is ignored and window length decides.
+  let contradicted = false;
+  let windows = 0;
+  for (;;) {
+    const { rows, count } = await fetchPage(
+      keysetQuery(filter, cursor),
+      skip,
+      PAGE_SIZE,
+    );
+    windows += 1;
+    if (windows === 1) firstCount = count;
+    let last: string | undefined;
+    for (const row of rows) {
+      const id = rowSysId(row);
+      if (id === undefined || !CURSOR_SAFE.test(id)) {
+        throw new SnResponseError(
+          `Table API row without a usable sys_id (${JSON.stringify(id ?? null)}); ` +
+            `the keyset pagination cannot continue past it.`,
+          200,
+          "",
+        );
+      }
+      // `sys_id>cursor` can never return a row already seen: the instance
+      // ignored the cursor, or the set is not what it was.
+      if (seen.has(id)) return `sys_id ${id} came back twice`;
+      seen.add(id);
+      all.push(row);
+      last = id;
+    }
+    if (count !== undefined && skip + rows.length > count) contradicted = true;
+    const remaining = contradicted ? undefined : count;
+    if (remaining !== undefined) {
+      if (skip + PAGE_SIZE >= remaining) break;
+    } else if (rows.length < PAGE_SIZE) {
+      break;
+    }
+    if (last === undefined) {
+      skip += PAGE_SIZE;
+    } else {
+      cursor = last;
+      skip = 0;
+    }
+    checkCap(windows * PAGE_SIZE);
+  }
+  if (contradicted) return toQueryResult(all, undefined);
+  if (windows > 1 && firstCount !== undefined && all.length !== firstCount) {
+    const { count: now } = await fetchPage(
+      keysetQuery(filter, undefined),
+      0,
+      1,
+    );
+    if (now !== undefined && now !== firstCount) {
+      return `X-Total-Count moved from ${firstCount} to ${now}`;
+    }
+  }
+  // RR-46: more rows than a steady count is proof the count is wrong.
+  if (firstCount !== undefined && all.length > firstCount) {
+    return toQueryResult(all, undefined);
+  }
+  return toQueryResult(all, firstCount);
+}
+
+/**
+ * Offset windows, for a caller-ordered query (or one with `^NQ`). RR-55
+ * (HTTP-2): every window carries the current `X-Total-Count`, so a count that
+ * differs from the first one, or a `sys_id` seen twice, means the set changed
+ * mid-walk and a row may have been skipped or repeated.
+ */
+async function offsetWalk(
+  query: string,
+  fetchPage: FetchPage,
+  checkCap: (walked: number) => void,
+): Promise<WalkOutcome> {
+  const all: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  // X-Total-Count is the pre-trim match count; it rides every page, so
+  // capture it from the first response that carries it (SN-1).
+  let totalCount: number | undefined;
+  let firstCount: number | undefined;
+  // RR-46: set once the instance delivered more rows than its own count
+  // claims; from then on the header is ignored and page length decides.
+  let countContradicted = false;
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { rows, count } = await fetchPage(query, offset, PAGE_SIZE);
+    if (count !== undefined) {
+      if (firstCount === undefined) firstCount = count;
+      else if (count !== firstCount) {
+        return `X-Total-Count moved from ${firstCount} to ${count}`;
+      }
+    }
+    if (totalCount === undefined && !countContradicted) totalCount = count;
+    for (const row of rows) {
+      const id = rowSysId(row);
+      if (id !== undefined) {
+        if (seen.has(id)) return `sys_id ${id} came back twice`;
+        seen.add(id);
+      }
+      all.push(row);
+    }
+    const nextOffset = offset + PAGE_SIZE;
+    if (totalCount !== undefined && all.length > totalCount) {
+      // RR-46: trimming only ever lowers the visible rows below the pre-trim
+      // count, so more rows than the count is proof the count is wrong.
+      // Trusting it would end the walk early and report the truncated set as
+      // untrimmed; drop it and walk by page length.
+      totalCount = undefined;
+      countContradicted = true;
+    }
+    if (totalCount !== undefined) {
+      // RR-1: ServiceNow cuts the offset window *before* it drops ACL-denied
+      // rows, so a page can come back short (or even empty) while later
+      // windows still hold readable rows. With a count, the windows — not the
+      // page length — decide: walk every window up to the count.
+      if (nextOffset >= totalCount) break;
+    } else if (rows.length < PAGE_SIZE) {
+      // No count arrived: a short page is the only end signal there is.
+      break;
+    }
+    checkCap(nextOffset);
+  }
+  return toQueryResult(all, totalCount);
 }
 
 /**
@@ -2017,71 +2249,72 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
               `or drop the offset to let the client auto-paginate.`,
           );
         }
-        // Auto-paginate. Pin a stable order (CC-33) so no row is skipped or
-        // repeated across offset windows.
-        const query = withStableOrder(params?.sysparm_query);
-        const pageSize = 1000;
-        const all: Record<string, unknown>[] = [];
-        // X-Total-Count is the pre-trim match count; it rides every page, so
-        // capture it from the first response that carries it (SN-1).
-        let totalCount: number | undefined;
-        // RR-46: set once the instance delivered more rows than its own count
-        // claims; from then on the header is ignored and page length decides.
-        let countContradicted = false;
-        for (let offset = 0; ; offset += pageSize) {
+        // Auto-paginate. RR-55 (HTTP-2): offset windows over a set that
+        // changes mid-walk skip an existing row (a delete before the offset)
+        // or repeat one (an insert). Without a caller ordering the walk is a
+        // `sys_id` keyset, which no change can shift; with one, offset windows
+        // with a `sys_id` tiebreak, checked for duplicates and a moving count.
+        // A walk that saw the set change runs once more, then fails closed.
+        const filter =
+          typeof params?.sysparm_query === "string"
+            ? params.sysparm_query.trim()
+            : "";
+        const { fields, added } = fieldsWithSysId(params?.sysparm_fields);
+        const fetchPage = async (
+          query: string,
+          offset: number,
+          limit: number,
+        ): Promise<{ rows: Record<string, unknown>[]; count?: number }> => {
           const res = await requestOk("GET", base, {
             query: {
               ...params,
+              ...(fields === undefined ? {} : { sysparm_fields: fields }),
               sysparm_query: query,
-              sysparm_limit: String(pageSize),
+              sysparm_limit: String(limit),
               sysparm_offset: String(offset),
             },
             signal,
           });
-          if (totalCount === undefined && !countContradicted) {
-            totalCount = parseTotalCount(res.headers);
+          return {
+            rows: tableRows(res, name),
+            count: parseTotalCount(res.headers),
+          };
+        };
+        // More windows remain but the cap is reached: fail closed rather than
+        // silently drop them, so the caller learns to narrow the query instead
+        // of trusting a truncated result. The cap counts walked windows (equal
+        // to rows when nothing is trimmed), so a heavily trimmed set cannot
+        // walk past it either.
+        const checkCap = (walked: number): void => {
+          if (walked < maxRows) return;
+          throw new SnTruncationError(
+            `Table API query on "${name}" exceeded the ${maxRows}-row ` +
+              `pagination cap without reaching the end of the result set; ` +
+              `refusing to return a silently truncated result. Narrow ` +
+              `sysparm_query, or page explicitly with sysparm_limit/` +
+              `sysparm_offset.`,
+            maxRows,
+          );
+        };
+        const walk = keysetPaginable(filter)
+          ? () => keysetWalk(filter, fetchPage, checkCap)
+          : () => offsetWalk(withStableOrder(filter), fetchPage, checkCap);
+        let changed = "";
+        for (let attempt = 1; attempt <= PAGINATION_ATTEMPTS; attempt++) {
+          const result = await walk();
+          if (typeof result === "string") {
+            changed = result;
+            continue;
           }
-          const rows = tableRows(res, name);
-          all.push(...rows);
-          const nextOffset = offset + pageSize;
-          if (totalCount !== undefined && all.length > totalCount) {
-            // RR-46: trimming only ever lowers the visible rows below the
-            // pre-trim count, so more rows than the count is proof the count
-            // is wrong. Trusting it would end the walk early and report the
-            // truncated set as untrimmed; drop it and walk by page length.
-            totalCount = undefined;
-            countContradicted = true;
-          }
-          if (totalCount !== undefined) {
-            // RR-1: X-Total-Count is the pre-trim match count, and ServiceNow
-            // cuts the offset window *before* it drops ACL-denied rows, so a
-            // page can come back short (or even empty) while later windows
-            // still hold readable rows. With a count, the windows — not the
-            // page length — decide: walk every window up to the count. This
-            // also ends a set whose size is an exact multiple of the page size
-            // and equals `maxRows` without a false truncation error.
-            if (nextOffset >= totalCount) break;
-          } else if (rows.length < pageSize) {
-            // No count arrived: a short page is the only end signal there is.
-            break;
-          }
-          // More windows remain but the cap is reached: fail closed rather
-          // than silently drop them, so the caller learns to narrow the query
-          // instead of trusting a truncated result. The cap counts walked
-          // windows (equal to rows when nothing is trimmed), so a heavily
-          // trimmed set cannot walk past it either.
-          if (nextOffset >= maxRows) {
-            throw new SnTruncationError(
-              `Table API query on "${name}" exceeded the ${maxRows}-row ` +
-                `pagination cap without reaching the end of the result set; ` +
-                `refusing to return a silently truncated result. Narrow ` +
-                `sysparm_query, or page explicitly with sysparm_limit/` +
-                `sysparm_offset.`,
-              maxRows,
-            );
-          }
+          if (added) for (const row of result.rows) delete row.sys_id;
+          return result;
         }
-        return toQueryResult(all, totalCount);
+        throw new SnError(
+          `Table API query on "${name}" saw the result set change during ` +
+            `pagination on ${PAGINATION_ATTEMPTS} walks (last: ${changed}); ` +
+            `refusing to return rows that may be missing or repeated. Retry ` +
+            `when the table is quiet, or narrow sysparm_query.`,
+        );
       }
 
       // F-X-2: with the cache on, the whole paginated result is the cached

@@ -1191,7 +1191,12 @@ maxInFlight?, rps?, cache? }`),
   backed by Node's global `fetch` (or `node:https` when `tls` is set).
   `table(name).query()` **auto-paginates** unless you pass a `sysparm_limit`, and
   throws `SnTruncationError` past `maxRows` (default 100000) rather than
-  truncating. `proxy` outranks the `SNPF_PROXY` and `HTTPS_PROXY` / `https_proxy`
+  truncating. Pages follow a `sys_id` keyset (`sys_id>last^ORDERBYsys_id`), so
+  rows inserted or deleted mid-walk are neither skipped nor repeated; a query
+  with its own `ORDERBY` (or `^NQ`) pages by offset with a `sys_id` tiebreak.
+  A set that still changes under the walk is re-read once, then the query
+  throws `SnError` rather than return rows that may be missing or doubled.
+  `proxy` outranks the `SNPF_PROXY` and `HTTPS_PROXY` / `https_proxy`
   environment variables (`HTTP_PROXY` is never used); `noProxy` is merged with
   `SNPF_NO_PROXY` and `NO_PROXY` / `no_proxy`.
   `maxInFlight` (1–64) and `rps` (0.5–100) are unset by default, so a library
