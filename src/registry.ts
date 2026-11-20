@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { UsageError } from "./config.js";
+import { SNPF_VARIABLE_NAMES, UsageError } from "./config.js";
 import { isSafeIdentifier } from "./http/query.js";
 
 /**
@@ -75,6 +75,13 @@ function defaultEnvPrefix(name: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+/** Allowed instance names (ST-23): a letter or digit, then letters, digits, `._-`. */
+const INSTANCE_NAME = /^[\p{L}\p{N}][\p{L}\p{M}\p{N}._-]*$/u;
+
+/** Windows device names, which are reserved with any extension (`con.state.json`). */
+const WINDOWS_DEVICE_NAME =
+  /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/i;
+
 /**
  * Validate a registry/instance name before it is used to build a filesystem
  * path or resolve a manifest (CC-14/CC-16). A name becomes the `<name>` segment
@@ -95,6 +102,30 @@ export function validateInstanceName(name: string, where: string): string {
   if (/[/\\]/.test(name) || name.includes("..")) {
     throw new UsageError(
       `${where}: instance name "${name}" must not contain path separators or "..".`,
+    );
+  }
+  // ST-23: an NFD and an NFC spelling of one name are two registry keys but
+  // one file on APFS/HFS+ — accept only the composed (NFC) form.
+  if (name !== name.normalize("NFC")) {
+    throw new UsageError(
+      `${where}: instance name ${JSON.stringify(name)} is not in Unicode NFC ` +
+        `form; retype it so its accented letters are single code points.`,
+    );
+  }
+  // ST-23: an allow-list, not a deny-list. Control characters, `:`, `*`, `?`
+  // and friends break file names on some platforms, and a leading `-` reads
+  // as a CLI flag (`--all`).
+  if (!INSTANCE_NAME.test(name) || name.endsWith(".")) {
+    throw new UsageError(
+      `${where}: instance name ${JSON.stringify(name)} must start with a ` +
+        `letter or digit, hold only letters, digits, ".", "_" and "-", and ` +
+        `not end with ".".`,
+    );
+  }
+  if (WINDOWS_DEVICE_NAME.test(name)) {
+    throw new UsageError(
+      `${where}: instance name "${name}" is a reserved Windows device name; ` +
+        `its manifest file could not be created there. Rename it.`,
     );
   }
   return name;
@@ -330,6 +361,150 @@ function assertNoSecretKeys(def: object, where: string): void {
   }
 }
 
+/** Keys a registry may hold at the top level (CFG-11). */
+const REGISTRY_KEYS = ["$schema", "version", "scope", "instances"] as const;
+
+/** Keys an instance entry may hold (CFG-11). */
+const INSTANCE_KEYS = [
+  "url",
+  "stage",
+  "promotesTo",
+  "scope",
+  "envPrefix",
+] as const;
+
+/**
+ * CFG-11: an unknown key is refused, not ignored — a `promotesto` typo used to
+ * load as "no promote target" and drop the promotion-order gate.
+ */
+function assertKnownKeys(
+  def: object,
+  allowed: readonly string[],
+  where: string,
+): void {
+  for (const key of Object.keys(def)) {
+    if (allowed.includes(key)) continue;
+    const near = allowed.find((k) => k.toLowerCase() === key.toLowerCase());
+    throw new UsageError(
+      `${where}: unknown key ${JSON.stringify(key)}` +
+        (near ? ` (did you mean "${near}"?)` : "") +
+        `. Allowed keys: ${allowed.join(", ")}.`,
+    );
+  }
+}
+
+/** ST-22: an optional field, when present, must be a string. */
+function assertOptionalString(
+  value: unknown,
+  field: string,
+  where: string,
+): void {
+  if (value !== undefined && typeof value !== "string") {
+    throw new UsageError(
+      `${where}: "${field}" must be a string (got ${
+        value === null ? "null" : Array.isArray(value) ? "array" : typeof value
+      }).`,
+    );
+  }
+}
+
+/** An explicit `envPrefix`: upper snake, `A-Z`/`0-9` words joined by `_`. */
+const ENV_PREFIX = /^[A-Z0-9]+(?:_[A-Z0-9]+)*$/;
+
+/** Logical names (`SNPF_` stripped) of every variable the tool reads. */
+const SNPF_STEMS: ReadonlySet<string> = new Set(
+  SNPF_VARIABLE_NAMES.map((v) => v.slice("SNPF_".length)),
+);
+
+/**
+ * CFG-12: under prefix `P`, `namespacedEnv` reads `SNPF_P_<X>` in place of
+ * `SNPF_<X>`. When `P_<X>` is itself a variable the tool reads, a flat value is
+ * read as the wrong setting (`NO` → `SNPF_NO_PROXY` as the proxy,
+ * `OAUTH_REFRESH` → the refresh token as a bearer token). Returns the variable
+ * that would be misread, or `undefined` when `P` is safe.
+ */
+function misreadUnderPrefix(prefix: string): string | undefined {
+  for (const stem of SNPF_STEMS) {
+    const full = `${prefix}_${stem}`;
+    if (SNPF_STEMS.has(full)) return `SNPF_${full}`;
+  }
+  return undefined;
+}
+
+/**
+ * The effective credential prefix of one entry, upper-cased as
+ * `namespacedEnv` applies it, and whether it was set explicitly.
+ */
+function effectivePrefix(
+  name: string,
+  def: InstanceDef,
+): { prefix: string; explicit: boolean } {
+  const given = def.envPrefix?.trim();
+  return given
+    ? { prefix: given.toUpperCase(), explicit: true }
+    : { prefix: defaultEnvPrefix(name), explicit: false };
+}
+
+/**
+ * ST-20 / CFG-12: every instance needs its own, non-empty, unambiguous
+ * credential namespace. Two instances with one prefix (`prod-eu`, `prod_eu`,
+ * `prod.eu` all derive `PROD_EU`) would read each other's credentials, and a
+ * prefix nested in another (`PROD` and `PROD_NO`) makes `SNPF_PROD_NO_PROXY`
+ * mean two things.
+ */
+function assertEnvPrefixes(
+  instances: Record<string, InstanceDef>,
+  path: string,
+): void {
+  const owners = new Map<string, string>();
+  for (const [name, def] of Object.entries(instances)) {
+    const where = `Registry ${path}: instance "${name}"`;
+    const { prefix, explicit } = effectivePrefix(name, def);
+    if (prefix === "") {
+      throw new UsageError(
+        `${where} derives an empty credential env prefix (the name has no ` +
+          `A-Z/0-9 characters); set "envPrefix" to an upper-snake name.`,
+      );
+    }
+    if (explicit && !ENV_PREFIX.test(prefix)) {
+      throw new UsageError(
+        `${where}: envPrefix ${JSON.stringify(def.envPrefix)} must be ` +
+          `upper-snake (A-Z, 0-9 words joined by "_").`,
+      );
+    }
+    const misread = misreadUnderPrefix(prefix);
+    if (misread !== undefined) {
+      throw new UsageError(
+        `${where}: credential env prefix ${prefix} is reserved — under it ` +
+          `${misread} would be read as another setting. ` +
+          `${explicit ? "Choose another" : "Set an"} "envPrefix".`,
+      );
+    }
+    const clash = owners.get(prefix);
+    if (clash !== undefined) {
+      throw new UsageError(
+        `Registry ${path}: instances "${clash}" and "${name}" share the ` +
+          `credential env prefix ${prefix} (SNPF_${prefix}_*), so each would ` +
+          `read the other's credentials. Give one a distinct "envPrefix".`,
+      );
+    }
+    owners.set(prefix, name);
+  }
+  for (const [outer, outerName] of owners) {
+    for (const [inner, innerName] of owners) {
+      if (!inner.startsWith(`${outer}_`)) continue;
+      const misread = misreadUnderPrefix(inner.slice(outer.length + 1));
+      if (misread === undefined) continue;
+      throw new UsageError(
+        `Registry ${path}: credential env prefixes ${outer} ("${outerName}") ` +
+          `and ${inner} ("${innerName}") overlap — SNPF_${outer}_` +
+          `${misread.slice("SNPF_".length)} would belong to both. Give one a ` +
+          `distinct "envPrefix".`,
+      );
+    }
+  }
+}
+
 /** Minimal structural validation; throws a clear error on a malformed file. */
 function assertRegistry(value: unknown, path: string): InstanceRegistry {
   const reg = value as Partial<InstanceRegistry> | null;
@@ -360,8 +535,10 @@ function assertRegistry(value: unknown, path: string): InstanceRegistry {
   }
   // The registry-level default scope is interpolated into encoded queries for
   // every instance that does not override it — validate it once (SR-1).
+  assertOptionalString(reg.scope, "scope", `Registry ${path}`);
   assertSafeScope(reg.scope, `Registry ${path}`);
   assertNoSecretKeys(reg, `Registry ${path}`);
+  assertKnownKeys(reg, REGISTRY_KEYS, `Registry ${path}`);
   const lowered = new Map<string, string>();
   for (const [name, def] of Object.entries(reg.instances)) {
     // CC-14/CC-16: names build manifest paths — reject separators/`..`/whitespace.
@@ -378,20 +555,29 @@ function assertRegistry(value: unknown, path: string): InstanceRegistry {
       );
     }
     lowered.set(lc, name);
-    if (!def || typeof def !== "object" || typeof def.url !== "string") {
-      throw new UsageError(
-        `Registry ${path}: instance "${name}" is missing a url.`,
-      );
+    const where = `Registry ${path}: instance "${name}"`;
+    if (!def || typeof def !== "object" || Array.isArray(def)) {
+      throw new UsageError(`${where} must be a JSON object.`);
+    }
+    if (typeof def.url !== "string") {
+      throw new UsageError(`${where} is missing a url.`);
     }
     // ST-21: the registry is committed and its url is copied into the
     // committed state manifest, so it must never carry credentials.
-    assertNoSecretKeys(def, `Registry ${path}: instance "${name}"`);
-    assertRegistryUrl(def.url, `Registry ${path}: instance "${name}"`);
+    assertNoSecretKeys(def, where);
+    assertKnownKeys(def, INSTANCE_KEYS, where);
+    // ST-22: a wrong type used to load and then fail later as a raw TypeError
+    // (`envPrefix: 7`) or leak an object into a query (`scope: {}`).
+    assertOptionalString(def.stage, "stage", where);
+    assertOptionalString(def.scope, "scope", where);
+    assertOptionalString(def.envPrefix, "envPrefix", where);
+    assertRegistryUrl(def.url, where);
     // A per-instance scope override is interpolated into encoded queries too
     // (SR-1) — reject operator characters at load time.
-    assertSafeScope(def.scope, `Registry ${path}: instance "${name}"`);
+    assertSafeScope(def.scope, where);
   }
   assertPromotionGraph(reg.instances, path);
+  assertEnvPrefixes(reg.instances, path);
   return {
     version: reg.version ?? 1,
     scope: reg.scope,
@@ -485,7 +671,10 @@ export function resolveInstance(
   registry: InstanceRegistry,
   name: string,
 ): ResolvedInstance {
-  const def = registry.instances[name];
+  // CFG-10: an own key only — `constructor` must not resolve to Object's.
+  const def = Object.hasOwn(registry.instances, name)
+    ? registry.instances[name]
+    : undefined;
   if (!def) {
     const known = instanceNames(registry).join(", ") || "(none)";
     throw new UsageError(
@@ -514,13 +703,17 @@ export function promotionChain(
   source: string,
   target: string,
 ): string[] | undefined {
+  const next = (name: string): unknown =>
+    Object.hasOwn(registry.instances, name)
+      ? registry.instances[name]?.promotesTo
+      : undefined;
   const chain = [source];
-  let cur = registry.instances[source]?.promotesTo;
+  let cur = next(source);
   const limit = Object.keys(registry.instances).length;
   while (typeof cur === "string" && chain.length <= limit) {
     chain.push(cur);
     if (cur === target) return chain;
-    cur = registry.instances[cur]?.promotesTo;
+    cur = next(cur);
   }
   return undefined;
 }

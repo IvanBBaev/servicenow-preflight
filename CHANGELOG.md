@@ -664,6 +664,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The instance registry is validated on load** (RR-56, ST-20, ST-22,
+  ST-23, CFG-10, CFG-11, CFG-12) — a registry that loaded but meant the wrong
+  thing is now a usage error (exit `2`). Unknown keys are refused, with a
+  case hint (`promotesto` silently left an instance with no promote target).
+  `stage`, `scope` (registry and instance) and `envPrefix` must be strings and
+  an instance entry must be an object (a numeric `envPrefix` was a raw
+  `TypeError`). Instance names — in the registry and on the command line —
+  follow an allow-list (a letter or digit, then letters, digits, `.`, `_`,
+  `-`; no trailing `.`), must be NFC (an NFD duplicate shared one macOS file)
+  and must not be a Windows device name; NUL, `:`, `*`, `--all` and
+  `__proto__` were accepted. Each instance's credential env prefix must be
+  non-empty, unique (`prod-eu` / `prod_eu` / `prod.eu` shared `PROD_EU`) and
+  must not make one `SNPF_*` variable read as another (`no` read
+  `SNPF_NO_PROXY` as the proxy, `oauth-refresh` read the refresh token as a
+  bearer token, `prod` beside `prod_no` overlapped on `SNPF_PROD_NO_PROXY`);
+  an explicit `envPrefix` must be upper-snake. `resolveInstance` and
+  `promotionChain` look up own keys only (`constructor` resolved Object's).
+
 - **Auto-pagination survives a table that changes mid-walk** (RR-55, HTTP-2,
   HTTP-15) — offset windows over a live table skipped a row whenever one was
   deleted behind the current page and repeated one on each insert, and a

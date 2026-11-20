@@ -784,6 +784,18 @@ except each instance looks up a **namespaced** variable first: an instance whose
 `SNPF_*`. `envPrefix` defaults to the instance name upper-cased (`dev` →
 `SNPF_DEV_*`). Every method and every `SNPF_*` variable works this way.
 
+The registry is **validated when it loads** (exit `2`): an unknown key is
+refused (a `promotesto` typo used to drop the promote target); `stage`,
+`scope` and `envPrefix` must be strings; an instance name must start with a
+letter or digit, hold only letters, digits, `.`, `_` and `-`, not end with `.`,
+be in Unicode NFC form and not be a Windows device name (`con`, `nul`, `com1`,
+…). Every instance needs its **own credential namespace**: two names that
+derive one prefix (`prod-eu`, `prod_eu`, `prod.eu` → `PROD_EU`), a name with no
+`A-Z`/`0-9` (empty prefix), and a prefix under which one variable would read as
+another (`no` → `SNPF_NO_PROXY` as the proxy, `oauth-refresh` → the refresh
+token as a bearer token; `prod` next to `prod_no`) are rejected — set a
+distinct upper-snake `envPrefix`. A top-level `$schema` key is allowed.
+
 - **`run <env>`** (or `--all`) runs the full suite against a named instance,
   resolving its `url`/`scope`/`envPrefix` from the registry and loading a
   committed manifest, if present. With `--all`, `pretty` tags each instance block

@@ -374,6 +374,18 @@ const ENV = {
   allowInsecureHttp: "SNPF_ALLOW_INSECURE_HTTP",
 } as const;
 
+/**
+ * Every `SNPF_*` variable the tool reads: {@link ENV} plus the CLI-only ones.
+ * The registry refuses an instance env-prefix under which one of these would
+ * be read in place of another through {@link namespacedEnv} (CFG-12).
+ */
+export const SNPF_VARIABLE_NAMES: readonly string[] = [
+  ...Object.values(ENV),
+  "SNPF_CHECK_TIMEOUT",
+  "SNPF_SUMMARY",
+  "SNPF_TRACE",
+];
+
 /** A URL that names its scheme (`https://…`, `http://…`, `ftp://…`). */
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 /** A bare host: DNS name or IPv4, or a bracketed IPv6 literal, `:port`, `/`. */
