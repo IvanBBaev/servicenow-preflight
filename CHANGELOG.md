@@ -664,6 +664,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`drift` proves identity and parity** (RR-54, ST-7, ST-8, ST-9, ST-10,
+  ST-24) — a promote gate that compared the wrong things no longer passed.
+  A new `manifest-identity` result fails when a manifest's `url` is not the
+  URL the registry declares for its name (a prod manifest copied in as
+  staging), when source and target resolve to one instance URL (two names, one
+  instance) or name, and when the two were synced for different scopes; a
+  manifest with no `url` warns. URLs compare normalised. `loadManifest` now
+  refuses (exit `2`) a manifest with an absent, blank or non-string
+  `instance` instead of filling in the requested name. `manifest-freshness`
+  fails a `syncedAt` more than five minutes in the future (it was clamped to
+  age zero and passed) and warns on a missing or unparseable one even without
+  `--max-age`. `app-version-parity` now **fails** when an app recorded on the
+  source is not installed on the target (it was an advisory `warn`, against
+  the documented contract), warns when the source recorded no version, and
+  compares `v`-prefixed and pre-release / build-suffixed versions instead of
+  skipping them as unparseable. `promotion-order` **fails** for an instance
+  the registry does not declare (a typo was an advisory `warn`); no registry,
+  or no `promotesTo` pipeline, stays a `warn`. New exports
+  (`servicenow-preflight/state`): `identityResults`, `IdentitySide`,
+  `IDENTITY_CHECK`, `FUTURE_SYNC_SKEW_MS`.
+
 - **`doctor` fails closed** (RR-53, ST-6, ST-15, ST-16, ST-17) — a doctor run
   that proved nothing no longer passed. `doctor-table-access` is now a
   blocker: it fails when a table a selected check requires answers HTTP 403

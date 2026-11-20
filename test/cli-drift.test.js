@@ -112,10 +112,24 @@ test("drift --format json reports ok:false and a failing test-drift result", () 
     assert.equal(res.status, 1);
     const report = reportOf(res.stdout);
     assert.equal(report.ok, false);
-    // test-drift, promotion-order, and the two version-parity results
-    // (OPP-1 / OPP-5) — all three advisory warns here: there is no registry and
-    // the manifests predate version capture.
-    assert.equal(report.results.length, 4);
+    // test-drift, one manifest-identity row per side (no url recorded),
+    // promotion-order, one manifest-freshness row per side (no syncedAt) and
+    // the two version-parity results (OPP-1 / OPP-5) — all but test-drift
+    // advisory warns here: there is no registry and the manifests predate
+    // version capture (RR-54).
+    assert.deepEqual(
+      report.results.map((r) => `${r.name}:${r.status}`),
+      [
+        "test-drift:fail",
+        "manifest-identity:warn",
+        "manifest-identity:warn",
+        "promotion-order:warn",
+        "manifest-freshness:warn",
+        "manifest-freshness:warn",
+        "instance-version-parity:warn",
+        "app-version-parity:warn",
+      ],
+    );
     assert.equal(report.results[0].name, "test-drift");
     assert.equal(report.results[0].status, "fail");
     assert.match(report.results[0].message, /missing on "prod"/);
@@ -815,8 +829,12 @@ test("drift passes cleanly (exit 0) when identity and apps match on both sides",
       staging: { url: "https://staging.service-now.com", promotesTo: "prod" },
       prod: { url: "https://prod.service-now.com", promotesTo: null },
     });
+    // Full capture: url and syncedAt too, so identity and freshness pass (RR-54).
+    const syncedAt = new Date().toISOString();
     writeStateManifest(dir, "staging", {
       instance: "staging",
+      url: "https://staging.service-now.com",
+      syncedAt,
       identity,
       apps,
       tests,
@@ -824,6 +842,8 @@ test("drift passes cleanly (exit 0) when identity and apps match on both sides",
     });
     writeStateManifest(dir, "prod", {
       instance: "prod",
+      url: "https://prod.service-now.com",
+      syncedAt,
       identity,
       apps,
       tests,

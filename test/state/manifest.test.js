@@ -238,15 +238,20 @@ test("loadManifest rejects missing tests/suites lists", async () => {
   }
 });
 
-test("loadManifest falls back to the requested instance name when the file omits it", async () => {
+test("loadManifest refuses a file that omits its instance (RR-54, ST-7)", async () => {
   const dir = tempDir();
   try {
+    // `sync` always writes the field; filling in the requested name let any
+    // hand-edited file pass as that instance.
     writeFileSync(
       manifestPathWithMkdir(dir, "dev"),
       JSON.stringify({ tests: [], suites: [] }),
     );
-    const loaded = await loadManifest("dev", dir);
-    assert.equal(loaded.instance, "dev");
+    await assert.rejects(
+      () => loadManifest("dev", dir),
+      (err) =>
+        err.name === "UsageError" && /no valid "instance"/.test(err.message),
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -216,7 +216,10 @@
 ./state type DriftSide
 ./state value EmptySnapshotError
 ./state value FRESHNESS_CHECK
+./state value FUTURE_SYNC_SKEW_MS
+./state value IDENTITY_CHECK
 ./state value INSTANCE_VERSION_CHECK
+./state type IdentitySide
 ./state value IncompleteSnapshotError
 ./state type InstalledAppState
 ./state type InstanceDef
@@ -236,6 +239,7 @@
 ./state type SyncOptions
 ./state value computeDrift
 ./state value emptyManifest
+./state value identityResults
 ./state value instanceNames
 ./state value loadManifest
 ./state value loadRegistry

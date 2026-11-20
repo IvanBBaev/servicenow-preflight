@@ -197,14 +197,23 @@ function formatAge(ms: number): string {
 }
 
 /**
+ * How far a manifest's `syncedAt` may lie in the future before drift refuses
+ * it (RR-54, ST-9): enough for clock skew between the machine that ran `sync`
+ * and the one running `drift`, far less than any real age gate.
+ */
+export const FUTURE_SYNC_SKEW_MS = 5 * 60 * 1000;
+
+/**
  * Evaluate the freshness of the manifests a drift compares. A manifest older
  * than `warnAfterMs` yields a `warn`; with `maxAgeMs` set (the CLI's
  * `--max-age`), one older than that yields a `fail` (a hard promote block).
  *
- * A manifest with no usable `syncedAt` is only surfaced under `--max-age`, and
- * then fails closed: freshness that cannot be proven must not pass an explicit
- * age gate. Returns one {@link CheckResult} per flagged manifest (empty when all
- * are fresh), for the CLI to fold into the drift report.
+ * Freshness that cannot be proven never passes (RR-54, ST-9): a manifest with
+ * no usable `syncedAt` warns, and fails under `--max-age`; a `syncedAt` more
+ * than {@link FUTURE_SYNC_SKEW_MS} in the future fails — its age is unknown,
+ * and clamping it to zero would let any manifest look fresh. Returns one
+ * {@link CheckResult} per flagged manifest (empty when all are fresh), for the
+ * CLI to fold into the drift report.
  */
 export function stalenessResults(
   refs: DriftManifestRef[],
@@ -216,17 +225,34 @@ export function stalenessResults(
   const out: CheckResult[] = [];
   for (const { role, manifest } of refs) {
     const label = `${role} "${manifest.instance}"`;
-    const synced = manifest.syncedAt ? Date.parse(manifest.syncedAt) : NaN;
+    const synced =
+      typeof manifest.syncedAt === "string" && manifest.syncedAt !== ""
+        ? Date.parse(manifest.syncedAt)
+        : NaN;
     if (Number.isNaN(synced)) {
-      if (maxAgeMs !== undefined) {
-        out.push(
-          freshnessRow(
-            "fail",
-            `Manifest for ${label} has no recorded syncedAt; cannot verify it is within --max-age. Re-run sync.`,
-            `no-synced-at:${role}`,
-          ),
-        );
-      }
+      out.push(
+        maxAgeMs !== undefined
+          ? freshnessRow(
+              "fail",
+              `Manifest for ${label} has no recorded syncedAt; cannot verify it is within --max-age. Re-run sync.`,
+              `no-synced-at:${role}`,
+            )
+          : freshnessRow(
+              "warn",
+              `Manifest for ${label} has no readable syncedAt, so its age is unknown; re-run sync.`,
+              `no-synced-at:${role}`,
+            ),
+      );
+      continue;
+    }
+    if (synced - now > FUTURE_SYNC_SKEW_MS) {
+      out.push(
+        freshnessRow(
+          "fail",
+          `Manifest for ${label} claims a sync ${formatAge(synced - now)} in the future (syncedAt "${manifest.syncedAt}"), so its age cannot be proven. Fix the clock or the file and re-run sync.`,
+          `future-synced-at:${role}`,
+        ),
+      );
       continue;
     }
     const ageMs = Math.max(0, now - synced);
@@ -564,17 +590,65 @@ function warOnlyParityResult(
 }
 
 /**
+ * An app version as recorded: an optional leading `v`, a dotted numeric core,
+ * an optional semver pre-release and an optional build suffix (RR-54, ST-10).
+ */
+const APP_VERSION =
+  /^[vV]?(\d+(?:\s*\.\s*\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/**
+ * Compare two semver pre-release tags; `undefined` (a release) sorts above any
+ * pre-release, numeric identifiers below alphanumeric ones.
+ */
+function comparePrerelease(a?: string, b?: string): number {
+  if (a === undefined) return b === undefined ? 0 : 1;
+  if (b === undefined) return -1;
+  const xa = a.split(".");
+  const xb = b.split(".");
+  for (let i = 0; i < Math.max(xa.length, xb.length); i++) {
+    const pa = xa[i];
+    const pb = xb[i];
+    if (pa === undefined) return -1;
+    if (pb === undefined) return 1;
+    if (pa === pb) continue;
+    const na = /^\d+$/.test(pa);
+    const nb = /^\d+$/.test(pb);
+    if (na && nb) return Number(pa) - Number(pb);
+    if (na !== nb) return na ? -1 : 1;
+    return pa < pb ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * Compare two app versions for parity: {@link compareVersions} on the numeric
+ * core (shared semantics with `scoped-app-deps`, CC-43), then the pre-release
+ * tag. `null` when either side is not a version this can read.
+ */
+function compareAppVersions(a: string, b: string): number | null {
+  const ma = APP_VERSION.exec(a.trim());
+  const mb = APP_VERSION.exec(b.trim());
+  if (!ma || !mb) return null;
+  const core = compareVersions(ma[1] as string, mb[1] as string);
+  if (core === null) return null;
+  return core !== 0 ? core : comparePrerelease(ma[2], mb[2]);
+}
+
+/**
  * Compare the recorded app/plugin inventory of the two manifests (OPP-5).
  *
  * - Either manifest lacking an `apps` list (pre-capture manifest, or the
  *   capture was ACL-trimmed and dropped whole) → single ADVISORY `warn`.
  * - An empty source `apps` list → `warn` (nothing compared, RR-48).
- * - App recorded on the source but absent on the target → advisory `warn`
- *   (expected on a first-ever deploy or when the source carries in-development
- *   apps; confirm each is intended — presence alone is not a regression).
+ * - App recorded on the source but absent on the target → `fail` (RR-54,
+ *   ST-10): the target lacks what the source validated, the same contract as
+ *   a test missing downstream.
  * - Target's installed version LOWER than the source's → `fail` (downgrade).
- * - Unparseable versions, or a source version the target cannot confirm →
- *   `warn` naming the app (unverified, never a silent pass).
+ * - A source app with no recorded version, unparseable versions, or a source
+ *   version the target cannot confirm → `warn` naming the app (unverified,
+ *   never a silent pass, and never counted in the pass message).
+ *   Versions may carry a leading `v` and a semver pre-release (`-beta.1`, which
+ *   sorts below the release) or build (`+42`, ignored) suffix.
  * - Apps present only on the target are not a finding — at most a count in
  *   the pass message (extra coverage never blocks a promote).
  *
@@ -620,7 +694,7 @@ function appParityResults(
   const advisories: string[] = [];
   // One finding per app, keyed on `app:<scope>`, collected beside the labels
   // so the aggregate messages stay byte-identical.
-  const downgradeFindings: Finding[] = [];
+  const failFindings: Finding[] = [];
   const advisoryFindings: Finding[] = [];
   const appFinding = (
     app: InstalledAppState,
@@ -640,26 +714,31 @@ function appParityResults(
     const counterpart = targetById.get(app.id);
     if (!counterpart) {
       missingOnTarget.push(label);
-      advisoryFindings.push(
+      failFindings.push(
         appFinding(
           app,
           "missing-on-target",
           `App ${label} is recorded on source "${source.instance}" but not installed on target "${target.instance}".`,
-          "warn",
+          "fail",
         ),
       );
       continue;
     }
-    // No version recorded on the source → presence is the only expectation the
-    // manifest carries for this app, and it is satisfied.
-    if (app.version === undefined) continue;
+    // RR-54 (ST-10): no version on the source proves nothing about the
+    // target's version, so the app is unverified, not "matching".
+    if (app.version === undefined) {
+      const advisory = `${label}: source "${source.instance}" recorded no version — unverified`;
+      advisories.push(advisory);
+      advisoryFindings.push(appFinding(app, "unverified", advisory, "warn"));
+      continue;
+    }
     if (counterpart.version === undefined) {
       const advisory = `${label}: source has ${app.version} but the target's installed version is unknown — unverified`;
       advisories.push(advisory);
       advisoryFindings.push(appFinding(app, "unverified", advisory, "warn"));
       continue;
     }
-    const order = compareVersions(counterpart.version, app.version);
+    const order = compareAppVersions(counterpart.version, app.version);
     if (order === null) {
       const advisory = `${label}: versions "${app.version}" (source) and "${counterpart.version}" (target) cannot be compared (non-numeric segment) — unverified`;
       advisories.push(advisory);
@@ -669,39 +748,38 @@ function appParityResults(
     if (order < 0) {
       const downgrade = `${label}: target has ${counterpart.version}, below the source's ${app.version}`;
       downgraded.push(downgrade);
-      downgradeFindings.push(appFinding(app, "downgraded", downgrade, "fail"));
+      failFindings.push(appFinding(app, "downgraded", downgrade, "fail"));
     }
   }
 
   const out: CheckResult[] = [];
-  // Only a *downgrade* — the target running an OLDER version of an app both
-  // instances carry — is a genuine regression that must block the promote. An
-  // app recorded on the source but absent on the target is expected on a
-  // first-ever deploy or when the source carries in-development apps, so it
-  // degrades to an advisory warn instead of failing every fresh target (OPP-5
-  // false-fail fix). Downgrade stays fail-closed.
+  // A downgrade (the target runs an OLDER version of an app both carry) and an
+  // app the target lacks altogether (RR-54, ST-10 — the documented contract;
+  // the earlier advisory let a promote drop a validated app) both block.
+  const failParts: string[] = [];
   if (downgraded.length > 0) {
+    failParts.push(
+      `${downgraded.length} app(s) at a lower version on target "${target.instance}": ${nameList(downgraded)}`,
+    );
+  }
+  if (missingOnTarget.length > 0) {
+    failParts.push(
+      `${missingOnTarget.length} app(s) recorded on source "${source.instance}" not installed on target "${target.instance}": ${nameList(missingOnTarget)}`,
+    );
+  }
+  if (failParts.length > 0) {
     out.push({
       name: APP_VERSION_CHECK,
       status: "fail",
-      message: `App version drift blocks the promote: ${downgraded.length} app(s) at a lower version on target "${target.instance}": ${nameList(downgraded)}.`,
-      ...cappedFindings(downgradeFindings),
+      message: `App version drift blocks the promote: ${failParts.join("; ")}.`,
+      ...cappedFindings(failFindings),
     });
   }
-  const advisoryParts: string[] = [];
-  if (missingOnTarget.length > 0) {
-    advisoryParts.push(
-      `${missingOnTarget.length} app(s) recorded on source "${source.instance}" not installed on target "${target.instance}": ${nameList(missingOnTarget)} — expected on a first deploy or for in-development apps; confirm each is intended before promoting`,
-    );
-  }
   if (advisories.length > 0) {
-    advisoryParts.push(nameList(advisories));
-  }
-  if (advisoryParts.length > 0) {
     out.push({
       name: APP_VERSION_CHECK,
       status: "warn",
-      message: `App version parity has advisories: ${advisoryParts.join("; ")}.`,
+      message: `App version parity has advisories: ${nameList(advisories)}.`,
       ...cappedFindings(advisoryFindings),
     });
   }
@@ -773,9 +851,10 @@ export interface PromotionOrderOptions {
  *   being promoted.
  * - `target` is upstream of `source`, or on no shared chain → `fail`: that is
  *   not a promote the pipeline declares.
- * - No registry, an instance missing from it, or a registry that declares no
- *   `promotesTo` at all → advisory `warn`: the order cannot be verified, and
- *   the pipeline is opt-in.
+ * - An instance the registry does not declare → `fail`: a typo or a stray
+ *   manifest must not slip past the promote gate as "unverified".
+ * - No registry, or a registry that declares no `promotesTo` at all →
+ *   advisory `warn`: the order cannot be verified, and the pipeline is opt-in.
  */
 export function promotionOrderResult(
   registry: InstanceRegistry | undefined,
@@ -796,11 +875,17 @@ export function promotionOrderResult(
     (n) => !Object.hasOwn(registry.instances, n),
   );
   if (missing.length > 0) {
-    return unverified(
-      `${missing.map((n) => `"${n}"`).join(" and ")} ${
+    return {
+      name: PROMOTION_ORDER_CHECK,
+      status: "fail",
+      message: `Promotion order of ${pair} cannot be verified: ${missing
+        .map((n) => `"${n}"`)
+        .join(" and ")} ${
         missing.length === 1 ? "is" : "are"
-      } not declared in the registry`,
-    );
+      } not declared in the instance registry. Declare ${
+        missing.length === 1 ? "it" : "them"
+      } in the registry or fix the name.`,
+    };
   }
   const declaresPipeline = Object.values(registry.instances).some(
     (d) => typeof d.promotesTo === "string",
@@ -848,4 +933,152 @@ export function promotionOrderResult(
     status: "fail",
     message: `${pair} is not a declared promotion: "${target}" is not downstream of "${source}" in the registry's promotesTo pipeline.`,
   };
+}
+
+/** Check name for the manifest identity / scope results a drift run emits (ST-7, ST-8). */
+export const IDENTITY_CHECK = "manifest-identity";
+
+/** One compared manifest for {@link identityResults}: its role, registry name and manifest. */
+export interface IdentitySide {
+  /** Which side of the promote this is — `source` or `target`. */
+  role: string;
+  /** The registry instance name the manifest was loaded for. */
+  name: string;
+  manifest: StateManifest;
+}
+
+/**
+ * A URL reduced to what identifies an instance: scheme, host (with a
+ * non-default port) and path without trailing slashes. `undefined` when the
+ * value is absent or not an absolute http(s) URL.
+ */
+function normalizeInstanceUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+  return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
+}
+
+/** A manifest's scope for comparison: trimmed, with absent and `""` both unscoped. */
+function scopeOf(manifest: StateManifest): string {
+  return typeof manifest.scope === "string" ? manifest.scope.trim() : "";
+}
+
+/**
+ * Whether the two manifests a drift run compares are what they claim to be
+ * (ST-7, ST-8). Each problem is its own row with one `logicalId: "instance"`
+ * finding; with none, a single `pass` row.
+ *
+ * - A manifest whose `instance` is not the name it was loaded for → `fail`
+ *   (`instance-mismatch:<role>`): a copied or renamed manifest.
+ * - A manifest `url` that differs from the registry's URL for that name →
+ *   `fail` (`url-mismatch:<role>`): the manifest was synced from another
+ *   instance.
+ * - A manifest with no readable `url` → `warn` (`url-unverified:<role>`): its
+ *   origin cannot be checked.
+ * - Source and target resolving to the same instance URL (or name) → `fail`
+ *   (`same-instance`): a self-compare proves nothing about the promote.
+ * - Source and target synced for different scopes → `fail`
+ *   (`scope-mismatch`): their test sets are not comparable.
+ *
+ * URLs compare after normalisation (case of scheme/host, default port,
+ * trailing slashes).
+ */
+export function identityResults(
+  sides: readonly IdentitySide[],
+  registry?: InstanceRegistry,
+): CheckResult[] {
+  const rows: CheckResult[] = [];
+  const row = (status: CheckStatus, kind: string, message: string): void => {
+    rows.push({
+      name: IDENTITY_CHECK,
+      status,
+      message,
+      findings: [
+        makeFinding(
+          IDENTITY_CHECK,
+          kind,
+          message,
+          { logicalId: INSTANCE_ID },
+          status,
+        ),
+      ],
+    });
+  };
+  const effective: (string | undefined)[] = [];
+  for (const side of sides) {
+    const label = `${side.role} "${side.name}"`;
+    const recorded = side.manifest.instance as unknown;
+    if (recorded !== side.name) {
+      row(
+        "fail",
+        `instance-mismatch:${side.role}`,
+        `Manifest loaded for ${label} records instance ${
+          typeof recorded === "string" ? `"${recorded}"` : String(recorded)
+        }; it belongs to another instance. Re-run sync for "${side.name}".`,
+      );
+    }
+    const def =
+      registry && Object.hasOwn(registry.instances, side.name)
+        ? registry.instances[side.name]
+        : undefined;
+    const declared = normalizeInstanceUrl(def?.url);
+    const manifestUrl = normalizeInstanceUrl(side.manifest.url);
+    if (manifestUrl === undefined) {
+      row(
+        "warn",
+        `url-unverified:${side.role}`,
+        `Manifest for ${label} has no readable url, so the instance it was synced from cannot be verified; re-run sync.`,
+      );
+    } else if (declared !== undefined && manifestUrl !== declared) {
+      row(
+        "fail",
+        `url-mismatch:${side.role}`,
+        `Manifest for ${label} was synced from ${manifestUrl}, but the registry declares ${declared} for "${side.name}". Re-run sync for "${side.name}".`,
+      );
+    }
+    effective.push(manifestUrl ?? declared);
+  }
+  const [source, target] = sides;
+  if (source && target) {
+    const [sourceUrl, targetUrl] = effective;
+    if (source.name === target.name) {
+      row(
+        "fail",
+        "same-instance",
+        `Source and target are both "${source.name}"; a drift needs two different instances.`,
+      );
+    } else if (sourceUrl !== undefined && sourceUrl === targetUrl) {
+      row(
+        "fail",
+        "same-instance",
+        `Source "${source.name}" and target "${target.name}" are the same instance (${sourceUrl}); the compare proves nothing about the promote.`,
+      );
+    }
+    const sourceScope = scopeOf(source.manifest);
+    const targetScope = scopeOf(target.manifest);
+    if (sourceScope !== targetScope) {
+      const show = (s: string): string => (s === "" ? "no scope" : `"${s}"`);
+      row(
+        "fail",
+        "scope-mismatch",
+        `Source "${source.name}" was synced for ${show(sourceScope)} but target "${target.name}" for ${show(targetScope)}; their tests are not comparable. Re-sync both for the same scope.`,
+      );
+    }
+  }
+  if (rows.length === 0) {
+    rows.push({
+      name: IDENTITY_CHECK,
+      status: "pass",
+      message: `Manifests match their instances${
+        source && target ? ` ("${source.name}" → "${target.name}")` : ""
+      } and share one scope.`,
+    });
+  }
+  return rows;
 }

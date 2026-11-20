@@ -813,15 +813,27 @@ except each instance looks up a **namespaced** variable first: an instance whose
   Two **version-parity** results ride along: `instance-version-parity`
   fails on a release-family mismatch (`glide.buildname`) and warns on patch-level
   skew (`glide.war`); `app-version-parity` fails when an app or plugin installed
-  on the source is missing or older on the target. Manifests written by older
-  versions of the tool (no identity/app data) degrade to an advisory `warn`,
-  never a crash; a source manifest that records an empty app list `warn`s.
+  on the source is missing or older on the target (versions may carry a `v`
+  prefix and a pre-release or build suffix; `2.0.0-rc.1` is older than
+  `2.0.0`), and warns when the source recorded no version for an app. Manifests
+  written by older versions of the tool (no identity/app data) degrade to an
+  advisory `warn`, never a crash; a source manifest that records an empty app
+  list `warn`s.
+  A **`manifest-identity`** result proves the pair is what it claims: a
+  manifest synced from another URL than the registry declares for its name, two
+  names that resolve to **one instance URL**, or manifests synced for
+  **different scopes** fail; a manifest with no `url` warns (its origin is
+  unverified). URLs compare normalised (host case, default port, trailing
+  slash). A manifest with no string `instance` field is refused (exit `2`).
+  **`manifest-freshness`** warns past 30 days and fails past `--max-age`; a
+  manifest with no readable `syncedAt` warns (fails under `--max-age`), and one
+  dated more than five minutes in the future fails.
   A **`promotion-order`** result checks the pair against the
   registry's `promotesTo` chain: the declared next stage `pass`es; a target
   further down that **skips a stage** fails (a `warn` under
   `--allow-stage-skip`, for a deliberate hotfix); a target **upstream** of the
-  source or on **no shared chain** always fails. With no registry, an
-  undeclared instance, or no `promotesTo` anywhere, it is an advisory `warn`.
+  source, on **no shared chain**, or **not declared** in the registry fails.
+  With no registry, or no `promotesTo` anywhere, it is an advisory `warn`.
   `drift` honours `--fail-on warn` (an extra downstream test then blocks) and
   `--output <format>=<path>`, like `run`; the threshold comes from the flag
   only. `sync` writes a manifest, not a report, so it refuses both flags
@@ -1260,8 +1272,8 @@ name, or none for a passing row. The drift gate emits findings too:
 `test-drift` one per missing (`fail`) or extra (`warn`) test with
 `logicalId: "<scope>/<slug>"`, `app-version-parity` one per downgraded,
 missing or unverified app with `logicalId: "app:<scope>"`, and
-`instance-version-parity` / `manifest-freshness` one `logicalId: "instance"`
-finding per non-pass row.
+`instance-version-parity` / `manifest-freshness` / `manifest-identity` one
+`logicalId: "instance"` finding per non-pass row.
 
 Rows the tool synthesises carry a **`kind`**: `"runner"` on the `preflight`
 guard rows (duplicate or reserved check names, an empty selection, a scope

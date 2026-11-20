@@ -323,10 +323,13 @@ test("stalenessResults fails a manifest older than --max-age", () => {
   assert.match(results[0].message, /exceeding/);
 });
 
-test("stalenessResults ignores a missing syncedAt when no --max-age is set", () => {
+test("stalenessResults warns on a missing syncedAt when no --max-age is set (RR-54)", () => {
   const refs = [{ role: "source", manifest: synced("staging", undefined) }];
-  // Without a hard age gate an unknown freshness is not surfaced at all.
-  assert.deepEqual(stalenessResults(refs, { now: NOW }), []);
+  // Without a hard age gate an unknown freshness still never passes silently.
+  const results = stalenessResults(refs, { now: NOW });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, "warn");
+  assert.match(results[0].message, /no readable syncedAt/);
 });
 
 test("stalenessResults fails closed on a missing syncedAt under --max-age", () => {
@@ -829,9 +832,9 @@ test("war-only fallback: absent/unknown buildname sides keep the matching-war pa
   assert.equal(byCheck(unknown).instance[0].message, expected);
 });
 
-test("an app recorded on the source but missing on the target warns, not fails (OPP-5)", () => {
-  // Absence alone is expected on a first-ever deploy or for in-development
-  // apps — advisory, never a blocking fail (the OPP-5 false-fail fix).
+test("an app recorded on the source but missing on the target fails (RR-54, ST-10)", () => {
+  // The documented contract: a promote that drops an app the source validated
+  // blocks (the earlier OPP-5 advisory let it through).
   const results = versionParityResults(
     versioned("staging", {
       identity: FULL_IDENTITY,
@@ -841,10 +844,10 @@ test("an app recorded on the source but missing on the target warns, not fails (
   );
   const { apps } = byCheck(results);
   assert.equal(apps.length, 1);
-  assert.equal(apps[0].status, "warn");
+  assert.equal(apps[0].status, "fail");
+  assert.match(apps[0].message, /blocks the promote/);
   assert.match(apps[0].message, /not installed on target "prod"/);
   assert.match(apps[0].message, /x_acme_app \(Acme App\)/);
-  assert.match(apps[0].message, /confirm each is intended/);
 });
 
 test("a target version below the source version fails (downgrade)", () => {
@@ -865,7 +868,7 @@ test("a target version below the source version fails (downgrade)", () => {
   assert.match(apps[0].message, /2\.1\.0/);
 });
 
-test("a missing app warns while a real downgrade fails (OPP-5 split)", () => {
+test("a missing app and a downgrade fail together in one row (RR-54)", () => {
   const results = versionParityResults(
     versioned("staging", {
       identity: FULL_IDENTITY,
@@ -880,16 +883,11 @@ test("a missing app warns while a real downgrade fails (OPP-5 split)", () => {
     }),
   );
   const { apps } = byCheck(results);
-  assert.equal(apps.length, 2);
-  const fail = apps.find((r) => r.status === "fail");
-  const warn = apps.find((r) => r.status === "warn");
-  // The downgrade blocks and names only the regressed app.
-  assert.match(fail.message, /blocks the promote/);
-  assert.match(fail.message, /x_regressed/);
-  assert.doesNotMatch(fail.message, /x_missing/);
-  // The missing app is advisory only.
-  assert.match(warn.message, /x_missing/);
-  assert.match(warn.message, /not installed on target/);
+  assert.equal(apps.length, 1);
+  assert.equal(apps[0].status, "fail");
+  assert.match(apps[0].message, /blocks the promote/);
+  assert.match(apps[0].message, /lower version on target "prod": x_regressed/);
+  assert.match(apps[0].message, /not installed on target "prod": x_missing/);
 });
 
 test("a target version equal or newer than the source passes", () => {
@@ -953,8 +951,8 @@ test("a source version the target cannot confirm warns as unverified", () => {
   assert.match(apps[0].message, /unverified/);
 });
 
-test("a versionless source app is satisfied by presence alone", () => {
-  // The source recorded no version, so presence is the only expectation.
+test("a versionless source app warns as unverified (RR-54)", () => {
+  // The source recorded no version, so the target's version proves nothing.
   const results = versionParityResults(
     versioned("staging", {
       identity: FULL_IDENTITY,
@@ -966,7 +964,8 @@ test("a versionless source app is satisfied by presence alone", () => {
     }),
   );
   const { apps } = byCheck(results);
-  assert.equal(apps[0].status, "pass");
+  assert.equal(apps[0].status, "warn");
+  assert.match(apps[0].message, /recorded no version — unverified/);
 });
 
 test("apps present only on the target are not a finding, just a count", () => {
@@ -1036,8 +1035,8 @@ test("long offender lists truncate to three names plus a (+N more) suffix", () =
     versioned("prod", { identity: FULL_IDENTITY, apps: [] }),
   );
   const { apps } = byCheck(results);
-  // Missing-on-target is advisory now; the truncation logic is identical.
-  assert.equal(apps[0].status, "warn");
+  // Missing-on-target blocks (RR-54); the truncation logic is identical.
+  assert.equal(apps[0].status, "fail");
   assert.match(apps[0].message, /5 app\(s\)/);
   assert.match(apps[0].message, /not installed on target/);
   assert.match(apps[0].message, /x_a, x_b, x_c \(\+2 more\)/);
@@ -1134,15 +1133,16 @@ test("promotionOrderResult warns (unverified) without a registry", () => {
   assert.match(r.message, /not verified: no instance registry was found/);
 });
 
-test("promotionOrderResult warns (unverified) when an instance is undeclared", () => {
+test("promotionOrderResult fails when an instance is undeclared (RR-54, ST-24)", () => {
   const one = promotionOrderResult(pipelineRegistry(), "staging", "qa");
-  assert.equal(one.status, "warn");
-  assert.match(one.message, /"qa" is not declared in the registry/);
+  assert.equal(one.status, "fail");
+  assert.match(one.message, /"qa" is not declared in the instance registry/);
   const both = promotionOrderResult(pipelineRegistry(), "uat", "qa");
+  assert.equal(both.status, "fail");
   assert.match(both.message, /"uat" and "qa" are not declared/);
   // A name that only exists on Object.prototype is not an instance.
   const proto = promotionOrderResult(pipelineRegistry(), "staging", "toString");
-  assert.equal(proto.status, "warn");
+  assert.equal(proto.status, "fail");
 });
 
 test("promotionOrderResult warns (unverified) when no promotesTo is declared", () => {
@@ -1266,12 +1266,14 @@ test("app-version rows carry one app:<scope> finding per missing, downgraded or 
   const warn = apps.find((r) => r.status === "warn");
   assert.deepEqual(
     fail.findings.map((f) => [f.kind, f.location.logicalId, f.status]),
-    [["downgraded", "app:x_b", "fail"]],
+    [
+      ["downgraded", "app:x_b", "fail"],
+      ["missing-on-target", "app:x_a", "fail"],
+    ],
   );
   assert.deepEqual(
     warn.findings.map((f) => [f.kind, f.location.logicalId, f.status]),
     [
-      ["missing-on-target", "app:x_a", "warn"],
       ["unverified", "app:x_c", "warn"],
       ["unverified", "app:x_d", "warn"],
     ],
@@ -1279,7 +1281,7 @@ test("app-version rows carry one app:<scope> finding per missing, downgraded or 
   for (const f of [...fail.findings, ...warn.findings]) {
     assert.match(f.id, ID_FORMAT);
   }
-  assert.match(warn.findings[0].message, /x_a is recorded on source "staging"/);
+  assert.match(fail.findings[1].message, /x_a is recorded on source "staging"/);
 });
 
 test("app-version finding ids are stable across manifest reordering", () => {

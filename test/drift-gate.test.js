@@ -47,6 +47,8 @@ const REGISTRY = {
 function manifest(instance, extra = {}) {
   return {
     instance,
+    url: REGISTRY[instance]?.url,
+    syncedAt: new Date().toISOString(),
     identity: IDENTITY,
     apps: APPS,
     tests: TESTS,

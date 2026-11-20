@@ -6,6 +6,7 @@ import { summarizeResults } from "../summary.js";
 import type { PreflightContext, PreflightReport } from "../types.js";
 import {
   DEFAULT_STALE_WARN_MS,
+  identityResults,
   promotionOrderResult,
   stalenessResults,
   versionParityResults,
@@ -27,8 +28,9 @@ export interface RunDriftOptions {
   /** The promote destination. */
   target: DriftSide;
   /**
-   * The registry, for the `promotion-order` result. Without one that result
-   * is an advisory `warn`.
+   * The registry, for the `promotion-order` result and the manifest URL
+   * check. Without one the order is an advisory `warn` and each manifest URL
+   * is only compared with the other side's.
    */
   registry?: InstanceRegistry;
   /** A manifest older than this fails the compare (the CLI's `--max-age`). */
@@ -45,8 +47,10 @@ export interface RunDriftOptions {
 
 /**
  * The promote gate between two instances (RR-13, ARC-5): the `test-drift`
- * check over the two manifests, then manifest freshness, promotion order from
- * the registry's `promotesTo` edges, and instance / app version parity. Offline:
+ * check over the two manifests, then manifest identity and scope (each manifest
+ * belongs to its name and registry URL, the two are different instances synced
+ * for one scope), promotion order from the registry's `promotesTo` edges,
+ * manifest freshness, and instance / app version parity. Offline:
  * no request is made. Returns the raw report, the same one `drift` prints; pass
  * it to `evaluate` for the `failOn` decision.
  */
@@ -78,10 +82,23 @@ export async function runDrift(
       ...(opts.now !== undefined ? { now: opts.now } : {}),
     },
   );
+  const identity = identityResults(
+    [
+      { role: "source", ...source },
+      { role: "target", ...target },
+    ],
+    opts.registry,
+  );
   const order = promotionOrderResult(opts.registry, source.name, target.name, {
     allowStageSkip: opts.allowStageSkip ?? false,
   });
   const parity = versionParityResults(source.manifest, target.manifest);
   // Recomputed fail-closed: an unknown status counts as a failure.
-  return summarizeResults([...report.results, order, ...stale, ...parity]);
+  return summarizeResults([
+    ...report.results,
+    ...identity,
+    order,
+    ...stale,
+    ...parity,
+  ]);
 }

@@ -240,9 +240,19 @@ export async function loadManifest(
   }
   // CC-36: a manifest that declares a *different* instance than the one it is
   // being loaded as was almost certainly copied or renamed — trusting it would
-  // let one instance's coverage masquerade as another's. Reject the mismatch;
-  // an ABSENT instance field is fine and falls back to the requested name.
-  if (typeof m.instance === "string" && m.instance !== instance) {
+  // let one instance's coverage masquerade as another's. Reject the mismatch.
+  // RR-54 (ST-7): `sync` always writes the field, so an absent, blank or
+  // non-string `instance` is a hand-edited file whose owner cannot be proven;
+  // it used to fall back to the requested name and pass the identity check.
+  const declared: unknown = m.instance;
+  if (typeof declared !== "string" || declared.trim() === "") {
+    throw new UsageError(
+      `Manifest ${path} has no valid "instance" field (got ` +
+        `${declared === undefined ? "none" : JSON.stringify(declared)}); ` +
+        `re-sync "${instance}" to rewrite it.`,
+    );
+  }
+  if (m.instance !== instance) {
     throw new UsageError(
       `Manifest ${path} declares instance "${m.instance}" but was loaded as ` +
         `"${instance}". The file was likely copied or renamed; re-sync ` +
@@ -274,7 +284,7 @@ export async function loadManifest(
     (d) => new UsageError(d),
   );
   const loaded: StateManifest = {
-    instance: m.instance ?? instance,
+    instance: declared,
     url: m.url,
     scope: m.scope,
     syncedAt: m.syncedAt,
