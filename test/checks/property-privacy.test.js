@@ -14,10 +14,13 @@ function sid(n) {
   return n.toString(16).padStart(32, "0");
 }
 
-/** Assemble a fake client from `sys_properties` fixtures plus options. */
+/**
+ * Assemble a fake client from `sys_properties` fixtures plus options. Rows
+ * carry no `active` column — `sys_properties` has none (ACL-4).
+ */
 function makeHttp({ props = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sys_properties: inScope(props, SCOPE, { active: "true" }) },
+    tables: { sys_properties: inScope(props, SCOPE) },
     totalCounts,
     fail,
   });
@@ -197,19 +200,41 @@ test("passes when every property is correctly typed and private", async () => {
     }),
   );
   assert.equal(result.status, "pass");
-  assert.match(result.message, /All 2 active system properties/);
+  assert.match(result.message, /All 2 system properties/);
 });
 
-test("queries only active properties in scope and never asks for the value", async () => {
+test("queries properties by scope alone and never asks for the value", async () => {
   const { http, calls } = tracked(makeHttp({ props: [PRIVATE_PW] }));
   await run(http);
   const reads = calls.filter((c) => c.table === "sys_properties");
   assert.equal(reads.length, 1);
   const [{ params }] = reads;
   assert.match(params.sysparm_query, /sys_scope(\.scope)?=/);
-  assert.match(params.sysparm_query, /(^|\^)active=true($|\^)/);
+  // `sys_properties` has no `active` column: a filter on it returns zero rows
+  // when invalid queries return no rows, and the gate would pass (ACL-4).
+  assert.doesNotMatch(params.sysparm_query, /active/);
   assert.equal(params.sysparm_fields, "sys_id,name,type,is_private");
   assert.doesNotMatch(params.sysparm_fields, /\bvalue\b/);
+});
+
+test("fails on a leaky password property even though the row has no active column (ACL-4)", async () => {
+  // Strict fake = an instance with glide.invalid_query.returns_no_rows=true:
+  // a filter on a column the row lacks matches nothing, and the count the
+  // instance reports for that filter is 0 as well.
+  const http = makeHttp({
+    props: [
+      {
+        sys_id: sid(9),
+        name: "x_acme_app.vendor.secret",
+        type: "password2",
+        is_private: false,
+      },
+    ],
+    totalCounts: { sys_properties: 0 },
+  });
+  const result = await run(http);
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /x_acme_app\.vendor\.secret/);
 });
 
 test("reports error on an authentication error", async () => {

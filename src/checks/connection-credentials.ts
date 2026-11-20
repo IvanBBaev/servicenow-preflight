@@ -5,8 +5,14 @@ import type {
   Finding,
   PreflightContext,
 } from "../types.js";
-import type { TableQueryResult } from "../http/client.js";
-import { resolveScope } from "../http/query.js";
+import type { SnClient, TableQueryResult } from "../http/client.js";
+import {
+  and,
+  chunk,
+  inClause,
+  isSafeIdentifier,
+  resolveScope,
+} from "../http/query.js";
 import {
   errorResult,
   rowFinding,
@@ -16,17 +22,39 @@ import {
 } from "./cert-common.js";
 
 const NAME = "connection-credentials";
-const CREDENTIALS = "discovery_credentials";
+const CLASSES = "sys_db_object";
+const METADATA = "sys_metadata";
+const METADATA_LINK = "sys_metadata_link";
 const REST_MESSAGE = "sys_rest_message";
 const REST_FUNCTION = "sys_rest_message_fn";
 const ALIAS = "sys_alias";
 
 /**
+ * The credential-bearing root classes and the verdict a shipped record of any
+ * class in their tree forces. Credentials (`basic_auth_credentials`,
+ * `api_key_credentials`, … extend `discovery_credentials`), OAuth providers
+ * (`oauth_entity` carries the client secret) and basic-auth profiles hold a
+ * secret: **fail**. An OAuth 2.0 profile only points at a provider and its
+ * scopes, so shipping one **warns** (ACL-13).
+ */
+const CREDENTIAL_ROOTS: Readonly<Record<string, CheckStatus>> = {
+  discovery_credentials: "fail",
+  oauth_entity: "fail",
+  sys_auth_profile_basic: "fail",
+  sys_auth_profile_oauth2: "warn",
+};
+
+/** Deepest class tree under a credential root that the walk follows. */
+const MAX_CLASS_DEPTH = 10;
+
+/**
  * Columns each read asks for. Credential secrets (`password`, `user_name`,
- * `api_key`, …) are never requested, so they never cross the wire.
+ * `api_key`, `client_secret`, …) and the metadata `payload` are never
+ * requested, so they never cross the wire.
  */
 const FIELDS = {
-  [CREDENTIALS]: "sys_id,name,sys_class_name",
+  [METADATA]: "sys_id,sys_name,sys_class_name",
+  [METADATA_LINK]: "sys_id,sys_name,tablename,documentkey",
   [REST_MESSAGE]:
     "sys_id,name,rest_endpoint,authentication_type,basic_auth_profile,use_mid_server",
   [REST_FUNCTION]:
@@ -126,16 +154,137 @@ async function read(
   return { rows: meta.rows };
 }
 
-/** A literal `http(s)://…` endpoint rather than a `${…}` alias placeholder. */
-function hardCoded(row: Record<string, unknown>): boolean {
-  const endpoint = str(row, "rest_endpoint");
-  return endpoint.toLowerCase().startsWith("http") && !endpoint.includes("${");
+/**
+ * {@link read} over `values` in IN-clause chunks of `field`: the rows of every
+ * chunk, and the worst blind spot any chunk left.
+ */
+async function readIn(
+  ctx: PreflightContext,
+  clause: string,
+  scope: string,
+  table: Table,
+  field: string,
+  values: readonly string[],
+): Promise<Read> {
+  const rows: Record<string, unknown>[] = [];
+  let blind: BlindSpot | undefined;
+  for (const batch of chunk(values)) {
+    const r = await read(
+      ctx,
+      and(clause, inClause(field, batch)),
+      scope,
+      table,
+      "fail",
+    );
+    rows.push(...r.rows);
+    if (r.blind && (!blind || RANK[r.blind.status] > RANK[blind.status])) {
+      blind = r.blind;
+    }
+  }
+  return blind ? { rows, blind } : { rows };
 }
 
-/** `<name> (<sys_class_name>)` — a record name and class, never a value. */
+/** Every class in the credential trees, mapped to its root (lower-cased). */
+interface CredentialClasses {
+  roots: Map<string, string>;
+  blind?: BlindSpot;
+}
+
+/**
+ * Walk `sys_db_object` down from {@link CREDENTIAL_ROOTS} along `super_class`,
+ * so a record of any extending class (`basic_auth_credentials`, a custom
+ * credential type) is recognised. A trimmed class read, or a tree deeper than
+ * {@link MAX_CLASS_DEPTH}, leaves classes unproven: a **fail** blind spot. The
+ * roots themselves always count, whether or not their row is visible.
+ */
+async function credentialClasses(http: SnClient): Promise<CredentialClasses> {
+  const roots = new Map<string, string>(
+    Object.keys(CREDENTIAL_ROOTS).map((name) => [name, name]),
+  );
+  const rootOfId = new Map<string, string>();
+  try {
+    const top = await http.table(CLASSES).queryWithMeta({
+      sysparm_query: inClause("name", Object.keys(CREDENTIAL_ROOTS)),
+      sysparm_fields: "sys_id,name",
+    });
+    let trimmed = top.securityTrimmed;
+    for (const row of top.rows) {
+      const id = str(row, "sys_id");
+      const name = str(row, "name").toLowerCase();
+      if (id !== "" && roots.has(name)) rootOfId.set(id, name);
+    }
+    let frontier = [...rootOfId.keys()];
+    for (let depth = 0; frontier.length > 0; depth++) {
+      if (depth >= MAX_CLASS_DEPTH) {
+        return {
+          roots,
+          blind: {
+            status: "fail",
+            note: `${CLASSES}: the credential class tree is deeper than ${MAX_CLASS_DEPTH} levels, so some credential classes were not inspected`,
+          },
+        };
+      }
+      const next: string[] = [];
+      for (const ids of chunk(frontier.filter((id) => isSafeIdentifier(id)))) {
+        // No `sysparm_limit`: the client auto-paginates.
+        const page = await http.table(CLASSES).queryWithMeta({
+          sysparm_query: inClause("super_class", ids),
+          sysparm_fields: "sys_id,name,super_class",
+        });
+        trimmed = trimmed || page.securityTrimmed;
+        for (const row of page.rows) {
+          const id = str(row, "sys_id");
+          const name = str(row, "name").toLowerCase();
+          const root = rootOfId.get(str(row, "super_class"));
+          if (id === "" || rootOfId.has(id) || !root) continue;
+          rootOfId.set(id, root);
+          if (name !== "" && isSafeIdentifier(name)) roots.set(name, root);
+          next.push(id);
+        }
+      }
+      frontier = next;
+    }
+    if (trimmed) {
+      return {
+        roots,
+        blind: {
+          status: "fail",
+          note: `${CLASSES}: the credential class read was security-trimmed, so some credential classes were not inspected`,
+        },
+      };
+    }
+  } catch (err) {
+    const mapped = errorResult(
+      NAME,
+      `the credential classes (${CLASSES})`,
+      err,
+    );
+    return {
+      roots,
+      blind: { status: mapped.status, note: mapped.message.replace(/\.$/, "") },
+    };
+  }
+  return { roots };
+}
+
+/**
+ * A literal endpoint: an `http(s)` scheme whose host part carries no `${…}`
+ * placeholder. A placeholder after the host (`https://api.vendor.example/${path}`)
+ * still hard-wires the vendor host, so it counts (ACL-12).
+ */
+function hardCoded(row: Record<string, unknown>): boolean {
+  const match = /^https?:(?:\/\/)?([^/?#]*)/i.exec(str(row, "rest_endpoint"));
+  return match !== null && !(match[1] ?? "").includes("${");
+}
+
+/** `<name> (<class>)` — a record name and class, never a value. */
 function credentialLabel(row: Record<string, unknown>): string {
-  const name = str(row, "name") || str(row, "sys_id") || "(unnamed)";
-  const cls = str(row, "sys_class_name");
+  const name =
+    str(row, "sys_name") ||
+    str(row, "documentkey") ||
+    str(row, "sys_id") ||
+    "(unnamed)";
+  const cls = str(row, "sys_class_name") || str(row, "tablename");
   return cls ? `${name} (${cls})` : name;
 }
 
@@ -145,36 +294,49 @@ function credentialLabel(row: Record<string, unknown>): string {
  * through Connection & Credential aliases, so each customer supplies their own
  * connection and secret.
  *
- * Three independent reads in the target scope:
+ * Independent reads in the target scope:
  *
- * 1. `discovery_credentials` (children such as `basic_auth_credentials` and
- *    `api_key_credentials` extend it) — any in-scope row **fails**.
- * 2. `sys_rest_message` and `sys_rest_message_fn` — a literal `http…`
- *    endpoint without a `${…}` placeholder **warns**.
+ * 1. What ships: credential tables carry no proven `sys_scope` column, so a
+ *    scope clause on them is no evidence (ACL-5). Instead the app's own
+ *    application files are read — `sys_metadata` rows whose class is in a
+ *    credential tree ({@link CREDENTIAL_ROOTS}, walked down `sys_db_object`)
+ *    and `sys_metadata_link` rows (a data record added to the app) for those
+ *    tables. A credential, OAuth provider or basic-auth profile **fails**; an
+ *    OAuth 2.0 profile **warns**.
+ * 2. `sys_rest_message` and `sys_rest_message_fn` — an `http(s)` endpoint
+ *    whose host is literal **warns**.
  * 3. `sys_alias` — informational; the count goes into the pass message.
  *
- * Only `sys_id`, names and classes are requested: credential values are never
- * read, and endpoint URLs are never echoed. A trimmed credential read fails;
+ * Only `sys_id`, names and classes are requested: credential values and link
+ * payloads are never read, and endpoint URLs are never echoed. A trimmed
+ * credential or class read fails;
  * any other trimmed or ambiguous read warns; a failed read (auth, HTTP,
  * network) makes the row `error`, which outranks every other verdict.
  */
 export const connectionCredentials: Check = {
   name: NAME,
   description:
-    "No credential records ship in the app and REST messages use Connection & Credential aliases instead of hard-coded endpoints.",
+    "No credentials, OAuth providers or auth profiles ship in the app, and REST messages do not hard-code their endpoint host.",
   meta: {
     requires: "scope",
     summary:
-      "No credential records ship in the scope; REST messages and functions reach their endpoints through Connection & Credential aliases rather than a hard-coded URL.",
+      "No credential, OAuth provider or auth-profile record ships as an application file of the scope; REST messages and functions do not hard-code their endpoint host.",
     rule: "1.7",
     severity: "blocker",
-    tables: [CREDENTIALS, REST_MESSAGE, REST_FUNCTION, ALIAS],
+    tables: [
+      CLASSES,
+      METADATA,
+      METADATA_LINK,
+      REST_MESSAGE,
+      REST_FUNCTION,
+      ALIAS,
+    ],
     remediation:
-      "Remove credential records from the app (each customer creates their own), and point REST messages at a Connection & Credential alias instead of a literal endpoint.",
+      "Remove credential, OAuth provider and auth-profile records from the app (each customer creates their own). For a hard-coded endpoint, build the URL from a Connection & Credential alias at runtime (sn_cc.ConnectionInfoProvider in script, then setEndpoint) or call the API through an IntegrationHub / Flow Designer action that uses a connection alias.",
     verdicts: {
       pass: "No credential records and no hard-coded REST endpoints in scope.",
-      warn: "A REST message or function uses a hard-coded endpoint, the scope is unset, or a REST/alias read was trimmed or ambiguous.",
-      fail: "A credential record ships in the app, or the credential read was security-trimmed.",
+      warn: "An OAuth 2.0 profile ships, a REST message or function hard-codes its endpoint host, the scope is unset, or a read was trimmed or ambiguous.",
+      fail: "A credential, OAuth provider or basic-auth profile ships in the app, or a credential or class read was security-trimmed.",
     },
   },
   async run(ctx): Promise<CheckResult> {
@@ -188,7 +350,24 @@ export const connectionCredentials: Check = {
 
     try {
       const { clause } = await resolveScope(ctx, scope);
-      const creds = await read(ctx, clause, scope, CREDENTIALS, "fail");
+      const classes = await credentialClasses(ctx.http);
+      const classNames = [...classes.roots.keys()];
+      const files = await readIn(
+        ctx,
+        clause,
+        scope,
+        METADATA,
+        "sys_class_name",
+        classNames,
+      );
+      const links = await readIn(
+        ctx,
+        clause,
+        scope,
+        METADATA_LINK,
+        "tablename",
+        classNames,
+      );
       const messages = await read(ctx, clause, scope, REST_MESSAGE, "warn");
       const fns = await read(ctx, clause, scope, REST_FUNCTION, "warn");
       const aliases = await read(ctx, clause, scope, ALIAS, "warn");
@@ -197,23 +376,51 @@ export const connectionCredentials: Check = {
       const parts: string[] = [];
       const findings: Finding[] = [];
 
-      if (creds.rows.length > 0) {
-        status = "fail";
-        const labels = creds.rows.map(credentialLabel);
-        parts.push(
-          `${labels.length} credential record(s) ship in the app: ${labels.join(", ")}.`,
-        );
-        for (const row of creds.rows) {
-          findings.push(
-            rowFinding(
-              NAME,
-              CREDENTIALS,
-              row,
-              "credential-record",
-              credentialLabel,
-            ),
+      const secrets: string[] = [];
+      const profiles: string[] = [];
+      const seen = new Set<string>();
+      for (const [table, rows, classField] of [
+        [METADATA, files.rows, "sys_class_name"],
+        [METADATA_LINK, links.rows, "tablename"],
+      ] as const) {
+        for (const row of rows) {
+          const root = classes.roots.get(str(row, classField).toLowerCase());
+          if (!root) continue;
+          // A record both in sys_metadata and linked counts once.
+          const recordId =
+            table === METADATA ? str(row, "sys_id") : str(row, "documentkey");
+          if (recordId !== "" && seen.has(recordId)) continue;
+          if (recordId !== "") seen.add(recordId);
+          const verdict = CREDENTIAL_ROOTS[root] ?? "fail";
+          const location =
+            table === METADATA ? str(row, "sys_class_name") || METADATA : table;
+          const finding = rowFinding(
+            NAME,
+            location,
+            row,
+            verdict === "fail" ? "credential-record" : "oauth2-profile",
+            credentialLabel,
           );
+          if (verdict === "fail") {
+            secrets.push(credentialLabel(row));
+          } else {
+            profiles.push(credentialLabel(row));
+            finding.status = "warn";
+          }
+          findings.push(finding);
         }
+      }
+      if (secrets.length > 0) {
+        status = "fail";
+        parts.push(
+          `${secrets.length} credential record(s) ship in the app: ${secrets.join(", ")}.`,
+        );
+      }
+      if (profiles.length > 0) {
+        status = worst(status, "warn");
+        parts.push(
+          `${profiles.length} OAuth 2.0 profile(s) ship in the app — each customer should register their own: ${profiles.join(", ")}.`,
+        );
       }
 
       const messageNames = new Map<string, string>();
@@ -252,12 +459,12 @@ export const connectionCredentials: Check = {
       if (endpoints.length > 0) {
         status = worst(status, "warn");
         parts.push(
-          `${endpoints.length} REST message/function(s) use a hard-coded endpoint instead of a Connection & Credential alias: ${endpoints.join(", ")}.`,
+          `${endpoints.length} REST message/function(s) hard-code their endpoint host instead of taking it from a Connection & Credential alias: ${endpoints.join(", ")}.`,
         );
       }
 
       const blind: string[] = [];
-      for (const r of [creds, messages, fns, aliases]) {
+      for (const r of [classes, files, links, messages, fns, aliases]) {
         if (!r.blind) continue;
         status = worst(status, r.blind.status);
         blind.push(r.blind.note);

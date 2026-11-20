@@ -105,9 +105,9 @@ window.PREFLIGHT_CHECKS = [
     "name": "rest-endpoint-security",
     "tag": "scope",
     "desc": "Scripted REST resources require authentication and enforce ACL authorization.",
-    "fail": "A resource does not require authentication, or the read was security-trimmed.",
-    "warn": "ACL authorization opted out, no backing REST_Endpoint ACL, or no scope set.",
-    "pass": "Every resource authenticates and enforces ACL authorization, or the scope ships none."
+    "fail": "A resource does not require authentication, or a read was security-trimmed.",
+    "warn": "ACL authorization opted out, no enforced ACL is an active gated REST_Endpoint ACL of the app, or no scope set.",
+    "pass": "Every resource authenticates and enforces a gated REST_Endpoint ACL of the app, or the scope ships none."
   },
   {
     "code": "13",
@@ -293,9 +293,9 @@ window.PREFLIGHT_CHECKS = [
     "code": "33",
     "name": "table-access-settings",
     "tag": "scope",
-    "desc": "App tables keep Application Access restricted: no cross-scope writes, no role-less web-service access.",
-    "fail": "A public table lets other scopes create, update or delete, or the read was security-trimmed.",
-    "warn": "A public read-only table, web-service access without a user role, no scope, or an ambiguous zero-row read.",
+    "desc": "App tables keep Application Access restricted: no cross-scope writes or configuration, and no web-service table without a read ACL that ships.",
+    "fail": "A public table lets other scopes create, update, delete, configure or run actions on it, or a read was security-trimmed.",
+    "warn": "A public read-only table, a web-service table with no read ACL in scope, no scope, or an ambiguous zero-row read.",
     "pass": "Every in-scope table restricts application access, or the scope ships none."
   },
   {
@@ -320,9 +320,9 @@ window.PREFLIGHT_CHECKS = [
     "code": "36",
     "name": "connection-credentials",
     "tag": "scope",
-    "desc": "No credential records ship in the scope; REST messages and functions reach their endpoints through Connection & Credential aliases rather than a hard-coded URL.",
-    "fail": "A credential record ships in the app, or the credential read was security-trimmed.",
-    "warn": "A REST message or function uses a hard-coded endpoint, the scope is unset, or a REST/alias read was trimmed or ambiguous.",
+    "desc": "No credential, OAuth provider or auth-profile record ships as an application file of the scope; REST messages and functions do not hard-code their endpoint host.",
+    "fail": "A credential, OAuth provider or basic-auth profile ships in the app, or a credential or class read was security-trimmed.",
+    "warn": "An OAuth 2.0 profile ships, a REST message or function hard-codes its endpoint host, the scope is unset, or a read was trimmed or ambiguous.",
     "pass": "No credential records and no hard-coded REST endpoints in scope."
   },
   {

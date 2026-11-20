@@ -11,7 +11,7 @@ const SCOPE_SYS_ID = "a".repeat(32);
 const INSTANCE = "https://dev12345.service-now.com";
 const SENTINEL = "SENTINEL_9f3a";
 const FIELDS =
-  "sys_id,name,access,read_access,create_access,update_access,delete_access,ws_access,caller_access,user_role";
+  "sys_id,name,access,read_access,create_access,update_access,delete_access,alter_access,actions_access,ws_access";
 
 /** A sys_db_object row: private, web services off, unless overridden. */
 function table(name, fields = {}) {
@@ -23,9 +23,25 @@ function table(name, fields = {}) {
     create_access: "false",
     update_access: "false",
     delete_access: "false",
+    alter_access: "false",
+    actions_access: "false",
     ws_access: "false",
     caller_access: SENTINEL,
     user_role: "",
+    ...fields,
+  };
+}
+
+/** An active table-level read ACL for `name`, shipped in the app scope. */
+function readAcl(name, fields = {}) {
+  return {
+    sys_id: `acl_${name}`,
+    name,
+    type: "record",
+    operation: "read",
+    active: "true",
+    sys_scope: SCOPE_SYS_ID,
+    "sys_scope.scope": SCOPE,
     ...fields,
   };
 }
@@ -34,14 +50,19 @@ function table(name, fields = {}) {
  * Run the check against seeded sys_db_object rows. The pre-trim count
  * defaults to the seeded row count (`null` omits it → ambiguous).
  */
-async function run(rows, { totalCount, fail, scope = SCOPE } = {}) {
+async function run(
+  rows,
+  { totalCount, fail, scope = SCOPE, acls = [], aclCount } = {},
+) {
   const counts =
     totalCount === null ? {} : { sys_db_object: totalCount ?? rows.length };
+  if (aclCount !== undefined) counts.sys_security_acl = aclCount;
   const { http, calls } = tracked(
     createFakeSnClient({
       tables: {
         sys_db_object: rows.map((row) => ({ sys_scope: SCOPE_SYS_ID, ...row })),
         sys_scope: [{ sys_id: SCOPE_SYS_ID, scope: SCOPE }],
+        sys_security_acl: acls,
       },
       totalCounts: counts,
       fail,
@@ -57,13 +78,13 @@ async function run(rows, { totalCount, fail, scope = SCOPE } = {}) {
   return { result, calls };
 }
 
-test("is registered as a blocker over sys_db_object", () => {
+test("is registered as a blocker over sys_db_object and its read ACLs", () => {
   assert.ok(defaultChecks.includes(tableAccessSettings));
   const { meta } = tableAccessSettings;
   assert.equal(meta.requires, "scope");
   assert.equal(meta.rule, undefined);
   assert.equal(meta.severity, "blocker");
-  assert.deepEqual(meta.tables, ["sys_db_object"]);
+  assert.deepEqual(meta.tables, ["sys_db_object", "sys_security_acl"]);
   for (const v of ["pass", "warn", "fail"]) assert.ok(meta.verdicts[v]);
   assert.ok(meta.remediation);
 });
@@ -82,6 +103,7 @@ test("reads every Application Access field under the resolved scope clause", asy
   assert.equal(read[0].params.sysparm_query, `sys_scope=${SCOPE_SYS_ID}`);
   assert.equal(read[0].params.sysparm_fields, FIELDS);
   assert.equal(read[0].params.sysparm_limit, undefined);
+  assert.equal(calls.filter((c) => c.table === "sys_security_acl").length, 0);
 });
 
 test("passes when every table is private", async () => {
@@ -97,15 +119,21 @@ test("passes when every table is private", async () => {
   assert.equal(result.findings, undefined);
 });
 
-test("passes a public table that grants nothing, and web services with a role", async () => {
-  const { result } = await run([
-    table("x_acme_app_asset", { access: "public", read_access: "false" }),
-    table("x_acme_app_order", {
-      ws_access: "true",
-      user_role: { value: "r1", link: "https://x" },
-    }),
-  ]);
+test("passes a public table that grants nothing, and web services behind a shipped read ACL", async () => {
+  const { result, calls } = await run(
+    [
+      table("x_acme_app_asset", { access: "public", read_access: "false" }),
+      table("x_acme_app_order", { ws_access: "true" }),
+    ],
+    { acls: [readAcl("x_acme_app_order")] },
+  );
   assert.equal(result.status, "pass", result.message);
+  const aclRead = calls.filter((c) => c.table === "sys_security_acl");
+  assert.equal(aclRead.length, 1);
+  assert.equal(
+    aclRead[0].params.sysparm_query,
+    "type=record^nameINx_acme_app_order",
+  );
 });
 
 test("fails a public table that lets other scopes write, naming the operations", async () => {
@@ -121,7 +149,7 @@ test("fails a public table that lets other scopes write, naming the operations",
   assert.equal(result.status, "fail");
   assert.match(
     result.message,
-    /^2 table\(s\) in scope "x_acme_app" allow other scopes to write: x_acme_app_asset \(create\/delete\), x_acme_app_order \(update\)\.$/,
+    /^2 table\(s\) in scope "x_acme_app" allow other scopes to change them: x_acme_app_asset \(create\/delete\), x_acme_app_order \(update\)\.$/,
   );
   assert.deepEqual(
     result.findings.map((f) => [f.kind, f.location.recordName, f.status]),
@@ -149,22 +177,80 @@ test("warns on a public read-only table", async () => {
   );
 });
 
-test("warns on web-service access without a user role", async () => {
-  const { result } = await run([
-    table("x_acme_app_asset", { ws_access: true }),
-    table("x_acme_app_order", { ws_access: "true", user_role: "  " }),
-  ]);
+test("warns on web-service access with no shipped read ACL", async () => {
+  const { result } = await run(
+    [
+      table("x_acme_app_asset", { ws_access: true }),
+      table("x_acme_app_order", { ws_access: "true" }),
+      table("x_acme_app_item", { ws_access: "true" }),
+      table("x_acme_app_note", { ws_access: "true" }),
+    ],
+    {
+      acls: [
+        // Inactive, foreign-scoped and write-only ACLs do not back the read.
+        readAcl("x_acme_app_order", { active: "false" }),
+        readAcl("x_acme_app_item", {
+          sys_scope: "f".repeat(32),
+          "sys_scope.scope": "global",
+        }),
+        readAcl("x_acme_app_note", { operation: "write" }),
+      ],
+    },
+  );
   assert.equal(result.status, "warn");
   assert.match(
     result.message,
-    /2 table\(s\) are web-service accessible without a user role: x_acme_app_asset, x_acme_app_order\./,
+    /4 table\(s\) are web-service accessible with no active read ACL in the app scope: x_acme_app_asset, x_acme_app_order, x_acme_app_item, x_acme_app_note\./,
   );
   assert.deepEqual(
     result.findings.map((f) => [f.kind, f.status]),
     [
-      ["ws-no-role", "warn"],
-      ["ws-no-role", "warn"],
+      ["ws-no-read-acl", "warn"],
+      ["ws-no-read-acl", "warn"],
+      ["ws-no-read-acl", "warn"],
+      ["ws-no-read-acl", "warn"],
     ],
+  );
+});
+
+test("a user role on the table is not a web-service gate (ACL-10)", async () => {
+  // `user_role` only names the role the auto-generated ACLs use; with no read
+  // ACL in the app the REST/SOAP surface is ungated, role or not.
+  const { result } = await run([
+    table("x_acme_app_order", {
+      ws_access: "true",
+      user_role: { value: "r1", link: "https://x" },
+    }),
+  ]);
+  assert.equal(result.status, "warn", result.message);
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    ["ws-no-read-acl"],
+  );
+});
+
+test("fails a web-service table whose read-ACL lookup was security-trimmed", async () => {
+  const { result } = await run(
+    [table("x_acme_app_order", { ws_access: "true" })],
+    { acls: [readAcl("x_acme_app_order")], aclCount: 3 },
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /sys_security_acl read was security-trimmed/);
+});
+
+test("fails a public table that allows configuration or UI actions (ACL-11)", async () => {
+  const { result } = await run([
+    table("x_acme_app_asset", { access: "public", alter_access: "true" }),
+    table("x_acme_app_order", { access: "public", actions_access: true }),
+  ]);
+  assert.equal(result.status, "fail", result.message);
+  assert.match(
+    result.message,
+    /x_acme_app_asset \(alter\), x_acme_app_order \(actions\)/,
+  );
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    ["public-write:alter", "public-write:actions"],
   );
 });
 
@@ -180,16 +266,19 @@ test("a fail also lists the advisory tables", async () => {
   assert.equal(result.status, "fail");
   assert.match(
     result.message,
-    /allow other scopes to write: x_acme_app_asset \(create\)\./,
+    /allow other scopes to change them: x_acme_app_asset \(create\)\./,
   );
   assert.match(
     result.message,
     /readable from every application scope: x_acme_app_order\./,
   );
-  assert.match(result.message, /without a user role: x_acme_app_asset\./);
+  assert.match(
+    result.message,
+    /no active read ACL in the app scope: x_acme_app_asset\./,
+  );
   assert.deepEqual(
     result.findings.map((f) => f.kind),
-    ["public-write:create", "ws-no-role", "public-read"],
+    ["public-write:create", "public-read", "ws-no-read-acl"],
   );
 });
 
@@ -269,7 +358,7 @@ test("a trimmed read with only advisories still fails and keeps the findings", a
     { totalCount: 2 },
   );
   assert.equal(result.status, "fail");
-  assert.match(result.message, /security-trimmed.*without a user role/);
+  assert.match(result.message, /security-trimmed.*no active read ACL/);
   assert.equal(result.findings.length, 1);
 });
 

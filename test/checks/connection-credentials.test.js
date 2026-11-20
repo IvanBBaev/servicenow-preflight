@@ -12,18 +12,40 @@ const INSTANCE = "https://dev12345.service-now.com";
 const SENTINEL = "SENTINEL_9f3a";
 
 const TABLES = [
-  "discovery_credentials",
+  "sys_db_object",
+  "sys_metadata",
+  "sys_metadata_link",
   "sys_rest_message",
   "sys_rest_message_fn",
   "sys_alias",
 ];
 
-/** Every table proven empty unless a test overrides it. */
-const EMPTY_COUNTS = Object.fromEntries(TABLES.map((t) => [t, 0]));
+/** The scoped reads, proven empty unless a test overrides it. */
+const EMPTY_COUNTS = Object.fromEntries(
+  TABLES.filter((t) => t !== "sys_db_object").map((t) => [t, 0]),
+);
+
+/**
+ * The credential class trees as `sys_db_object` rows: the four roots plus the
+ * platform children, linked by `super_class` sys_id.
+ */
+const CLASS_ROWS = [
+  { sys_id: "c_dc", name: "discovery_credentials" },
+  { sys_id: "c_basic", name: "basic_auth_credentials", super_class: "c_dc" },
+  { sys_id: "c_api", name: "api_key_credentials", super_class: "c_dc" },
+  { sys_id: "c_oauth", name: "oauth_entity" },
+  { sys_id: "c_pbasic", name: "sys_auth_profile_basic" },
+  { sys_id: "c_poauth", name: "sys_auth_profile_oauth2" },
+  { sys_id: "c_task", name: "task" },
+  { sys_id: "c_inc", name: "incident", super_class: "c_task" },
+];
 
 /** Assemble a fake client; `totalCounts` merges over the all-empty default. */
 function makeHttp({
   creds = [],
+  links = [],
+  classes = CLASS_ROWS,
+  instanceCreds = [],
   messages = [],
   fns = [],
   aliases = [],
@@ -32,7 +54,11 @@ function makeHttp({
 } = {}) {
   return createFakeSnClient({
     tables: {
-      discovery_credentials: inScope(creds, SCOPE),
+      sys_db_object: classes,
+      sys_metadata: inScope(creds, SCOPE),
+      sys_metadata_link: inScope(links, SCOPE),
+      // The credential table itself: never read (ACL-5).
+      discovery_credentials: instanceCreds,
       sys_rest_message: inScope(messages, SCOPE),
       sys_rest_message_fn: inScope(fns, SCOPE),
       sys_alias: inScope(aliases, SCOPE),
@@ -73,13 +99,26 @@ function run(http, extra = {}) {
   });
 }
 
+/** A shipped application file (`sys_metadata` row) of class `cls`. */
 function cred(name, cls = "basic_auth_credentials") {
   return {
     sys_id: `cred-${name}`,
-    name,
+    sys_name: name,
     sys_class_name: cls,
     password: SENTINEL,
     user_name: SENTINEL,
+    payload: SENTINEL,
+  };
+}
+
+/** A data record added to the app (`sys_metadata_link` row) on `table`. */
+function link(name, table, documentkey = `doc-${name}`) {
+  return {
+    sys_id: `link-${name}`,
+    sys_name: name,
+    tablename: table,
+    documentkey,
+    payload: SENTINEL,
   };
 }
 
@@ -126,19 +165,43 @@ test("warns when no scope is set", async () => {
   assert.match(result.message, /No scope set/);
 });
 
-test("reads the four tables in scope with the card's fields and no limit", async () => {
+test("walks the credential classes, then reads the scoped tables with the card's fields and no limit", async () => {
   const { http, calls } = tracked(makeHttp());
   await run(http);
-  const reads = calls.filter((c) => TABLES.includes(c.table));
+  const classReads = calls.filter((c) => c.table === "sys_db_object");
+  assert.deepEqual(
+    classReads.map((c) => c.params.sysparm_query),
+    [
+      "nameINdiscovery_credentials,oauth_entity,sys_auth_profile_basic,sys_auth_profile_oauth2",
+      "super_classINc_dc,c_oauth,c_pbasic,c_poauth",
+      "super_classINc_basic,c_api",
+    ],
+  );
+  const reads = calls.filter(
+    (c) => TABLES.includes(c.table) && c.table !== "sys_db_object",
+  );
   assert.deepEqual(
     reads.map((c) => c.table),
-    TABLES,
+    TABLES.slice(1),
+  );
+  assert.equal(
+    reads[0].params.sysparm_query,
+    "sys_scope.scope=x_acme_app^sys_class_nameINdiscovery_credentials,oauth_entity,sys_auth_profile_basic,sys_auth_profile_oauth2,basic_auth_credentials,api_key_credentials",
+  );
+  assert.match(
+    reads[1].params.sysparm_query,
+    /\^tablenameINdiscovery_credentials,oauth_entity,.*api_key_credentials$/,
+  );
+  assert.equal(
+    calls.filter((c) => c.table === "discovery_credentials").length,
+    0,
   );
   const fields = Object.fromEntries(
     reads.map((c) => [c.table, c.params.sysparm_fields]),
   );
   assert.deepEqual(fields, {
-    discovery_credentials: "sys_id,name,sys_class_name",
+    sys_metadata: "sys_id,sys_name,sys_class_name",
+    sys_metadata_link: "sys_id,sys_name,tablename,documentkey",
     sys_rest_message:
       "sys_id,name,rest_endpoint,authentication_type,basic_auth_profile,use_mid_server",
     sys_rest_message_fn:
@@ -148,7 +211,13 @@ test("reads the four tables in scope with the card's fields and no limit", async
   for (const c of reads) {
     assert.match(c.params.sysparm_query, /x_acme_app/);
     assert.equal(c.params.sysparm_limit, undefined);
-    for (const secret of ["password", "api_key", "user_name"]) {
+    for (const secret of [
+      "password",
+      "api_key",
+      "user_name",
+      "client_secret",
+      "payload",
+    ]) {
       assert.ok(
         !c.params.sysparm_fields.split(",").includes(secret),
         `${c.table} must not request ${secret}`,
@@ -191,18 +260,19 @@ test("fails when a credential record ships in the app", async () => {
       creds: [
         cred("Billing creds"),
         cred("Key", "api_key_credentials"),
-        { sys_id: "cred-x" },
+        { sys_id: "cred-x", sys_class_name: "discovery_credentials" },
       ],
     }),
   );
   assert.equal(result.status, "fail");
   assert.match(
     result.message,
-    /^3 credential record\(s\) ship in the app: Billing creds \(basic_auth_credentials\), Key \(api_key_credentials\), cred-x\.$/,
+    /^3 credential record\(s\) ship in the app: Billing creds \(basic_auth_credentials\), Key \(api_key_credentials\), cred-x \(discovery_credentials\)\.$/,
   );
   assert.equal(result.findings.length, 3);
   assert.equal(result.findings[0].kind, "credential-record");
-  assert.equal(result.findings[0].location.table, "discovery_credentials");
+  assert.equal(result.findings[0].location.table, "basic_auth_credentials");
+  assert.equal(result.findings[0].location.sysId, "cred-Billing creds");
   assert.ok(!result.message.includes(SENTINEL));
   assert.ok(!JSON.stringify(result).includes(SENTINEL));
 });
@@ -225,7 +295,7 @@ test("warns on hard-coded REST message and function endpoints without echoing th
   assert.equal(result.status, "warn");
   assert.match(
     result.message,
-    /^3 REST message\/function\(s\) use a hard-coded endpoint instead of a Connection & Credential alias: Billing, Billing \(get\), msg-elsewhere \(orphan\)\.$/,
+    /^3 REST message\/function\(s\) hard-code their endpoint host instead of taking it from a Connection & Credential alias: Billing, Billing \(get\), msg-elsewhere \(orphan\)\.$/,
   );
   assert.ok(!JSON.stringify(result).includes(SENTINEL));
   assert.ok(!result.message.includes("example.com"));
@@ -254,26 +324,30 @@ test("a credential record and a hard-coded endpoint together fail with both list
 });
 
 test("a trimmed credential read fails", async () => {
-  const result = await run(
-    makeHttp({ totalCounts: { discovery_credentials: 2 } }),
-  );
+  const result = await run(makeHttp({ totalCounts: { sys_metadata: 2 } }));
   assert.equal(result.status, "fail");
   assert.match(
     result.message,
-    /discovery_credentials: 2 match in scope "x_acme_app" but 0 are visible \(security-trimmed\)/,
+    /sys_metadata: 2 match in scope "x_acme_app" but 0 are visible \(security-trimmed\)/,
   );
+});
+
+test("a trimmed metadata-link read fails", async () => {
+  const result = await run(makeHttp({ totalCounts: { sys_metadata_link: 1 } }));
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /sys_metadata_link: 1 match/);
 });
 
 test("a partially trimmed credential read with rows fails and notes the gap", async () => {
   const result = await run(
     makeHttp({
       creds: [cred("Visible")],
-      totalCounts: { discovery_credentials: 3 },
+      totalCounts: { sys_metadata: 3 },
     }),
   );
   assert.equal(result.status, "fail");
   assert.match(result.message, /Visible \(basic_auth_credentials\)/);
-  assert.match(result.message, /Not fully inspected: discovery_credentials/);
+  assert.match(result.message, /Not fully inspected: sys_metadata/);
 });
 
 test("a trimmed REST message read warns", async () => {
@@ -306,13 +380,18 @@ test("a trimmed alias read warns", async () => {
 test("an ambiguous zero-row read warns", async () => {
   const http = createFakeSnClient({
     tables: {},
-    totalCounts: { sys_rest_message: 0, sys_rest_message_fn: 0, sys_alias: 0 },
+    totalCounts: {
+      sys_metadata_link: 0,
+      sys_rest_message: 0,
+      sys_rest_message_fn: 0,
+      sys_alias: 0,
+    },
   });
   const result = await run(http);
   assert.equal(result.status, "warn");
   assert.match(
     result.message,
-    /discovery_credentials: none visible in scope "x_acme_app" and no pre-trim count arrived/,
+    /sys_metadata: none visible in scope "x_acme_app" and no pre-trim count arrived/,
   );
 });
 
@@ -335,9 +414,10 @@ test("an HTTP error is an error", async () => {
 });
 
 for (const [table, kind, status] of [
-  ["discovery_credentials", { auth: true }, "error"],
+  ["sys_db_object", { auth: true }, "error"],
+  ["sys_metadata", { auth: true }, "error"],
   // A 403 is an auth failure in production (SnAuthError): an error row (QA-1).
-  ["discovery_credentials", { http: 403 }, "error"],
+  ["sys_metadata_link", { http: 403 }, "error"],
   ["sys_rest_message", { network: true }, "error"],
   ["sys_rest_message_fn", { http: 500 }, "error"],
   ["sys_alias", { forbidden: true }, "error"],
@@ -354,7 +434,11 @@ for (const [table, kind, status] of [
     assert.equal(result.status, status);
     assert.match(result.message, new RegExp(table));
     assert.deepEqual(
-      calls.filter((c) => TABLES.includes(c.table)).map((c) => c.table),
+      [
+        ...new Set(
+          calls.filter((c) => TABLES.includes(c.table)).map((c) => c.table),
+        ),
+      ],
       TABLES,
     );
   });
@@ -383,4 +467,133 @@ test("the sentinel never reaches any message", async () => {
     }),
   );
   assert.ok(!JSON.stringify(result).includes(SENTINEL));
+});
+
+test("a credential on the instance that the app does not ship passes (ACL-5)", async () => {
+  // The scope clause on the credential table proved nothing: every credential
+  // matching it was reported as shipped, whatever app owns it.
+  const instanceCreds = inScope([cred("Someone else's")], SCOPE);
+  const result = await run(
+    makeHttp({
+      instanceCreds,
+      totalCounts: { discovery_credentials: instanceCreds.length },
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
+});
+
+test("a credential added to the app as a data record fails (ACL-5)", async () => {
+  const result = await run(
+    makeHttp({
+      // The credential table has no sys_scope column: only the link shows it ships.
+      instanceCreds: [cred("Vendor login")],
+      links: [
+        link("Vendor login", "basic_auth_credentials", "cred-Vendor login"),
+      ],
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(
+    result.message,
+    /^1 credential record\(s\) ship in the app: Vendor login \(basic_auth_credentials\)\.$/,
+  );
+  assert.equal(result.findings[0].location.table, "sys_metadata_link");
+  assert.ok(!JSON.stringify(result).includes(SENTINEL));
+});
+
+test("a record both shipped and linked counts once", async () => {
+  const result = await run(
+    makeHttp({
+      creds: [cred("Key", "api_key_credentials")],
+      links: [link("Key", "api_key_credentials", "cred-Key")],
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /^1 credential record\(s\)/);
+  assert.equal(result.findings.length, 1);
+});
+
+test("an OAuth provider or basic-auth profile fails; an OAuth 2.0 profile warns (ACL-13)", async () => {
+  const fails = await run(
+    makeHttp({
+      creds: [
+        cred("Vendor OAuth", "oauth_entity"),
+        cred("Vendor basic", "sys_auth_profile_basic"),
+      ],
+    }),
+  );
+  assert.equal(fails.status, "fail", fails.message);
+  assert.match(
+    fails.message,
+    /2 credential record\(s\) ship in the app: Vendor OAuth \(oauth_entity\), Vendor basic \(sys_auth_profile_basic\)\./,
+  );
+  const warns = await run(
+    makeHttp({ creds: [cred("Vendor profile", "sys_auth_profile_oauth2")] }),
+  );
+  assert.equal(warns.status, "warn", warns.message);
+  assert.match(
+    warns.message,
+    /^1 OAuth 2\.0 profile\(s\) ship in the app .*: Vendor profile \(sys_auth_profile_oauth2\)\.$/,
+  );
+  assert.deepEqual(
+    warns.findings.map((f) => [f.kind, f.status]),
+    [["oauth2-profile", "warn"]],
+  );
+});
+
+test("a record of a custom class deep in a credential tree fails", async () => {
+  const result = await run(
+    makeHttp({
+      classes: [
+        ...CLASS_ROWS,
+        { sys_id: "c_x1", name: "x_acme_app_cred", super_class: "c_basic" },
+        { sys_id: "c_x2", name: "x_acme_app_cred2", super_class: "c_x1" },
+      ],
+      creds: [cred("Deep", "x_acme_app_cred2"), cred("Task", "incident")],
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(
+    result.message,
+    /^1 credential record\(s\) ship in the app: Deep \(x_acme_app_cred2\)\.$/,
+  );
+});
+
+test("a trimmed class read fails closed", async () => {
+  const result = await run(
+    makeHttp({ totalCounts: { sys_db_object: CLASS_ROWS.length + 5 } }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(
+    result.message,
+    /sys_db_object: the credential class read was security-trimmed/,
+  );
+});
+
+test("a class tree deeper than the walk follows fails closed", async () => {
+  const chain = Array.from({ length: 11 }, (_, i) => ({
+    sys_id: `c_d${i}`,
+    name: `x_acme_app_d${i}`,
+    super_class: i === 0 ? "c_basic" : `c_d${i - 1}`,
+  }));
+  const result = await run(makeHttp({ classes: [...CLASS_ROWS, ...chain] }));
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /deeper than 10 levels/);
+});
+
+test("a placeholder after a literal host is still a hard-coded endpoint (ACL-12)", async () => {
+  const result = await run(
+    makeHttp({
+      messages: [
+        message("Vendor", "https://api.vendor.example/v1/${path}"),
+        message("Query", "http://api.vendor.example?x=${q}"),
+        message("Aliased", "https://${host}/v1"),
+      ],
+    }),
+  );
+  assert.equal(result.status, "warn", result.message);
+  assert.match(
+    result.message,
+    /hard-code their endpoint host .*: Vendor, Query\.$/,
+  );
 });

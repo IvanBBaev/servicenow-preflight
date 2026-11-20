@@ -664,6 +664,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Schema-dependent checks read the columns that decide** (RR-58, ACL-4,
+  ACL-5, ACL-9, ACL-10, ACL-11, ACL-12, ACL-13) — four checks filtered on, or
+  judged by, the wrong columns. `property-privacy` no longer adds an
+  `active=true` term (`sys_properties` has no `active` column, so the filter
+  could hide every leaky property). `connection-credentials` walks the class
+  tree under `discovery_credentials`, `oauth_entity` and
+  `sys_auth_profile_basic` (fail) and `sys_auth_profile_oauth2` (warn — each
+  customer should register their own) and looks for those classes in the
+  app's `sys_metadata` and `sys_metadata_link` records, so a credential the
+  app does not ship no longer fails and one added as a data record no longer
+  passes; a class read that was security-trimmed or deeper than 10 levels
+  fails. A REST endpoint counts as hard-coded when its host is a literal, so
+  `https://api.vendor.example/v1/${path}` now warns. `table-access-settings`
+  fails a public table that grants other scopes configuration
+  (`alter_access`) or UI actions (`actions_access`), and a web-service table
+  now needs an active table-level read ACL shipped in the app — `user_role`
+  is not a web-service gate and is no longer read. `rest-endpoint-security`
+  checks the ACLs each resource enforces (its `enforce_acl`, else its API's
+  default list): one of them must be an active `REST_Endpoint` ACL of the app
+  gated by a role other than `public`, a script or a condition. The global
+  default ACL, a public-only ACL or an unrelated in-scope ACL no longer backs a
+  resource (a per-resource warn finding replaces the scope-level
+  `no-rest-endpoint-acl` one). Resources of an explicitly inactive API are
+  skipped. A trimmed API, ACL or role-link read fails.
+
 - **ACL checks judge what ships and what actually gates** (RR-57, ACL-2,
   ACL-3, ACL-6, ACL-7, ACL-8, ACL-14) — four ACL checks could pass on an ACL
   that does not ship with the app or does not gate anything.

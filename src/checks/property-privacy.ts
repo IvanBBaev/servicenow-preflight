@@ -1,5 +1,5 @@
 import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
-import { and, eq, resolveScope } from "../http/query.js";
+import { resolveScope } from "../http/query.js";
 import {
   errorResult,
   isTruthy,
@@ -34,8 +34,12 @@ const SECRET_LIKE_NAME = /secret|token|password|passwd|api[_-]?key|credential/i;
  * property that is not private exports its value in every update set and
  * carries it onto every clone target.
  *
- * The check inspects every active `sys_properties` row the app ships in the
- * target scope (names and types only — values are never requested):
+ * The check inspects every `sys_properties` row the app ships in the target
+ * scope (names and types only — values are never requested). The read filters
+ * on the scope alone: `sys_properties` has no `active` column, and on an
+ * instance with `glide.invalid_query.returns_no_rows=true` a filter on an
+ * unknown column returns zero rows with a zero count — which would pass the
+ * gate while a leaky property ships (ACL-4).
  *
  * - **fail** — a password-typed property is not private, the read was
  *   security-trimmed to zero rows, or a zero-row read could not be
@@ -79,7 +83,7 @@ export const propertyPrivacy: Check = {
       // No `sysparm_limit`: auto-pagination inspects every property in the
       // scope. Only metadata columns are requested — never `value`.
       const meta = await ctx.http.table("sys_properties").queryWithMeta({
-        sysparm_query: and(resolvedScope.clause, eq("active", "true")),
+        sysparm_query: resolvedScope.clause,
         sysparm_fields: "sys_id,name,type,is_private",
       });
 
@@ -95,7 +99,7 @@ export const propertyPrivacy: Check = {
           case "empty":
             return result(
               "pass",
-              `No active system properties in scope "${scope}" — nothing to check.`,
+              `No system properties in scope "${scope}" — nothing to check.`,
             );
           case "ambiguous":
             return result(
@@ -174,7 +178,7 @@ export const propertyPrivacy: Check = {
 
       return done(
         "pass",
-        `All ${meta.rows.length} active system propert${
+        `All ${meta.rows.length} system propert${
           meta.rows.length === 1 ? "y" : "ies"
         } in scope "${scope}" are private when password-typed, and no secret-like name uses a plain type.`,
       );

@@ -314,3 +314,70 @@ export async function fetchNamedAcls(
   }
   return { names, foreignNames, inactiveNames, trimmed };
 }
+
+/** A role that grants everyone: an ACL gated only by it is not gated (ACL-3). */
+export const PUBLIC_ROLE = "public";
+
+/**
+ * Whether an ACL script actually decides anything. Comments and whitespace are
+ * stripped first, so a script that is only `// TODO` is no script; a script
+ * that only ever answers true (`answer = true;`, `true`, `answer = !0;`, …)
+ * gates nothing either (ACL-3).
+ */
+export function scriptGates(script: string): boolean {
+  const code = script
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/\s+/g, "")
+    .replace(/;+$/, "");
+  if (code === "") return false;
+  return !/^(answer=)?\(*(true|!0|!false|!!1|1==1|1===1)\)*$/.test(code);
+}
+
+/**
+ * Whether an ACL condition actually filters anything: an encoded query that
+ * is empty once the `^EQ` terminator and whitespace are removed matches every
+ * record, so it gates nothing (ACL-3).
+ */
+export function conditionGates(condition: string): boolean {
+  return condition.replace(/\^EQ$/, "").replace(/\s+/g, "") !== "";
+}
+
+/**
+ * Batch-fetch the ACL→role links (`sys_security_acl_role` m2m) for every ACL in
+ * one go, grouped by ACL sys_id. Replaces the per-ACL N+1 read (SN-6): the ids
+ * are packed into `sys_security_aclIN…` clauses of at most `IN_CHUNK_SIZE`, so N
+ * ACLs cost `⌈N / IN_CHUNK_SIZE⌉` queries instead of N. Every id is charset-
+ * validated by {@link inClause}, so the batched query cannot be injected into.
+ *
+ * Read with `queryWithMeta`: `trimmed` is true when any batch was
+ * security-trimmed. An unreadable m2m would otherwise make every role-gated ACL
+ * look role-less — and fail as "public access", the wrong diagnosis (ACL-8).
+ */
+export async function fetchAclRolesByAcl(
+  http: SnClient,
+  aclSysIds: readonly string[],
+): Promise<{
+  byAcl: Map<string, Record<string, unknown>[]>;
+  trimmed: boolean;
+}> {
+  const byAcl = new Map<string, Record<string, unknown>[]>();
+  for (const id of aclSysIds) byAcl.set(id, []);
+  let trimmed = false;
+  for (const ids of chunk(aclSysIds)) {
+    // No `sysparm_limit`: the client auto-paginates so an ACL gated by more
+    // roles than a single page is never seen as ungated through truncation.
+    const { rows, securityTrimmed } = await http
+      .table("sys_security_acl_role")
+      .queryWithMeta({
+        sysparm_query: inClause("sys_security_acl", ids),
+        sysparm_fields: "sys_security_acl,sys_user_role,sys_user_role.name",
+      });
+    trimmed = trimmed || securityTrimmed;
+    for (const row of rows) {
+      const list = byAcl.get(str(row, "sys_security_acl"));
+      if (list) list.push(row);
+    }
+  }
+  return { byAcl, trimmed };
+}

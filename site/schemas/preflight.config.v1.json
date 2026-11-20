@@ -322,7 +322,7 @@
           "additionalProperties": {}
         },
         "table-access-settings": {
-          "description": "App tables do not let other scopes write them, and web-service access names a user role.",
+          "description": "App tables do not let other scopes change them, and web-service tables ship a read ACL.",
           "type": "object",
           "additionalProperties": {}
         },
@@ -337,7 +337,7 @@
           "additionalProperties": {}
         },
         "connection-credentials": {
-          "description": "No credential records ship in the app and REST messages use Connection & Credential aliases instead of hard-coded endpoints.",
+          "description": "No credentials, OAuth providers or auth profiles ship in the app, and REST messages do not hard-code their endpoint host.",
           "type": "object",
           "additionalProperties": {}
         },

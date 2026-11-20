@@ -8,12 +8,24 @@ import { inScope } from "../helpers/seed.js";
 const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
 
-/** Assemble a fake client from REST-operation / ACL fixtures plus options. */
-function makeHttp({ ops = [], acls = [], fail, totalCounts } = {}) {
+/**
+ * Assemble a fake client from REST-operation / API / ACL / ACL-role fixtures
+ * plus options. `roles` defaults to the app-role link that gates `acl1`.
+ */
+function makeHttp({
+  ops = [],
+  defs = [],
+  acls = [],
+  roles = [ROLE_LINK],
+  fail,
+  totalCounts,
+} = {}) {
   return createFakeSnClient({
     tables: {
       sys_ws_operation: inScope(ops, SCOPE, { active: "true" }),
+      sys_ws_definition: inScope(defs, SCOPE),
       sys_security_acl: inScope(acls, SCOPE),
+      sys_security_acl_role: roles,
     },
     totalCounts,
     fail,
@@ -62,6 +74,7 @@ function securedOp(overrides = {}) {
     http_method: "GET",
     requires_authentication: "true",
     requires_acl_authorization: "true",
+    enforce_acl: "acl1",
     ...overrides,
   };
 }
@@ -71,6 +84,14 @@ const ENDPOINT_ACL = {
   name: "x_acme_app/records",
   type: "REST_Endpoint",
   active: "true",
+};
+
+/** The `sys_security_acl_role` link that gates `acl1` with an app role. */
+const ROLE_LINK = {
+  sys_id: "ar1",
+  sys_security_acl: "acl1",
+  sys_user_role: "r1",
+  "sys_user_role.name": "x_acme_app.user",
 };
 
 test("rest-endpoint-security keeps its registered name", async () => {
@@ -153,19 +174,144 @@ test("warns when an authenticated resource skips ACL authorization", async () =>
 });
 
 test("warns when resources enforce ACL authorization but no REST_Endpoint ACL ships", async () => {
-  // The only seeded ACL is the wrong type, so the scope-level probe finds no
-  // active REST_Endpoint ACL backing the enforcement.
+  // The enforced ACL is the wrong type, so it does not back the resource.
   const acls = [{ ...ENDPOINT_ACL, type: "record" }];
   const result = await run(makeHttp({ ops: [securedOp()], acls }));
   assert.equal(result.status, "warn");
-  assert.match(result.message, /no active REST_Endpoint ACL/);
+  assert.match(result.message, /no active, gated REST_Endpoint ACL/);
 });
 
 test("an inactive REST_Endpoint ACL does not back the enforcement", async () => {
   const acls = [{ ...ENDPOINT_ACL, active: "false" }];
   const result = await run(makeHttp({ ops: [securedOp()], acls }));
   assert.equal(result.status, "warn");
-  assert.match(result.message, /no active REST_Endpoint ACL/);
+  assert.match(result.message, /no active, gated REST_Endpoint ACL/);
+});
+
+test("an unrelated REST_Endpoint ACL in scope does not back a resource (ACL-9)", async () => {
+  // Audit repro 8: the resource enforces only the default ACL, while another
+  // in-scope REST_Endpoint ACL exists — the old scope-wide probe passed it.
+  const ops = [securedOp({ enforce_acl: "" })];
+  const result = await run(makeHttp({ ops, acls: [ENDPOINT_ACL] }));
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /getRecords \[GET\]/);
+  assert.equal(result.findings[0].kind, "no-gated-endpoint-acl");
+});
+
+test("the global default ACL does not back a resource (ACL-9)", async () => {
+  const ops = [securedOp({ enforce_acl: "dflt" })];
+  const acls = [
+    ENDPOINT_ACL,
+    {
+      sys_id: "dflt",
+      name: "Scripted REST External Default",
+      type: "REST_Endpoint",
+      active: "true",
+      "sys_scope.scope": "global",
+    },
+  ];
+  const result = await run(makeHttp({ ops, acls }));
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /no active, gated REST_Endpoint ACL/);
+});
+
+test("an ACL gated only by the public role, or by nothing, does not back a resource (ACL-9)", async () => {
+  const ops = [
+    securedOp({ enforce_acl: "acl2" }),
+    securedOp({ sys_id: "op2", name: "listAll", enforce_acl: "acl3" }),
+  ];
+  const acls = [
+    { ...ENDPOINT_ACL, sys_id: "acl2" },
+    { ...ENDPOINT_ACL, sys_id: "acl3" },
+  ];
+  const roles = [
+    {
+      sys_id: "ar2",
+      sys_security_acl: "acl2",
+      sys_user_role: "r0",
+      "sys_user_role.name": "public",
+    },
+  ];
+  const result = await run(makeHttp({ ops, acls, roles }));
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /2 resource\(s\) enforce ACL authorization/);
+  assert.deepEqual(
+    result.findings.map((f) => f.location.sysId),
+    ["op1", "op2"],
+  );
+});
+
+test("a resource falls back to its API's ACLs, and a gating script backs it (ACL-9)", async () => {
+  const ops = [
+    // No own ACL list: the API's default list (acl1, role-gated) applies.
+    securedOp({ enforce_acl: "", web_service_definition: "def1" }),
+    // A script-gated ACL with no role link backs this one.
+    securedOp({ sys_id: "op2", name: "byScript", enforce_acl: "acl4" }),
+    // An ungated ACL: the only resource reported.
+    securedOp({ sys_id: "op3", name: "openList", enforce_acl: "acl5" }),
+  ];
+  const defs = [
+    { sys_id: "def1", name: "records", active: "true", enforce_acl: "acl1" },
+  ];
+  const acls = [
+    ENDPOINT_ACL,
+    {
+      ...ENDPOINT_ACL,
+      sys_id: "acl4",
+      script: 'answer = gs.hasRole("x_acme_app.user");',
+    },
+    { ...ENDPOINT_ACL, sys_id: "acl5", script: "answer = true;" },
+  ];
+  const result = await run(makeHttp({ ops, defs, acls }));
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /1 resource\(s\) enforce ACL authorization/);
+  assert.match(result.message, /openList \[GET\]/);
+  assert.doesNotMatch(result.message, /getRecords|byScript/);
+});
+
+test("skips the resources of an explicitly inactive API (ACL-9)", async () => {
+  const ops = [
+    securedOp(),
+    securedOp({
+      sys_id: "op2",
+      name: "retired",
+      requires_authentication: "false",
+      web_service_definition: "def2",
+    }),
+  ];
+  const defs = [{ sys_id: "def2", name: "old", active: "false" }];
+  const result = await run(makeHttp({ ops, defs, acls: [ENDPOINT_ACL] }));
+  assert.equal(result.status, "pass");
+  assert.match(result.message, /All 1 active scripted REST/);
+  assert.match(result.message, /1 resource\(s\) of an inactive API skipped/);
+});
+
+test("fails on a trimmed API read rather than trusting the visible ones (ACL-9)", async () => {
+  const ops = [securedOp({ web_service_definition: "def1" })];
+  const defs = [{ sys_id: "def1", name: "records", active: "true" }];
+  const result = await run(
+    makeHttp({
+      ops,
+      defs,
+      acls: [ENDPOINT_ACL],
+      totalCounts: { sys_ws_definition: 3 },
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /sys_ws_definition/);
+  assert.match(result.message, /security-trimmed/i);
+});
+
+test("fails on a trimmed ACL-role read rather than calling the ACL ungated (ACL-9)", async () => {
+  const result = await run(
+    makeHttp({
+      ops: [securedOp()],
+      acls: [ENDPOINT_ACL],
+      totalCounts: { sys_security_acl_role: 4 },
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /security-trimmed/i);
 });
 
 test("passes when every resource is authenticated, ACL-enforcing, and backed", async () => {
@@ -259,12 +405,12 @@ test("emits one finding per anonymous resource (F-R-3)", async () => {
   assert.equal(result.findings[0].location.sysId, "op2");
 });
 
-test("a missing REST_Endpoint ACL is a scope-level warn finding (F-R-3)", async () => {
+test("an unbacked resource is a per-resource warn finding (F-R-3, ACL-9)", async () => {
   const acls = [{ ...ENDPOINT_ACL, type: "record" }];
   const result = await run(makeHttp({ ops: [securedOp()], acls }));
   assert.equal(result.status, "warn");
   assert.equal(result.findings.length, 1);
-  assert.equal(result.findings[0].kind, "no-rest-endpoint-acl");
+  assertRowFindings(result, "sys_ws_operation", ["no-gated-endpoint-acl"]);
   assert.equal(result.findings[0].status, "warn");
-  assert.match(result.findings[0].location.logicalId, /^scope:/);
+  assert.equal(result.findings[0].location.sysId, "op1");
 });
