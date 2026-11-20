@@ -142,9 +142,11 @@ export const uiPageAcl: Check = {
         "ui_page",
         "read",
         candidates,
+        resolvedScope,
       );
 
       const missing: string[] = [];
+      const foreign: string[] = [];
       const inactive: string[] = [];
       const findings: Finding[] = unverifiable.map((p) =>
         rowFinding(NAME, "sys_ui_page", p.row, "unverifiable"),
@@ -157,6 +159,15 @@ export const uiPageAcl: Check = {
           page.label.toLowerCase() === key
             ? page.label
             : `${page.label} (${page.aclName})`;
+        // An ACL that only lives in another scope does not ship with the app:
+        // on the target instance the page is unprotected (ACL-2).
+        if (acls.foreignNames.has(key)) {
+          foreign.push(label);
+          findings.push(
+            rowFinding(NAME, "sys_ui_page", page.row, "acl-foreign:read"),
+          );
+          continue;
+        }
         const off = acls.inactiveNames.has(key);
         if (off) inactive.push(label);
         else missing.push(label);
@@ -174,6 +185,7 @@ export const uiPageAcl: Check = {
       // actionable, and the message still flags the incomplete view.
       if (
         missing.length > 0 ||
+        foreign.length > 0 ||
         inactive.length > 0 ||
         unverifiable.length > 0
       ) {
@@ -181,6 +193,11 @@ export const uiPageAcl: Check = {
         if (missing.length > 0) {
           parts.push(
             `${missing.length} UI Page(s) have no read ACL — any logged-in user who knows the URL can open them: ${missing.join(", ")}`,
+          );
+        }
+        if (foreign.length > 0) {
+          parts.push(
+            `${foreign.length} have a read ACL that exists but does not ship (it lives in another scope, not "${scope}"): ${foreign.join(", ")}`,
           );
         }
         if (inactive.length > 0) {

@@ -12,7 +12,10 @@ const INSTANCE = "https://dev12345.service-now.com";
 /** Assemble a fake client from UI Page / ACL fixtures plus options. */
 function makeHttp({ pages = [], acls = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sys_ui_page: inScope(pages, SCOPE), sys_security_acl: acls },
+    tables: {
+      sys_ui_page: inScope(pages, SCOPE),
+      sys_security_acl: inScope(acls, SCOPE),
+    },
     totalCounts,
     fail,
   });
@@ -300,4 +303,20 @@ test("emits one finding per page without a read ACL (F-R-3)", async () => {
     "admin",
     "report",
   ]);
+});
+
+test("a read ACL for the endpoint that lives in another scope does not ship (ACL-2)", async () => {
+  const foreign = {
+    ...acl(`${SCOPE}_dash`),
+    "sys_scope.scope": "global",
+  };
+  const result = await run(
+    makeHttp({ pages: [page("dash")], acls: [foreign] }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /exists but does not ship/);
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    ["acl-foreign:read"],
+  );
 });

@@ -131,14 +131,18 @@ export const clientCallableAcl: Check = {
         "client_callable_script_include",
         "execute",
         allCandidates,
+        resolvedScope,
       );
 
       const covered = (si: ClientCallableSi): boolean =>
         si.candidates.some((n) => acls.names.has(n.toLowerCase()));
+      const foreignOnly = (si: ClientCallableSi): boolean =>
+        si.candidates.some((n) => acls.foreignNames.has(n.toLowerCase()));
       const inactiveOnly = (si: ClientCallableSi): boolean =>
         si.candidates.some((n) => acls.inactiveNames.has(n.toLowerCase()));
 
       const missing: string[] = [];
+      const foreign: string[] = [];
       const inactive: string[] = [];
       const finding = (si: ClientCallableSi, kind: string): Finding =>
         rowFinding(NAME, "sys_script_include", si.row, kind, () => si.label);
@@ -147,6 +151,13 @@ export const clientCallableAcl: Check = {
       );
       for (const si of sis) {
         if (si.candidates.length === 0 || covered(si)) continue;
+        // An ACL that only lives in another scope does not ship with the app:
+        // on the target instance the include is ungated (ACL-2).
+        if (foreignOnly(si)) {
+          foreign.push(si.label);
+          findings.push(finding(si, "acl-foreign:execute"));
+          continue;
+        }
         const off = inactiveOnly(si);
         if (off) inactive.push(si.label);
         else missing.push(si.label);
@@ -159,6 +170,7 @@ export const clientCallableAcl: Check = {
       // actionable, and the message still flags the incomplete view.
       if (
         missing.length > 0 ||
+        foreign.length > 0 ||
         inactive.length > 0 ||
         unverifiable.length > 0
       ) {
@@ -166,6 +178,11 @@ export const clientCallableAcl: Check = {
         if (missing.length > 0) {
           parts.push(
             `${missing.length} client-callable Script Include(s) have no execute ACL — any logged-in user can invoke them via GlideAjax: ${missing.join(", ")}`,
+          );
+        }
+        if (foreign.length > 0) {
+          parts.push(
+            `${foreign.length} have an execute ACL that exists but does not ship (it lives in another scope, not "${scope}"): ${foreign.join(", ")}`,
           );
         }
         if (inactive.length > 0) {

@@ -16,7 +16,7 @@ function makeHttp({ sis = [], acls = [], fail, totalCounts } = {}) {
         active: "true",
         client_callable: "true",
       }),
-      sys_security_acl: acls,
+      sys_security_acl: inScope(acls, SCOPE),
     },
     totalCounts,
     fail,
@@ -250,4 +250,35 @@ test("emits one finding per unguarded client-callable SI (F-R-3)", async () => {
   const result = await run(makeHttp({ sis: [COVERED_SI], acls: [] }));
   assert.equal(result.status, "fail");
   assertRowFindings(result, "sys_script_include", ["acl-missing:execute"]);
+});
+
+test("a same-named execute ACL in another scope does not ship the gate (ACL-2)", async () => {
+  // Repro 4: the scoped SI x_acme_app.Ajax has no ACL; a global ACL named
+  // "Ajax" (for global.Ajax) exists and used to clear it.
+  const si = { sys_id: "s1", name: "Ajax", api_name: "x_acme_app.Ajax" };
+  const foreign = {
+    sys_id: "g1",
+    name: "Ajax",
+    type: "client_callable_script_include",
+    operation: "execute",
+    active: "true",
+    "sys_scope.scope": "global",
+  };
+  const result = await run(makeHttp({ sis: [si], acls: [foreign] }));
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /exists but does not ship/);
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    ["acl-foreign:execute"],
+  );
+});
+
+test("reads the execute operation by name when its reference is a GUID (ACL-6)", async () => {
+  const acl = {
+    ...COVERING_ACL,
+    operation: "0123456789abcdef0123456789abcdef",
+    "operation.name": "execute",
+  };
+  const result = await run(makeHttp({ sis: [COVERED_SI], acls: [acl] }));
+  assert.equal(result.status, "pass", result.message);
 });

@@ -664,6 +664,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ACL checks judge what ships and what actually gates** (RR-57, ACL-2,
+  ACL-3, ACL-6, ACL-7, ACL-8, ACL-14) — four ACL checks could pass on an ACL
+  that does not ship with the app or does not gate anything.
+  `table-crud-acl`, `client-callable-acl` and `ui-page-acl` now read each
+  ACL's scope: a matching ACL that lives in another scope (customer-made on
+  the dev instance, or a same-named `global` ACL such as `Ajax` for a scoped
+  `x_acme_app.Ajax`) fails as "exists but does not ship", and an ACL whose
+  scope cannot be read is not counted. `acl-role-sanity` treats the `public`
+  role as no role, strips comments from ACL scripts and treats a
+  constant-true script (`answer = true;`, `// TODO`) or a `^EQ`-only
+  condition as no gate, skips inactive ACLs after flagging them (an inactive
+  role-less write was a public-write fail), reads role links with the
+  security-trimmed signal (a trimmed link read is "Cannot read the ACL role
+  links", not a wide-open finding) and warns on a mutating ACL gated only by
+  `snc_internal`. ACL reads request `operation.name`, so a custom operation
+  whose reference is a GUID is still matched by name; a wide-open ACL for a
+  non-CRUD mutating operation (`save_as_template`, `list_edit`, …) or an
+  unknown operation fails. `table-crud-acl` walks each extended table's
+  `super_class` chain: a gap warns only when an ancestor's ACL covers the
+  operation, fails when no ancestor does, and fails when the chain cannot be
+  read (missing parent, cycle, over 20 levels). A wide-open `execute` ACL
+  stays a warning; the final form of the operation match awaits live
+  query 4 (OD-9).
+
 - **The instance registry is validated on load** (RR-56, ST-20, ST-22,
   ST-23, CFG-10, CFG-11, CFG-12) — a registry that loaded but meant the wrong
   thing is now a usage error (exit `2`). Unknown keys are refused, with a

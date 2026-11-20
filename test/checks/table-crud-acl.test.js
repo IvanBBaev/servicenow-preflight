@@ -11,9 +11,19 @@ const INSTANCE = "https://dev12345.service-now.com";
 const CRUD = ["create", "read", "write", "delete"];
 
 /** Assemble a fake client from table / ACL fixtures plus options. */
-function makeHttp({ tables = [], acls = [], fail, totalCounts } = {}) {
+function makeHttp({
+  tables = [],
+  parents = [],
+  acls = [],
+  fail,
+  totalCounts,
+} = {}) {
   return createFakeSnClient({
-    tables: { sys_db_object: inScope(tables, SCOPE), sys_security_acl: acls },
+    tables: {
+      // `parents` are platform/other-scope tables the in-scope ones extend.
+      sys_db_object: [...inScope(tables, SCOPE), ...inScope(parents, "global")],
+      sys_security_acl: inScope(acls, SCOPE),
+    },
     totalCounts,
     fail,
   });
@@ -68,14 +78,27 @@ function extendedTable(name, parent) {
   };
 }
 
-/** Table-level `record` ACLs for `table`, one per operation. */
-function aclsFor(table, ops = CRUD, { active = true } = {}) {
+/** A platform (global-scope) table, optionally extending `parent`. */
+function parentTable(name, parent = "") {
+  return {
+    sys_id: `t_${name}`,
+    name,
+    super_class: parent ? `t_${parent}` : "",
+  };
+}
+
+/**
+ * Table-level `record` ACLs for `table`, one per operation — in the app scope
+ * unless `scope` names another one.
+ */
+function aclsFor(table, ops = CRUD, { active = true, scope } = {}) {
   return ops.map((op) => ({
     sys_id: `acl_${table}_${op}`,
     name: table,
     type: "record",
     operation: op,
     active: active ? "true" : "false",
+    ...(scope ? { "sys_scope.scope": scope } : {}),
   }));
 }
 
@@ -203,7 +226,12 @@ test("warns (not fails) when only extended tables have gaps, naming the parent",
   const result = await run(
     makeHttp({
       tables: [baseTable("x_acme_asset"), extendedTable("x_acme_task", "task")],
-      acls: [...aclsFor("x_acme_asset"), ...aclsFor("x_acme_task", ["read"])],
+      parents: [parentTable("task")],
+      acls: [
+        ...aclsFor("x_acme_asset"),
+        ...aclsFor("x_acme_task", ["read"]),
+        ...aclsFor("task", CRUD, { scope: "global" }),
+      ],
     }),
   );
   assert.equal(result.status, "warn", result.message);
@@ -214,23 +242,171 @@ test("warns (not fails) when only extended tables have gaps, naming the parent",
   assert.match(result.message, /certification expects app-specific ACLs/);
 });
 
-test("an extended table whose parent name is unreadable still warns", async () => {
+test("an extended table whose parent name was not dot-walked is resolved through the chain", async () => {
   const table = { ...extendedTable("x_acme_task", "task") };
   delete table["super_class.name"];
-  const result = await run(makeHttp({ tables: [table] }));
+  const result = await run(
+    makeHttp({
+      tables: [table],
+      parents: [parentTable("task")],
+      acls: aclsFor("task", CRUD, { scope: "global" }),
+    }),
+  );
   assert.equal(result.status, "warn", result.message);
-  assert.match(result.message, /inherits from its parent table/);
+  assert.match(result.message, /inherits from "task"/);
 });
 
 test("a base-table gap fails and still reports extended-table gaps", async () => {
   const result = await run(
     makeHttp({
       tables: [baseTable("x_acme_asset"), extendedTable("x_acme_task", "task")],
+      parents: [parentTable("task")],
+      acls: aclsFor("task", CRUD, { scope: "global" }),
     }),
   );
   assert.equal(result.status, "fail");
   assert.match(result.message, /x_acme_asset \(no create/);
   assert.match(result.message, /1 extended table\(s\) also rely on inherited/);
+});
+
+test("ACLs for the table that live only in another scope do not ship (ACL-2)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: [baseTable("x_acme_asset")],
+      acls: aclsFor("x_acme_asset", CRUD, { scope: "global" }),
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(
+    result.message,
+    /x_acme_asset \(create\/read\/write\/delete ACL exists but does not ship \(another scope\)\)/,
+  );
+});
+
+test("an ACL whose scope cannot be read is not counted as shipped (ACL-2)", async () => {
+  const acls = aclsFor("x_acme_asset").map((acl) => ({
+    ...acl,
+    "sys_scope.scope": "",
+  }));
+  const result = await run(
+    makeHttp({ tables: [baseTable("x_acme_asset")], acls }),
+  );
+  assert.equal(result.status, "fail", result.message);
+});
+
+test("an ACL in scope by sys_scope sys_id ships even without the dot-walked name", async () => {
+  const SID = "a".repeat(32);
+  const http = createFakeSnClient({
+    tables: {
+      sys_scope: [{ sys_id: SID, scope: SCOPE }],
+      sys_db_object: [{ ...baseTable("x_acme_asset"), sys_scope: SID }],
+      sys_security_acl: aclsFor("x_acme_asset").map((acl) => ({
+        ...acl,
+        sys_scope: SID,
+      })),
+    },
+  });
+  const result = await run(http);
+  assert.equal(result.status, "pass", result.message);
+});
+
+test("reads the operation by name when the reference value is a GUID (ACL-6)", async () => {
+  const acls = aclsFor("x_acme_asset").map((acl, i) => ({
+    ...acl,
+    operation: String(i).repeat(32),
+    "operation.name": acl.operation,
+  }));
+  const { http, calls } = tracked(
+    makeHttp({ tables: [baseTable("x_acme_asset")], acls }),
+  );
+  const result = await run(http);
+  assert.equal(result.status, "pass", result.message);
+  const aclRead = calls.find((c) => c.table === "sys_security_acl");
+  assert.match(aclRead.params.sysparm_fields, /operation\.name/);
+});
+
+test("fails an extended table whose parent chain cannot be read (ACL-14)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: [extendedTable("x_acme_child", "x_other_base")],
+      totalCounts: { sys_security_acl: 0 },
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /parent chain could not be read/);
+});
+
+test("fails an extended table when no ancestor gates the operation (ACL-14)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: [extendedTable("x_acme_task", "task")],
+      parents: [parentTable("task")],
+      acls: aclsFor("task", ["read"], { scope: "global" }),
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(
+    result.message,
+    /no ancestor \("task"\) gates create\/write\/delete either/,
+  );
+  const byKind = Object.fromEntries(
+    result.findings.map((f) => [f.kind, f.status ?? result.status]),
+  );
+  assert.deepEqual(byKind, {
+    "acl-missing:create": "fail",
+    "acl-missing:read": "warn",
+    "acl-missing:write": "fail",
+    "acl-missing:delete": "fail",
+  });
+});
+
+test("walks past a parent without ACLs to the ancestor that has them (ACL-14)", async () => {
+  const { http, calls } = tracked(
+    makeHttp({
+      tables: [extendedTable("x_acme_server", "cmdb_ci_server")],
+      parents: [
+        parentTable("cmdb_ci_server", "cmdb_ci"),
+        parentTable("cmdb_ci", "cmdb"),
+        parentTable("cmdb"),
+      ],
+      acls: aclsFor("cmdb_ci", CRUD, { scope: "global" }),
+    }),
+  );
+  const result = await run(http);
+  assert.equal(result.status, "warn", result.message);
+  assert.match(result.message, /inherits from "cmdb_ci"/);
+  const parentReads = calls.filter(
+    (c) =>
+      c.table === "sys_db_object" &&
+      /^sys_idIN/.test(c.params.sysparm_query ?? ""),
+  );
+  assert.equal(parentReads.length, 3, "one batched read per level");
+});
+
+test("a cyclic parent chain is unreadable, not inherited (ACL-14)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: [extendedTable("x_acme_task", "loop")],
+      parents: [parentTable("loop", "x_acme_task")],
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /parent chain could not be read/);
+});
+
+test("an in-scope ancestor's foreign-only ACL does not cover a child (ACL-2, ACL-14)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: [
+        baseTable("x_acme_base"),
+        extendedTable("x_acme_child", "x_acme_base"),
+      ],
+      acls: aclsFor("x_acme_base", CRUD, { scope: "global" }),
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /x_acme_child \(no create/);
+  assert.match(result.message, /no ancestor \("x_acme_base"\)/);
 });
 
 test("passes when the instance reports the scope ships no tables", async () => {
@@ -284,7 +460,9 @@ test("a trimmed read with only extended-table gaps still fails, listing them", a
   const result = await run(
     makeHttp({
       tables: [extendedTable("x_acme_task", "task")],
-      totalCounts: { sys_security_acl: 2 },
+      parents: [parentTable("task")],
+      acls: aclsFor("task", CRUD, { scope: "global" }),
+      totalCounts: { sys_security_acl: 20 },
     }),
   );
   assert.equal(result.status, "fail");

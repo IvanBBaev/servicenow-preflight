@@ -87,8 +87,8 @@ window.PREFLIGHT_CHECKS = [
     "name": "acl-role-sanity",
     "tag": "scope",
     "desc": "No wide-open mutating ACLs, and no ACLs that reference non-existent roles.",
-    "fail": "A mutating ACL is public-write, or references a role that does not exist.",
-    "warn": "No scope, a public-read ACL, inactive shipped ACLs, or a trimmed read.",
+    "fail": "A mutating or unknown-operation ACL is public, a role does not exist, or role links are unreadable.",
+    "warn": "No scope, no visible ACLs, a public-read ACL, an snc_internal-only write gate, or inactive ACLs.",
     "pass": "Every ACL is gated and every referenced role resolves."
   },
   {
@@ -141,8 +141,8 @@ window.PREFLIGHT_CHECKS = [
     "name": "table-crud-acl",
     "tag": "scope",
     "desc": "Every custom table has active table-level create, read, write and delete ACLs.",
-    "fail": "A base table lacks an active CRUD ACL, or a read was security-trimmed.",
-    "warn": "Only extended tables have gaps, no scope set, or an ambiguous zero-row read.",
+    "fail": "A table lacks a shipped CRUD ACL no ancestor covers, or a read was security-trimmed.",
+    "warn": "Only extended tables have gaps an ancestor covers, no scope set, or an ambiguous zero-row read.",
     "pass": "Every table in scope has all four active ACLs, or the scope ships none."
   },
   {

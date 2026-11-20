@@ -9,6 +9,7 @@ import {
 import { findingId } from "../findings.js";
 import { chunk, inClause, resolveScope } from "../http/query.js";
 import {
+  aclOperation,
   isMissingTable,
   isTruthy,
   missingTableResult,
@@ -24,8 +25,68 @@ function result(status: CheckStatus, message: string): CheckResult {
   return { name: NAME, status, message };
 }
 
-/** An operation ACL — write/create/delete — with no gate is the dangerous case. */
-const MUTATING_OPERATIONS = new Set(["write", "create", "delete"]);
+/**
+ * Operations that only expose data. A wide-open ACL for one of them is public
+ * read — degraded, not fatal. `execute` stays advisory as before: whether a
+ * wide-open execute ACL is fatal is an open owner call.
+ */
+const READ_OPERATIONS = new Set([
+  "read",
+  "report_on",
+  "report_view",
+  "query_match",
+  "query_range",
+  "execute",
+]);
+
+/**
+ * Operations that change data or configuration. A wide-open ACL for one of
+ * them is public write — fatal. Any operation in NEITHER set (a custom
+ * operation, a GUID-valued reference whose name was not read, an empty value)
+ * is unknown and judged as mutating: it cannot be shown to be harmless (ACL-6).
+ */
+const MUTATING_OPERATIONS = new Set([
+  "write",
+  "create",
+  "delete",
+  "list_edit",
+  "save_as_template",
+  "add_to_list",
+  "personalize_choices",
+  "edit_task_relations",
+  "edit_ci_relations",
+]);
+
+/** A role that grants everyone: an ACL gated only by it is not gated (ACL-3). */
+const PUBLIC_ROLE = "public";
+
+/** The role every internal user holds: a gate, but a weak one for writes. */
+const INTERNAL_ROLE = "snc_internal";
+
+/**
+ * Whether an ACL script actually decides anything. Comments and whitespace are
+ * stripped first, so a script that is only `// TODO` is no script; a script
+ * that only ever answers true (`answer = true;`, `true`, `answer = !0;`, …)
+ * gates nothing either (ACL-3).
+ */
+function scriptGates(script: string): boolean {
+  const code = script
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/\s+/g, "")
+    .replace(/;+$/, "");
+  if (code === "") return false;
+  return !/^(answer=)?\(*(true|!0|!false|!!1|1==1|1===1)\)*$/.test(code);
+}
+
+/**
+ * Whether an ACL condition actually filters anything: an encoded query that
+ * is empty once the `^EQ` terminator and whitespace are removed matches every
+ * record, so it gates nothing (ACL-3).
+ */
+function conditionGates(condition: string): boolean {
+  return condition.replace(/\^EQ$/, "").replace(/\s+/g, "") !== "";
+}
 
 /**
  * Query every `sys_security_acl` row for the given scope. `scopeClause` is the
@@ -50,7 +111,7 @@ async function fetchAcls(
   return http.table("sys_security_acl").queryWithMeta({
     sysparm_query: scopeClause,
     sysparm_fields:
-      "sys_id,name,operation,type,active,admin_overrides,script,condition",
+      "sys_id,name,operation,operation.name,type,active,admin_overrides,script,condition",
   });
 }
 
@@ -60,44 +121,62 @@ async function fetchAcls(
  * are packed into `sys_security_aclIN…` clauses of at most `IN_CHUNK_SIZE`, so N
  * ACLs cost `⌈N / IN_CHUNK_SIZE⌉` queries instead of N. Every id is charset-
  * validated by {@link inClause}, so the batched query cannot be injected into.
+ *
+ * Read with `queryWithMeta`: `trimmed` is true when any batch was
+ * security-trimmed. An unreadable m2m would otherwise make every role-gated ACL
+ * look role-less — and fail as "public access", the wrong diagnosis (ACL-8).
  */
 async function fetchAclRolesByAcl(
   http: SnClient,
   aclSysIds: readonly string[],
-): Promise<Map<string, Record<string, unknown>[]>> {
+): Promise<{
+  byAcl: Map<string, Record<string, unknown>[]>;
+  trimmed: boolean;
+}> {
   const byAcl = new Map<string, Record<string, unknown>[]>();
   for (const id of aclSysIds) byAcl.set(id, []);
+  let trimmed = false;
   for (const ids of chunk(aclSysIds)) {
     // No `sysparm_limit`: the client auto-paginates so an ACL gated by more
     // roles than a single page is never seen as ungated through truncation.
-    const rows = await http.table("sys_security_acl_role").query({
-      sysparm_query: inClause("sys_security_acl", ids),
-      sysparm_fields: "sys_security_acl,sys_user_role,sys_user_role.name",
-    });
+    const { rows, securityTrimmed } = await http
+      .table("sys_security_acl_role")
+      .queryWithMeta({
+        sysparm_query: inClause("sys_security_acl", ids),
+        sysparm_fields: "sys_security_acl,sys_user_role,sys_user_role.name",
+      });
+    trimmed = trimmed || securityTrimmed;
     for (const row of rows) {
       const list = byAcl.get(str(row, "sys_security_acl"));
       if (list) list.push(row);
     }
   }
-  return byAcl;
+  return { byAcl, trimmed };
+}
+
+/** The roles that exist on the instance: lowercased name by sys_id, and names. */
+interface KnownRoles {
+  byId: Map<string, string>;
+  names: Set<string>;
 }
 
 /** All roles that exist on the instance, indexed by both sys_id and name. */
-async function fetchExistingRoles(http: SnClient): Promise<Set<string>> {
+async function fetchExistingRoles(http: SnClient): Promise<KnownRoles> {
   // No `sysparm_limit`: the client auto-paginates so instances with more roles
   // than a single page are not truncated (which would flag valid roles as
   // "missing"). See src/http/client.ts query().
   const rows = await http.table("sys_user_role").query({
     sysparm_fields: "sys_id,name",
   });
-  const known = new Set<string>();
+  const byId = new Map<string, string>();
+  const names = new Set<string>();
   for (const row of rows) {
     const id = str(row, "sys_id");
-    const name = str(row, "name");
-    if (id) known.add(id);
-    if (name) known.add(name.toLowerCase());
+    const name = str(row, "name").toLowerCase();
+    if (id) byId.set(id, name);
+    if (name) names.add(name);
   }
-  return known;
+  return { byId, names };
 }
 
 /** Extract the role reference (id or dotted name) an ACL→role link points at. */
@@ -113,12 +192,17 @@ function roleRef(link: Record<string, unknown>): {
 
 /**
  * Sanity-check the ACLs a scoped app ships. Fails on a mutating (write / create
- * / delete) ACL that is wide open — no role, no condition, and no script — since
- * that grants public write. Fails when an ACL references a role that does not
- * exist on the instance (a broken grant). Warns on suspicious-but-not-fatal
- * patterns (a wide-open read ACL, or inactive ACLs). Passes when every ACL is
- * gated and every referenced role resolves. Warns (rather than fails) when the
- * scope is unset, since there is nothing scoped to inspect.
+ * / delete / list_edit / …) or unknown-operation ACL that is wide open — no
+ * gating role, no real condition, and no real script — since that grants public
+ * write. A role of `public`, an empty `^EQ` condition, and a script that is
+ * only comments or only answers true do not gate (ACL-3). Fails when an ACL
+ * references a role that does not exist on the instance (a broken grant), or
+ * when the ACL→role links cannot be read (ACL-8). Warns on
+ * suspicious-but-not-fatal patterns (a wide-open read ACL, a mutating ACL gated
+ * only by `snc_internal`, or inactive ACLs — which grant nothing and are not
+ * judged further, ACL-7). Passes when every active ACL is gated and every
+ * referenced role resolves. Warns (rather than fails) when the scope is unset,
+ * since there is nothing scoped to inspect.
  */
 export const aclRoleSanity: Check = {
   name: NAME,
@@ -133,8 +217,8 @@ export const aclRoleSanity: Check = {
       "Gate every create, write and delete ACL with a role, condition or script instead of leaving it public, and point each ACL role entry at a role that exists (create the role in the app or remove the stale reference).",
     verdicts: {
       pass: "Every ACL is gated and every referenced role resolves.",
-      warn: "No scope, a public-read ACL, inactive shipped ACLs, or a trimmed read.",
-      fail: "A mutating ACL is public-write, or references a role that does not exist.",
+      warn: "No scope, no visible ACLs, a public-read ACL, an snc_internal-only write gate, or inactive ACLs.",
+      fail: "A mutating or unknown-operation ACL is public, a role does not exist, or role links are unreadable.",
     },
   },
   async run(ctx): Promise<CheckResult> {
@@ -178,10 +262,12 @@ export const aclRoleSanity: Check = {
       // One batched read of every ACL's role links (SN-6), instead of an N+1
       // per-ACL query. Grouped by ACL sys_id so the loop is a map lookup.
       const aclSysIds = acls.map((acl) => str(acl, "sys_id")).filter(Boolean);
-      const linksByAcl = await fetchAclRolesByAcl(ctx.http, aclSysIds);
+      const { byAcl: linksByAcl, trimmed: linksTrimmed } =
+        await fetchAclRolesByAcl(ctx.http, aclSysIds);
 
       const openMutating: string[] = [];
       const openRead: string[] = [];
+      const internalOnly: string[] = [];
       const missingRoles: string[] = [];
       const inactive: string[] = [];
       const findings: Finding[] = [];
@@ -199,23 +285,32 @@ export const aclRoleSanity: Check = {
 
       for (const acl of acls) {
         const aclName = str(acl, "name") || str(acl, "sys_id") || "(unnamed)";
-        const operation = str(acl, "operation").toLowerCase();
-        const hasScript = str(acl, "script") !== "";
-        const hasCondition = str(acl, "condition") !== "";
+        const operation = aclOperation(acl);
+        const hasScript = scriptGates(str(acl, "script"));
+        const hasCondition = conditionGates(str(acl, "condition"));
 
+        // An inactive ACL grants nothing: flag it, but judging its gate would
+        // fail a switched-off ACL as "public access" (ACL-7).
         if (!isTruthy(acl, "active")) {
           inactive.push(`${aclName} (${operation || "?"})`);
           flag(acl, "inactive", true);
+          continue;
         }
 
         const roleLinks = linksByAcl.get(str(acl, "sys_id")) ?? [];
-        const hasRole = roleLinks.length > 0;
+        // The roles that actually gate: `public` grants everyone, so an ACL
+        // gated only by it is open. A dangling role still counts — it already
+        // fails below as a broken grant (ACL-3).
+        const gatingRoles: string[] = [];
 
         // A referenced role that does not exist is a broken/dangling grant.
         for (const link of roleLinks) {
           const { id, name } = roleRef(link);
-          const knownById = id !== "" && knownRoles.has(id);
-          const knownByName = name !== "" && knownRoles.has(name.toLowerCase());
+          const resolved = name.toLowerCase() || knownRoles.byId.get(id) || "";
+          if (resolved !== PUBLIC_ROLE) gatingRoles.push(resolved);
+          const knownById = id !== "" && knownRoles.byId.has(id);
+          const knownByName =
+            name !== "" && knownRoles.names.has(name.toLowerCase());
           if (!knownById && !knownByName) {
             const label = name || id || "(unknown)";
             missingRoles.push(`${aclName} → ${label}`);
@@ -230,24 +325,48 @@ export const aclRoleSanity: Check = {
           }
         }
 
+        // Role links that could not be read prove nothing either way: the
+        // ACL may well be role-gated, so it is not judged wide open here — the
+        // unreadable m2m fails the run on its own (ACL-8).
+        if (linksTrimmed && roleLinks.length === 0) continue;
+
+        const hasRole = gatingRoles.length > 0;
+        const readOnly = READ_OPERATIONS.has(operation);
         // Wide open: no role AND no condition AND no script gating access.
         const wideOpen = !hasRole && !hasCondition && !hasScript;
         if (wideOpen) {
-          if (MUTATING_OPERATIONS.has(operation)) {
-            openMutating.push(`${aclName} (${operation})`);
-            flag(acl, `public-access:${operation}`, false);
+          if (readOnly) {
+            openRead.push(`${aclName} (${operation})`);
+            flag(acl, `public-access:${operation}`, true);
           } else {
-            openRead.push(`${aclName} (${operation || "read"})`);
-            flag(acl, `public-access:${operation || "read"}`, true);
+            // A mutating operation, or one this check does not know (custom,
+            // GUID-valued, empty): it cannot be shown harmless (ACL-6).
+            const known = MUTATING_OPERATIONS.has(operation);
+            const label = known
+              ? operation
+              : `unknown operation "${operation || "(empty)"}"`;
+            openMutating.push(`${aclName} (${label})`);
+            flag(acl, `public-access:${known ? operation : "unknown"}`, false);
           }
+        } else if (
+          !readOnly &&
+          !hasCondition &&
+          !hasScript &&
+          gatingRoles.every((role) => role === INTERNAL_ROLE)
+        ) {
+          // Every internal user holds snc_internal: a write gated only by it
+          // is open to the whole user base — advisory (ACL-3).
+          internalOnly.push(`${aclName} (${operation || "(empty)"})`);
+          flag(acl, `internal-only:${operation || "unknown"}`, true);
         }
       }
 
       const done = (status: CheckStatus, message: string): CheckResult =>
         withFindings(result(status, message), findings);
 
-      // Hard failures: open write access or dangling role references.
-      if (openMutating.length > 0 || missingRoles.length > 0) {
+      // Hard failures: open write access, dangling role references, or role
+      // links this account cannot read.
+      if (openMutating.length > 0 || missingRoles.length > 0 || linksTrimmed) {
         const parts: string[] = [];
         if (openMutating.length > 0) {
           parts.push(
@@ -257,6 +376,11 @@ export const aclRoleSanity: Check = {
         if (missingRoles.length > 0) {
           parts.push(
             `${missingRoles.length} ACL(s) reference a role that does not exist on the instance: ${missingRoles.join(", ")}`,
+          );
+        }
+        if (linksTrimmed) {
+          parts.push(
+            "Cannot read the ACL role links: sys_security_acl_role is security-trimmed, so which ACLs are role-gated cannot be verified (ACLs with no visible role link were not judged). Grant the CI account read access to sys_security_acl_role",
           );
         }
         return done("fail", parts.join("; ") + ".");
@@ -275,6 +399,11 @@ export const aclRoleSanity: Check = {
             `${openRead.length} ungated read ACL(s): ${openRead.join(", ")}`,
           );
         }
+        if (internalOnly.length > 0) {
+          seen.push(
+            `${internalOnly.length} mutating ACL(s) gated only by snc_internal: ${internalOnly.join(", ")}`,
+          );
+        }
         if (inactive.length > 0) {
           seen.push(
             `${inactive.length} inactive ACL(s): ${inactive.join(", ")}`,
@@ -289,12 +418,22 @@ export const aclRoleSanity: Check = {
         );
       }
 
-      // Advisory issues: open reads or inactive ACLs — degraded, not fatal.
-      if (openRead.length > 0 || inactive.length > 0) {
+      // Advisory issues: open reads, snc_internal-only writes, or inactive
+      // ACLs — degraded, not fatal.
+      if (
+        openRead.length > 0 ||
+        internalOnly.length > 0 ||
+        inactive.length > 0
+      ) {
         const parts: string[] = [];
         if (openRead.length > 0) {
           parts.push(
             `${openRead.length} read ACL(s) are ungated (public read): ${openRead.join(", ")}`,
+          );
+        }
+        if (internalOnly.length > 0) {
+          parts.push(
+            `${internalOnly.length} mutating ACL(s) are gated only by snc_internal (every internal user holds it): ${internalOnly.join(", ")}`,
           );
         }
         if (inactive.length > 0) {

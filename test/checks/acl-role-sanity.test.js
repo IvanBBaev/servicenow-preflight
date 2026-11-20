@@ -576,3 +576,147 @@ test("emits one missing-role finding per dangling role reference (F-R-3)", async
   assert.equal(missing[0].location.table, "sys_security_acl");
   assert.match(missing[0].message, /nonexistent_role/);
 });
+
+/** One ACL on `x_acme_task` with the given overrides (RR-57 repros). */
+function oneAcl(overrides) {
+  return {
+    sys_id: "a1",
+    name: "x_acme_task",
+    type: "record",
+    operation: "write",
+    active: "true",
+    script: "",
+    condition: "",
+    ...overrides,
+  };
+}
+
+const USER_ROLE = { sys_id: "r1", name: "x_acme_app.user" };
+
+test("an inactive role-less write ACL is advisory, not a public-write fail (ACL-7)", async () => {
+  const result = await run(
+    makeHttp({ acls: [oneAcl({ active: "false" })], roles: [USER_ROLE] }),
+  );
+  assert.equal(result.status, "warn", result.message);
+  assert.doesNotMatch(result.message, /wide open/);
+  assert.ok(
+    !(result.findings ?? []).some((f) => f.kind.startsWith("public-access")),
+  );
+});
+
+test("a write ACL whose only role is 'public' is wide open (ACL-3)", async () => {
+  const result = await run(
+    makeHttp({
+      acls: [oneAcl({})],
+      links: [{ sys_id: "l1", sys_security_acl: "a1", sys_user_role: "pub" }],
+      roles: [{ sys_id: "pub", name: "public" }],
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assertRowFindings(result, "sys_security_acl", ["public-access:write"]);
+});
+
+for (const script of [
+  "answer = true;",
+  "// TODO",
+  "/* gate later */",
+  "answer=(true)",
+  "true",
+]) {
+  test(`a role-less write ACL with a constant-true script ${JSON.stringify(script)} is wide open (ACL-3)`, async () => {
+    const result = await run(
+      makeHttp({ acls: [oneAcl({ script })], roles: [USER_ROLE] }),
+    );
+    assert.equal(result.status, "fail", result.message);
+    assertRowFindings(result, "sys_security_acl", ["public-access:write"]);
+  });
+}
+
+test("a role-less write ACL with a condition of only '^EQ' is wide open (ACL-3)", async () => {
+  const result = await run(
+    makeHttp({ acls: [oneAcl({ condition: "^EQ" })], roles: [USER_ROLE] }),
+  );
+  assert.equal(result.status, "fail", result.message);
+});
+
+test("a role-less write ACL with a real script still passes", async () => {
+  const result = await run(
+    makeHttp({
+      acls: [oneAcl({ script: "answer = gs.hasRole('x_acme_app.admin');" })],
+      roles: [USER_ROLE],
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
+});
+
+test("unreadable role links fail as unreadable, not as public access (ACL-8)", async () => {
+  const result = await run(
+    makeHttp({
+      acls: [oneAcl({})],
+      roles: [USER_ROLE],
+      totalCounts: { sys_security_acl_role: 1 },
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /Cannot read the ACL role links/);
+  assert.ok(
+    !(result.findings ?? []).some((f) => f.kind.startsWith("public-access")),
+  );
+});
+
+test("a wide-open save_as_template ACL fails like a write (ACL-6)", async () => {
+  const result = await run(
+    makeHttp({
+      acls: [oneAcl({ operation: "save_as_template" })],
+      roles: [USER_ROLE],
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assertRowFindings(result, "sys_security_acl", [
+    "public-access:save_as_template",
+  ]);
+});
+
+test("a wide-open ACL whose operation is an unresolved GUID fails as unknown (ACL-6)", async () => {
+  const result = await run(
+    makeHttp({
+      acls: [oneAcl({ operation: "0123456789abcdef0123456789abcdef" })],
+      roles: [USER_ROLE],
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /unknown operation/);
+  assertRowFindings(result, "sys_security_acl", ["public-access:unknown"]);
+});
+
+test("reads the operation by name when the reference value is a GUID (ACL-6)", async () => {
+  const { http, calls } = tracked(
+    makeHttp({
+      acls: [
+        oneAcl({
+          operation: "0123456789abcdef0123456789abcdef",
+          "operation.name": "write",
+        }),
+      ],
+      roles: [USER_ROLE],
+    }),
+  );
+  const result = await run(http);
+  assert.equal(result.status, "fail", result.message);
+  assertRowFindings(result, "sys_security_acl", ["public-access:write"]);
+  const aclRead = calls.find((c) => c.table === "sys_security_acl");
+  assert.match(aclRead.params.sysparm_fields, /operation\.name/);
+});
+
+test("a write ACL gated only by snc_internal warns (ACL-3)", async () => {
+  const result = await run(
+    makeHttp({
+      acls: [oneAcl({})],
+      links: [{ sys_id: "l1", sys_security_acl: "a1", sys_user_role: "int" }],
+      roles: [{ sys_id: "int", name: "snc_internal" }],
+    }),
+  );
+  assert.equal(result.status, "warn", result.message);
+  assert.match(result.message, /snc_internal/);
+  assertRowFindings(result, "sys_security_acl", ["internal-only:write"]);
+});

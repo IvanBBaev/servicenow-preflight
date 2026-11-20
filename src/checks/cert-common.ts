@@ -21,7 +21,7 @@ import {
   type SnClient,
   type TableQueryResult,
 } from "../http/client.js";
-import { and, chunk, eq, inClause } from "../http/query.js";
+import { and, chunk, eq, inClause, type ResolvedScope } from "../http/query.js";
 
 /** Read a string-ish field from an arbitrary record, trimmed; "" when absent. */
 export function str(row: Record<string, unknown>, field: string): string {
@@ -224,25 +224,74 @@ export function errorResult(
 }
 
 /**
+ * The operation an ACL row gates, lowercased. `operation` references
+ * `sys_security_operation`: out-of-box records carry readable sys_ids
+ * (`read`, `write`, …), but a custom or plugin operation's reference value can
+ * be a GUID, so the dot-walked `operation.name` is preferred whenever the read
+ * requested and returned it (ACL-6). Comparing the raw reference alone would
+ * make a GUID-valued write ACL look like no known operation. The final form of
+ * this mapping is pending a live read of `sys_security_operation` (audit
+ * 2026-11-12 §4 query 4); until then an unrecognised value is never treated as
+ * a harmless read.
+ */
+export function aclOperation(row: Record<string, unknown>): string {
+  return (str(row, "operation.name") || str(row, "operation")).toLowerCase();
+}
+
+/**
+ * The `sysparm_fields` an ACL read must carry for {@link aclInScope} to tell
+ * an ACL the app ships from one that only lives in another scope (ACL-2).
+ */
+export const ACL_SCOPE_FIELDS = "sys_scope,sys_scope.scope";
+
+/**
+ * Whether an ACL row belongs to the target scope — i.e. ships with the app.
+ * A row matches when its `sys_scope` reference equals the resolved scope
+ * sys_id (or the configured input), or its dot-walked `sys_scope.scope` equals
+ * the scope name (or the input). A row whose scope could not be read at all is
+ * NOT in scope: an ACL that cannot be shown to ship never clears a gate.
+ */
+export function aclInScope(
+  row: Record<string, unknown>,
+  scope: ResolvedScope,
+): boolean {
+  const id = str(row, "sys_scope");
+  const name = str(row, "sys_scope.scope").toLowerCase();
+  const ids = [scope.sysId, scope.input].filter((v): v is string => !!v);
+  const names = [scope.name, scope.input]
+    .filter((v): v is string => !!v)
+    .map((v) => v.toLowerCase());
+  return (
+    (id !== "" && ids.includes(id)) || (name !== "" && names.includes(name))
+  );
+}
+
+/**
  * The ACLs of one `type` gating one `operation` whose `name` is among
  * `candidateNames`, fetched in batches. `names` holds every matching ACTIVE
- * ACL's lowercased name; `inactiveNames` the ones that exist but are switched
- * off (an off gate is no gate); `trimmed` is true when any batch was
- * security-trimmed (`sys_security_acl` is admin-read out-of-box, so a
- * partially readable ACL table must never clear a gate). Names are matched
- * exactly (case-insensitive); every one is charset-validated by `inClause`.
+ * ACL's lowercased name that ships in `scope`; `foreignNames` the active ones
+ * that exist only in another scope (a global ACL made on the dev instance
+ * does not travel with the app, so it gates nothing on the target — ACL-2);
+ * `inactiveNames` the ones that exist but are switched off (an off gate is no
+ * gate); `trimmed` is true when any batch was security-trimmed
+ * (`sys_security_acl` is admin-read out-of-box, so a partially readable ACL
+ * table must never clear a gate). Names are matched exactly
+ * (case-insensitive); every one is charset-validated by `inClause`.
  */
 export async function fetchNamedAcls(
   http: SnClient,
   type: string,
   operation: string,
   candidateNames: readonly string[],
+  scope: ResolvedScope,
 ): Promise<{
   names: Set<string>;
+  foreignNames: Set<string>;
   inactiveNames: Set<string>;
   trimmed: boolean;
 }> {
   const names = new Set<string>();
+  const foreignNames = new Set<string>();
   const inactiveNames = new Set<string>();
   let trimmed = false;
   for (const batch of chunk(candidateNames)) {
@@ -252,17 +301,16 @@ export async function fetchNamedAcls(
       .table("sys_security_acl")
       .queryWithMeta({
         sysparm_query: and(eq("type", type), inClause("name", batch)),
-        sysparm_fields: "sys_id,name,operation,active",
+        sysparm_fields: `sys_id,name,operation,operation.name,active,${ACL_SCOPE_FIELDS}`,
       });
     trimmed = trimmed || securityTrimmed;
     for (const row of rows) {
       const name = str(row, "name").toLowerCase();
-      if (name === "" || str(row, "operation").toLowerCase() !== operation) {
-        continue;
-      }
-      if (isTruthy(row, "active")) names.add(name);
-      else inactiveNames.add(name);
+      if (name === "" || aclOperation(row) !== operation) continue;
+      if (!isTruthy(row, "active")) inactiveNames.add(name);
+      else if (aclInScope(row, scope)) names.add(name);
+      else foreignNames.add(name);
     }
   }
-  return { names, inactiveNames, trimmed };
+  return { names, foreignNames, inactiveNames, trimmed };
 }
