@@ -251,7 +251,8 @@ test("a 429 retry counts as a retry and carries its Retry-After", async () => {
   assert.deepEqual(
     http429.map((e) => [e.status, e.attempt, e.cache, e.retryAfterMs]),
     [
-      [429, 1, "off", 0],
+      // RR-60 (HTTP-7): `Retry-After: 0` waits the 250 ms floor.
+      [429, 1, "off", 250],
       [200, 2, "off", undefined],
     ],
   );

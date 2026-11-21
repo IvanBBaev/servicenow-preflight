@@ -1,5 +1,6 @@
 import type { PreflightContext } from "../types.js";
-import type { SnClient } from "./client.js";
+import { SnNetworkError, type SnClient } from "./client.js";
+import { raceAbort } from "./abort.js";
 
 /**
  * A validated builder for ServiceNow **encoded queries** (`sysparm_query`).
@@ -311,11 +312,28 @@ export function resolveScope(
     scopeCache.set(key, perCtx);
   }
   let entry = perCtx.get(input);
-  // A lookup started under a check that was since cancelled is not reused: it
-  // rejects (or already did) with that check's abort, not this caller's.
+  // The lookup runs on the starting check's own client, so the runner's
+  // missing-table watch still sees its read. A lookup started under a check
+  // that was since cancelled is not reused.
   if (!entry || entry.signal?.aborted) {
     entry = { promise: lookupScope(ctx.http, input), signal: ctx.signal };
     perCtx.set(input, entry);
   }
-  return entry.promise;
+  const joined = entry;
+  // RR-60 (HTTP-8): each caller waits under its own signal. An aborted caller
+  // rejects the way an aborted client call does; a caller whose joined lookup
+  // was cancelled by the check that started it starts afresh under its own
+  // client instead of inheriting that abort.
+  return raceAbort(joined.promise, ctx.signal).catch((err: unknown) => {
+    if (ctx.signal?.aborted) {
+      if (err instanceof SnNetworkError) throw err;
+      throw new SnNetworkError("The sys_scope lookup was aborted.", {
+        cause: err,
+      });
+    }
+    if (joined.signal?.aborted && joined.signal !== ctx.signal) {
+      return resolveScope(ctx, scope);
+    }
+    throw err;
+  });
 }

@@ -703,6 +703,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `maxRows` (default 100000) and throws `SnTruncationError` on an
   auto-paginated read past it, like the real client.
 
+- **HTTP client robustness: progress links, Retry-After, token endpoint,
+  NO_PROXY, redirects and aborts** (RR-60, HTTP-3, HTTP-7…HTTP-14,
+  HTTP-16…HTTP-18) — the CI/CD progress poll is now always built on the
+  configured instance origin: from the link's `id` when present, otherwise
+  from the path of its `url` only. A server-supplied link naming another
+  host is no longer refused; the foreign host is simply never contacted.
+  `Retry-After` accepts decimal and `+`-signed seconds, and every wait has
+  a 250 ms floor, so `Retry-After: 0` no longer retries in a tight loop. A
+  value is read as an HTTP date only when it contains letters.
+  A 429 or 5xx from the OAuth token endpoint is now retried
+  (`Retry-After`-aware, 4 attempts, a fresh JWT assertion each time). When
+  it keeps failing it surfaces as `SnHttpError` with the status, no longer
+  as an `SnAuthError` that blamed the credentials. A token endpoint that
+  rotates the refresh token is honoured: the next exchange presents the new
+  one. A caller's abort now ends a wait on a pending token request. A
+  private key that cannot sign the JWT assertion is an `SnAuthError` naming
+  the cause (never the key), not a raw crypto error. A 403 from the token
+  endpoint gets OAuth-entry and IP-restriction hints instead of table-ACL
+  hints.
+  Redirects are no longer followed on any transport (`redirect: "manual"`).
+  The refusal names the status and the target origin and path, never its
+  query string, so an SSO or maintenance redirect is recognisable. Network
+  errors carry the underlying cause (`ECONNREFUSED`, `ENOTFOUND`, …) in
+  the message and as `cause`.
+  `NO_PROXY` / `SNPF_NO_PROXY` now honour `*.example.com` and CIDR ranges
+  (`10.0.0.0/8`, `fd00::/8`, IP-literal targets only). Any other wildcard
+  form still never matches, so the proxy stays in use.
+  The `node:https` transports (mTLS, proxy) strip a leading UTF-8 BOM
+  before parsing JSON. They no longer leave an abort listener on a
+  long-lived signal after each request, and they close the tunnel socket
+  when building the request throws.
+  One check's abort no longer fails the shared `sys_scope` lookup for the
+  other checks of the run. A backward wall-clock step no longer stalls the
+  rate limiter.
+
 - **Script scans catch more spellings; release and version gaps close**
   (RR-68, DEL-11, DEL-14, DEL-15, DEL-16) — `client-script-safety` matched
   `GlideScopedEvaluator` / `evaluateScript` with `A.*B|B.*A`, which backtracks

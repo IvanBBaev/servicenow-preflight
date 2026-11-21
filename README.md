@@ -540,8 +540,10 @@ never weakened by proxying.
 
 Bypass hosts with `NO_PROXY`-style lists — the union of the config file's
 `noProxy`, `SNPF_NO_PROXY`, and `NO_PROXY`/`no_proxy` applies: comma-separated
-entries, each a hostname, a domain suffix, a `host:port`, a bracketed IPv6
-literal, or `*` (bypass everything).
+entries, each a hostname, a domain suffix (`example.com`, `.example.com` or
+`*.example.com`), a `host:port`, a bracketed IPv6 literal, a CIDR range for IP
+targets (`10.0.0.0/8`, `fd00::/8`), or `*` (bypass everything). Any other
+wildcard form never matches, so the proxy stays in use.
 
 **Detection precedence** (with `SNPF_AUTH` unset, first match wins): OAuth client
 id + secret (→ `oauth-refresh` if a refresh token is present, else `oauth-jwt` if

@@ -63,7 +63,10 @@ export function createLimiter(opts: LimiterOptions = {}): Limiter {
   function delay(at: number): number {
     if (at < pausedUntil) return pausedUntil - at;
     if (rps === undefined) return 0;
-    tokens = Math.min(1, tokens + ((at - refilledAt) / 1000) * rps);
+    // RR-60 (HTTP-13): a backward wall-clock step (NTP, VM resume) must not
+    // drive the bucket negative and stall every queued request for an hour.
+    const elapsed = Math.max(0, at - refilledAt);
+    tokens = Math.min(1, tokens + (elapsed / 1000) * rps);
     refilledAt = at;
     return tokens >= 1 ? 0 : Math.ceil(((1 - tokens) / rps) * 1000);
   }

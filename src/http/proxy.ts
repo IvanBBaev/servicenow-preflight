@@ -45,10 +45,15 @@
  * entries, matched case-insensitively against the target hostname:
  *
  * - `*` — bypass every host (forces direct connections).
- * - `example.com` or `.example.com` — the host itself and any subdomain
- *   (`example.com`, `a.example.com`); a leading dot is ignored. Suffix
- *   matching is on whole labels, so `example.com` does NOT match
- *   `badexample.com`.
+ * - `example.com`, `.example.com` or `*.example.com` — the host itself and any
+ *   subdomain (`example.com`, `a.example.com`); a leading dot or `*.` is
+ *   ignored. Suffix matching is on whole labels, so `example.com` does NOT
+ *   match `badexample.com`.
+ * - `10.0.0.0/8`, `fd00::/8` — a CIDR range, matched against IP-literal
+ *   targets only (a hostname is never resolved to decide).
+ *
+ * Any other form containing `*` or `/` (and a malformed CIDR range) matches
+ * nothing, so the proxy stays in use — a bypass entry is never widened.
  * - `example.com:8443` — as above, but only for that target port (the target
  *   port defaults to 443 for https URLs).
  *
@@ -57,7 +62,7 @@
  * `NO_PROXY` to exempt it.
  */
 
-import { connect as netConnect, isIP, type Socket } from "node:net";
+import { BlockList, connect as netConnect, isIP, type Socket } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 
 /**
@@ -153,15 +158,38 @@ function splitHostPort(entry: string): { host: string; port?: string } {
   return { host: entry };
 }
 
+/**
+ * Whether a CIDR bypass entry (`10.0.0.0/8`, `fd00::/8`) covers an IP-literal
+ * target (RR-60, HTTP-11). A hostname target never matches — it is not resolved
+ * to decide — and neither does a malformed range.
+ */
+function cidrMatches(entry: string, host: string): boolean {
+  const slash = entry.indexOf("/");
+  const network = dialHost(entry.slice(0, slash));
+  const bitsRaw = entry.slice(slash + 1);
+  const family = isIP(network);
+  if (family === 0 || !/^\d{1,3}$/.test(bitsRaw)) return false;
+  const bits = Number(bitsRaw);
+  if (bits > (family === 4 ? 32 : 128) || isIP(host) !== family) return false;
+  const type = family === 4 ? "ipv4" : "ipv6";
+  const list = new BlockList();
+  list.addSubnet(network, bits, type);
+  return list.check(host, type);
+}
+
 /** Whether one bypass-list entry matches the target host (+ effective port). */
 function noProxyEntryMatches(
   rawEntry: string,
   host: string,
   port: string,
 ): boolean {
-  const entry = rawEntry.trim().toLowerCase();
+  let entry = rawEntry.trim().toLowerCase();
   if (entry === "") return false;
   if (entry === "*") return true;
+  if (entry.includes("/")) return cidrMatches(entry, host);
+  // RR-60 (HTTP-11): `*.example.com` is the common spelling of `.example.com`.
+  if (entry.startsWith("*.")) entry = entry.slice(1);
+  if (entry.includes("*")) return false;
   const parsed = splitHostPort(entry);
   if (parsed.port !== undefined && parsed.port !== port) return false;
   // A leading dot means "any subdomain of" — same as the bare form here.

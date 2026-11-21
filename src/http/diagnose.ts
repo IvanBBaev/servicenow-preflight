@@ -41,8 +41,10 @@ const PREFER_OAUTH =
 /** Hints for a refused request, most likely cause first. Never empty. */
 export function diagnoseAuthFailure(failure: AuthFailure): string[] {
   const { status, authKind, detail = "" } = failure;
+  // RR-60 (HTTP-17): a 403 from the token endpoint is about the OAuth entry,
+  // not a table ACL — decide by endpoint first.
+  if (failure.tokenEndpoint) return tokenEndpointHints(authKind, status);
   if (status === 403) return [forbiddenHint(failure.path)];
-  if (failure.tokenEndpoint) return tokenEndpointHints(authKind);
 
   switch (authKind) {
     case "basic":
@@ -100,8 +102,13 @@ function basicHints(detail: string, mfa: boolean): string[] {
   return [wrong, restriction, PREFER_OAUTH];
 }
 
-function tokenEndpointHints(authKind: AuthKind): string[] {
+function tokenEndpointHints(authKind: AuthKind, status: number): string[] {
   const hints = [OAUTH_REGISTRY];
+  if (status === 403) {
+    hints.unshift(
+      "The token endpoint refused the request outright: check that the OAuth application registry entry is active and that no IP-address access control blocks this host.",
+    );
+  }
   if (authKind === "oauth-password") {
     hints.push(
       "For the password grant, also check SNPF_USER/SNPF_PASS and that the user is active.",

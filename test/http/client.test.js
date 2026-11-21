@@ -990,10 +990,10 @@ test("a token endpoint honours a string expires_in and caches accordingly", asyn
 });
 
 test("a token endpoint error with no detail body still surfaces as SnAuthError", async () => {
-  // 500 with an empty body and no statusText: the generic message path.
+  // 400 with an empty body and no statusText: the generic message path.
   handler = (url) =>
     isTokenPost(url)
-      ? { status: 500, statusText: "", text: () => Promise.resolve("") }
+      ? { status: 400, statusText: "", text: () => Promise.resolve("") }
       : fakeResponse({ body: { result: {} } });
   await assert.rejects(
     () =>
@@ -1005,8 +1005,8 @@ test("a token endpoint error with no detail body still surfaces as SnAuthError",
         .get("z"),
     (err) => {
       assert.ok(err instanceof SnAuthError);
-      assert.equal(err.status, 500);
-      assert.match(err.message, /OAuth token request failed \(500\)/);
+      assert.equal(err.status, 400);
+      assert.match(err.message, /OAuth token request failed \(400\)/);
       return true;
     },
   );
@@ -1416,10 +1416,11 @@ test("CC-13: persistent poll failures beyond the tolerance give up with the erro
 
 // --- a server-supplied progress URL cannot redirect the credential ----------
 
-test("a cross-origin progress link is refused, not followed with the token", async () => {
+test("a cross-origin progress link is never followed with the token", async () => {
   // The kickoff payload is server-supplied: a compromised or hostile instance
   // naming another host would otherwise get the Authorization header delivered
-  // to it verbatim.
+  // to it verbatim. RR-60 (HTTP-3): the poll is built from the link's id on the
+  // configured origin, so the foreign host is simply never contacted.
   handler = (url, init) => {
     if (init.method === "POST") {
       return fakeResponse({
@@ -1438,26 +1439,22 @@ test("a cross-origin progress link is refused, not followed with the token", asy
     }
     return settledOk();
   };
-  await assert.rejects(
-    () => client().cicd.runTestSuite("suite-1"),
-    (err) => {
-      assert.ok(err instanceof SnError);
-      assert.match(err.message, /attacker\.example\.com/);
-      assert.match(err.message, /not the configured instance origin/);
-      return true;
-    },
+  const out = await client().cicd.runTestSuite("suite-1");
+  assert.equal(out.status, "success");
+  assert.equal(
+    String(calls[1].url).split("?")[0],
+    `${INSTANCE}/api/sn_cicd/progress/p1`,
   );
-  // The POST kickoff is the only request that ever left: no poll was issued.
-  assert.equal(calls.length, 1);
   assert.ok(!calls.some((c) => String(c.url).includes("attacker.example.com")));
 });
 
 // --- CC-31: never follow redirects on an API call ---------------------------
 
-test("CC-31: the client sets redirect: 'error' on every request", async () => {
+test("CC-31: the client never lets fetch follow a redirect", async () => {
+  // `manual` hands the 3xx back unfollowed; the client then refuses it (RR-60).
   handler = () => fakeResponse({ body: { result: { sys_id: "z" } } });
   await client().table("incident").get("z");
-  assert.equal(calls[0].init.redirect, "error");
+  assert.equal(calls[0].init.redirect, "manual");
 });
 
 // --- CC-32: the default CI/CD poll budget is 450 ----------------------------

@@ -550,37 +550,28 @@ const fetchTransport: Transport = async (url, init) => {
 };
 
 /**
- * Adapt a node `IncomingMessage` to the {@link TransportResponse} shape, and
- * refuse 3xx redirects exactly like the fetch path's `redirect: "error"`
- * (CC-31). Shared by the direct `node:https` transport and the proxied tunnel
- * transport (SR-5) so both keep identical semantics.
+ * Adapt a node `IncomingMessage` to the {@link TransportResponse} shape.
+ * `node:https` never follows a redirect, so a 3xx is handed back as is — just
+ * like the fetch path's `redirect: "manual"` — and the client refuses it in one
+ * place ({@link redirectRefusal}, CC-31). Shared by the direct `node:https`
+ * transport and the proxied tunnel transport (SR-5) so both keep identical
+ * semantics.
  */
 function nodeResponseAdapter(
-  origin: string,
   resolve: (res: TransportResponse) => void,
   reject: (err: Error) => void,
 ): (res: IncomingMessage) => void {
   return (res) => {
     const status = res.statusCode ?? 0;
-    // CC-31: never follow a redirect on an API call — align with the
-    // fetch path's `redirect: "error"`. `node:https` does not auto-follow,
-    // so a 3xx would otherwise surface as a puzzling non-JSON body; fail
-    // closed the same way instead, so credentials are never re-sent to a
-    // redirect target.
-    if (status >= 300 && status < 400) {
-      res.resume(); // drain the body so the socket can be released
-      reject(
-        new Error(
-          `Refusing to follow a ${status} redirect from ${origin} ` +
-            `(API requests must not redirect).`,
-        ),
-      );
-      return;
-    }
     const chunks: Buffer[] = [];
     res.on("data", (c: Buffer) => chunks.push(c));
     res.on("end", () => {
-      const text = Buffer.concat(chunks).toString("utf8");
+      // RR-60 (HTTP-12): `fetch`'s `text()` strips a leading UTF-8 BOM (WHATWG
+      // decode); do the same here, or `JSON.parse` fails on a BOM-prefixed body
+      // and the mTLS/proxy transports reject what the fetch path accepts.
+      const decoded = Buffer.concat(chunks).toString("utf8");
+      const text =
+        decoded.charCodeAt(0) === 0xfeff ? decoded.slice(1) : decoded;
       resolve({
         status,
         statusText: res.statusMessage ?? "",
@@ -599,7 +590,9 @@ function nodeResponseAdapter(
 /**
  * Wire an `AbortSignal` to destroy an in-flight node request, preserving the
  * reason's `name` (TimeoutError/AbortError) so the caller's timeout mapping
- * works identically to the fetch path. Shared by both node transports.
+ * works identically to the fetch path. Shared by both node transports. The
+ * listener is detached once the request closes (RR-60, HTTP-18), so a
+ * long-lived signal does not collect one dead listener per request.
  */
 function wireAbort(req: ClientRequest, signal: AbortSignal | undefined): void {
   if (!signal) return;
@@ -609,8 +602,12 @@ function wireAbort(req: ClientRequest, signal: AbortSignal | undefined): void {
     err.name = reason?.name ?? "AbortError";
     req.destroy(err);
   };
-  if (signal.aborted) onAbort();
-  else signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) {
+    onAbort();
+    return;
+  }
+  signal.addEventListener("abort", onAbort, { once: true });
+  req.once("close", () => signal.removeEventListener("abort", onAbort));
 }
 
 /**
@@ -636,7 +633,7 @@ function createHttpsTransport(tls: SnTls): Transport {
           ca: tls.ca,
           passphrase: tls.passphrase,
         },
-        nodeResponseAdapter(u.origin, resolve, reject),
+        nodeResponseAdapter(resolve, reject),
       );
       wireAbort(req, init.signal);
       req.on("error", (err) => reject(err));
@@ -767,22 +764,31 @@ async function proxiedNodeRequest(
     throw cause;
   }
   return new Promise<TransportResponse>((resolve, reject) => {
-    const req = httpRequest(
-      {
-        method: init.method,
-        host: u.hostname,
-        port,
-        // `node:http` would otherwise treat 80 as the default port and render
-        // `Host: example.com:443`; the tunneled scheme is https.
-        defaultPort: 443,
-        path: `${u.pathname}${u.search}`,
-        headers: init.headers,
-        // The socket is already connected AND secured end-to-end; without an
-        // `agent`, node uses this connection as-is (one shot, no keep-alive).
-        createConnection: () => tlsSocket,
-      },
-      nodeResponseAdapter(u.origin, resolve, reject),
-    );
+    let req: ClientRequest;
+    try {
+      req = httpRequest(
+        {
+          method: init.method,
+          host: u.hostname,
+          port,
+          // `node:http` would otherwise treat 80 as the default port and render
+          // `Host: example.com:443`; the tunneled scheme is https.
+          defaultPort: 443,
+          path: `${u.pathname}${u.search}`,
+          headers: init.headers,
+          // The socket is already connected AND secured end-to-end; without an
+          // `agent`, node uses this connection as-is (one shot, no keep-alive).
+          createConnection: () => tlsSocket,
+        },
+        nodeResponseAdapter(resolve, reject),
+      );
+    } catch (cause) {
+      // RR-60 (HTTP-18): a synchronous throw (e.g. an invalid header value)
+      // would otherwise leave the established tunnel + TLS session open.
+      tlsSocket.destroy();
+      reject(cause instanceof Error ? cause : new Error(String(cause)));
+      return;
+    }
     wireAbort(req, init.signal);
     req.on("error", (err) => reject(err));
     if (init.body !== undefined) req.write(init.body);
@@ -879,10 +885,23 @@ function jwtAssertion(
   const signingInput = `${base64url(JSON.stringify(header))}.${base64url(
     JSON.stringify(claims),
   )}`;
-  const signature = createSign("RSA-SHA256")
-    .update(signingInput)
-    .end()
-    .sign(auth.privateKey);
+  let signature: Buffer;
+  try {
+    signature = createSign("RSA-SHA256")
+      .update(signingInput)
+      .end()
+      .sign(auth.privateKey);
+  } catch (cause) {
+    // RR-60 (HTTP-16): a malformed PEM throws an OpenSSL error from deep in
+    // `crypto`; report it as the auth problem it is. Only the error code is
+    // kept — never the key material or the raw decoder message.
+    const code = (cause as { code?: unknown }).code;
+    throw new SnAuthError(
+      `oauth-jwt could not sign the assertion with the configured private key` +
+        `${typeof code === "string" ? ` (${code})` : ""}; check that it is an ` +
+        `unencrypted RSA private key in PEM form.`,
+    );
+  }
   return `${signingInput}.${base64url(signature)}`;
 }
 
@@ -922,6 +941,65 @@ function tokenRequestBody(auth: OAuthGrantAuth, origin: string): string {
 interface AcquiredToken {
   accessToken: string;
   expiresIn?: number;
+  /** A rotated `refresh_token` the endpoint returned, if any (HTTP-14). */
+  refreshToken?: string;
+}
+
+/**
+ * The detail a transport failure is reported with. undici's `fetch` rejects
+ * with a bare "fetch failed" and keeps the real reason (`ECONNREFUSED`,
+ * `ENOTFOUND`, a TLS error …) on `cause`; append it so the message says what
+ * actually went wrong (RR-60, HTTP-9).
+ */
+function networkDetail(err: Error): string {
+  const inner = (err as { cause?: unknown }).cause;
+  if (inner && typeof inner === "object") {
+    const code = (inner as { code?: unknown }).code;
+    const message = (inner as { message?: unknown }).message;
+    const extra =
+      typeof code === "string" && code
+        ? code
+        : typeof message === "string" && message
+          ? message
+          : undefined;
+    if (extra && !err.message.includes(extra)) {
+      return `${err.message} (${extra})`;
+    }
+  }
+  return err.message;
+}
+
+/**
+ * CC-31: an API call never follows a redirect — a 3xx to an SSO/login host
+ * would otherwise re-send the credential off-instance. Every transport hands a
+ * 3xx back unfollowed (`redirect: "manual"`), and this names it: the status and
+ * where it pointed (origin + path only — a `Location` query can carry tokens).
+ */
+function redirectRefusal(
+  status: number,
+  headers: Record<string, string>,
+  requestUrl: string,
+): SnNetworkError {
+  const from = new URL(requestUrl).origin;
+  let target = "";
+  const location = headers["location"];
+  if (location) {
+    try {
+      const to = new URL(location, requestUrl);
+      target = ` to ${to.origin}${to.pathname}`;
+    } catch {
+      target = " (unparseable Location header)";
+    }
+  }
+  return new SnNetworkError(
+    `Refusing to follow a ${status} redirect from ${from}${target} ` +
+      `(API requests must not redirect).`,
+  );
+}
+
+/** Whether a token-endpoint status is transient and worth retrying (HTTP-10). */
+function retryableTokenStatus(status: number): boolean {
+  return status === 429 || status >= 500;
 }
 
 /**
@@ -929,45 +1007,67 @@ interface AcquiredToken {
  * token out of the response. Authenticates via the request body (no bearer
  * header). A 4xx (or a missing token) surfaces as {@link SnAuthError}; secrets
  * are never placed into the error message.
+ *
+ * RR-60 (HTTP-10): a 429 or 5xx from the endpoint is a capacity problem, not a
+ * credential one — it is retried (honouring `Retry-After`) up to
+ * {@link RATE_LIMIT_MAX_RETRIES} times, and an exhausted budget surfaces as
+ * {@link SnHttpError} so it is never mistaken for bad credentials. The body is
+ * rebuilt per attempt, so a JWT assertion is never replayed.
  */
 async function acquireToken(
   auth: OAuthGrantAuth,
   transport: Transport,
   origin: string,
   timeoutMs: number,
+  clock: Clock,
 ): Promise<AcquiredToken> {
   const url = tokenEndpoint(auth, origin);
-  // Build the body first: JWT signing/config errors are auth problems and must
-  // surface as SnAuthError, not be masked by the transport's network catch.
-  const requestBody = tokenRequestBody(auth, origin);
+  const endpointOrigin = new URL(url).origin;
   let status: number;
   let statusText: string;
+  let headers: Record<string, string>;
   let text: string;
-  try {
-    const res = await transport(url, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: requestBody,
-      // A token endpoint that redirects is not something to chase — fail closed.
-      redirect: "error",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    status = res.status;
-    statusText = res.statusText;
-    // CC-7: read the body inside the try — a mid-body ECONNRESET/timeout rejects
-    // here and must surface as SnNetworkError, not escape as an unmapped error.
-    text = await res.text();
-  } catch (cause) {
-    const err = cause instanceof Error ? cause : new Error(String(cause));
-    const timedOut = err.name === "TimeoutError" || err.name === "AbortError";
-    throw new SnNetworkError(
-      timedOut
-        ? `OAuth token request to ${new URL(url).origin} timed out after ${timeoutMs}ms.`
-        : `Could not reach the OAuth token endpoint at ${new URL(url).origin}: ${err.message}`,
-    );
+  for (let attempt = 0; ; attempt += 1) {
+    // Build the body first: JWT signing/config errors are auth problems and
+    // must surface as SnAuthError, not be masked by the network catch.
+    const requestBody = tokenRequestBody(auth, origin);
+    try {
+      const res = await transport(url, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: requestBody,
+        // A token endpoint that redirects is not something to chase — the 3xx
+        // comes back unfollowed and is refused below.
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      status = res.status;
+      statusText = res.statusText;
+      headers = res.headers;
+      // CC-7: read the body inside the try — a mid-body ECONNRESET/timeout
+      // rejects here and must surface as SnNetworkError, not escape unmapped.
+      text = await res.text();
+    } catch (cause) {
+      const err = cause instanceof Error ? cause : new Error(String(cause));
+      const timedOut = err.name === "TimeoutError" || err.name === "AbortError";
+      throw new SnNetworkError(
+        timedOut
+          ? `OAuth token request to ${endpointOrigin} timed out after ${timeoutMs}ms.`
+          : `Could not reach the OAuth token endpoint at ${endpointOrigin}: ${networkDetail(err)}`,
+        { cause: err },
+      );
+    }
+    if (!retryableTokenStatus(status) || attempt >= RATE_LIMIT_MAX_RETRIES) {
+      break;
+    }
+    await clock.sleep(retryAfterMs(headers["retry-after"], clock.now()));
+  }
+
+  if (status >= 300 && status < 400) {
+    throw redirectRefusal(status, headers, url);
   }
 
   let body: unknown = undefined;
@@ -977,6 +1077,17 @@ async function acquireToken(
     } catch {
       body = { raw: text };
     }
+  }
+
+  if (retryableTokenStatus(status)) {
+    const detail = extractErrorDetail(body) ?? statusText;
+    throw new SnHttpError(
+      status,
+      `OAuth token endpoint at ${endpointOrigin} answered ${status} after ` +
+        `${RATE_LIMIT_MAX_RETRIES + 1} attempts${detail ? `: ${detail}` : ""}. ` +
+        `This is a server or rate-limit condition, not a credential problem.`,
+      body,
+    );
   }
 
   if (status < 200 || status >= 300) {
@@ -993,29 +1104,31 @@ async function acquireToken(
     );
   }
 
-  const token =
+  const field = (name: string): unknown =>
     body && typeof body === "object"
-      ? (body as { access_token?: unknown }).access_token
+      ? (body as Record<string, unknown>)[name]
       : undefined;
+  const token = field("access_token");
   if (typeof token !== "string" || !token) {
     throw new SnAuthError(
       "OAuth token endpoint did not return an access_token.",
     );
   }
   assertSendable(token, "The OAuth access_token");
-  const expiresRaw =
-    body && typeof body === "object"
-      ? (body as { expires_in?: unknown }).expires_in
-      : undefined;
+  const expiresRaw = field("expires_in");
   const expiresIn =
     typeof expiresRaw === "number"
       ? expiresRaw
       : typeof expiresRaw === "string" && expiresRaw.trim()
         ? Number(expiresRaw)
         : undefined;
+  const rotated = field("refresh_token");
   return {
     accessToken: token,
     expiresIn: Number.isFinite(expiresIn) ? expiresIn : undefined,
+    ...(typeof rotated === "string" && rotated
+      ? { refreshToken: rotated }
+      : {}),
   };
 }
 
@@ -1025,7 +1138,9 @@ interface AuthProvider {
    * The header to attach to each request (name + value), or `undefined` when the
    * client sends none (no auth configured, or TLS-only identity).
    */
-  header(): Promise<{ name: string; value: string } | undefined>;
+  header(
+    signal?: AbortSignal,
+  ): Promise<{ name: string; value: string } | undefined>;
   /**
    * Discard the cached credential so the next {@link header} re-acquires it, but
    * only when it still matches `usedValue` — the header value the failing
@@ -1186,6 +1301,7 @@ function buildAuthProvider(
   transport: Transport,
   origin: string,
   timeoutMs: number,
+  clock: Clock,
 ): AuthProvider {
   if (!auth) {
     return {
@@ -1205,7 +1321,9 @@ function buildAuthProvider(
       assertSendable(auth.apiKey, "SnAuth apikey");
       return staticHeader("x-sn-apikey", auth.apiKey);
     default: {
-      const grant = auth;
+      // RR-60 (HTTP-14): `let`, so a refresh token the endpoint rotates
+      // replaces the spent one for the next exchange.
+      let grant: OAuthGrantAuth = auth;
       let cached: { value: string; expiresAt: number } | undefined;
       // CC-34: a single in-flight acquisition shared by every concurrent
       // caller. Without it, N requests that all miss the cache each POST the
@@ -1215,12 +1333,16 @@ function buildAuthProvider(
 
       async function acquire(): Promise<string> {
         const started = Date.now();
-        const { accessToken, expiresIn } = await acquireToken(
+        const { accessToken, expiresIn, refreshToken } = await acquireToken(
           grant,
           transport,
           origin,
           timeoutMs,
+          clock,
         );
+        if (refreshToken && grant.kind === "oauth-refresh") {
+          grant = { ...grant, refreshToken };
+        }
         const ttlMs = (expiresIn && expiresIn > 0 ? expiresIn : 1800) * 1000;
         cached = {
           value: `Bearer ${accessToken}`,
@@ -1232,20 +1354,23 @@ function buildAuthProvider(
       }
 
       return {
-        async header() {
+        async header(signal) {
           const now = Date.now();
           if (cached && now < cached.expiresAt) {
             return { name: "Authorization", value: cached.value };
           }
           // Coalesce concurrent cache misses onto one acquisition. Assign
           // `inFlight` synchronously (before any await) so a second caller in
-          // the same tick sees it and awaits the same promise.
+          // the same tick sees it and awaits the same promise. The shared
+          // acquisition runs under no caller's signal; each caller races it
+          // with its own, so one cancelled check neither fails the others nor
+          // waits out a token-endpoint Retry-After (RR-60, HTTP-10).
           if (!inFlight) {
             inFlight = acquire().finally(() => {
               inFlight = undefined;
             });
           }
-          const value = await inFlight;
+          const value = await raceAbort(inFlight, signal);
           return { name: "Authorization", value };
         },
         invalidate(usedValue) {
@@ -1677,14 +1802,30 @@ function retryAfterMs(raw: string | undefined, now: number): number {
   const fallback = 1_000;
   if (!raw) return fallback;
   const trimmed = raw.trim();
-  if (/^\d+$/.test(trimmed)) {
-    return Math.min(Number(trimmed) * 1_000, RETRY_AFTER_CEILING_MS);
+  // RR-60 (HTTP-7): a number (`5`, and the out-of-spec `1.5` / `+5` some
+  // proxies send) is seconds. `Date.parse` reads `1.5` and `+5` as dates in
+  // 2001, which made the wait 0 ms and burned the retry budget at once.
+  if (/^\+?\d+(?:\.\d+)?$/.test(trimmed)) {
+    return clampRetryWait(Math.ceil(Number(trimmed) * 1_000));
   }
-  const when = Date.parse(trimmed);
-  if (!Number.isNaN(when)) {
-    return Math.min(Math.max(when - now, 0), RETRY_AFTER_CEILING_MS);
+  // Only an HTTP-date shape (it names a month or a day) is read as a date.
+  if (/[a-z]/i.test(trimmed)) {
+    const when = Date.parse(trimmed);
+    if (!Number.isNaN(when)) return clampRetryWait(when - now);
   }
   return fallback;
+}
+
+/**
+ * RR-60 (HTTP-7): the shortest wait a 429 gets. A throttling instance that
+ * says "retry now" (`0`, or a date already past) is still given a moment,
+ * so three retries cannot fire within a few milliseconds.
+ */
+const RETRY_AFTER_FLOOR_MS = 250;
+
+/** Clamp a Retry-After wait to {@link RETRY_AFTER_FLOOR_MS}…{@link RETRY_AFTER_CEILING_MS}. */
+function clampRetryWait(ms: number): number {
+  return Math.min(Math.max(ms, RETRY_AFTER_FLOOR_MS), RETRY_AFTER_CEILING_MS);
 }
 
 /**
@@ -1720,11 +1861,28 @@ function cicdStatus(payload: unknown): string {
   return "unknown";
 }
 
-/** Pull `links.progress.url` (or `.id`) from a CI/CD payload, when present. */
+/**
+ * The path to poll for a CI/CD run, from `links.progress`. RR-60 (HTTP-3): the
+ * instance writes the absolute `url` from `glide.servlet.uri`, which differs
+ * from the configured host behind a vanity URL or on a clone, and the origin
+ * pin would then refuse every poll of a suite that already started. So the
+ * path is built from `id`; without one, only the `url`'s path and query are
+ * used, always against the configured instance.
+ */
 function cicdProgressUrl(payload: unknown): string | undefined {
   const link = cicdLink(payload, "progress");
-  if (link?.url) return link.url;
-  if (link?.id) return `/api/sn_cicd/progress/${encodeURIComponent(link.id)}`;
+  if (link?.id?.trim()) {
+    return `/api/sn_cicd/progress/${encodeURIComponent(link.id.trim())}`;
+  }
+  if (link?.url) {
+    let parsed: URL;
+    try {
+      parsed = new URL(link.url, "http://instance.invalid");
+    } catch {
+      return undefined;
+    }
+    return `${parsed.pathname}${parsed.search}`;
+  }
   return undefined;
 }
 
@@ -1929,6 +2087,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     transport,
     origin,
     timeoutMs,
+    clock,
   );
 
   async function request(
@@ -1952,14 +2111,26 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
     const caller = opts.signal;
     if (caller?.aborted) throw abortedError(caller);
     const headers: Record<string, string> = { Accept: "application/json" };
-    let cred = await authProvider.header();
+    const credential = async (): Promise<
+      { name: string; value: string } | undefined
+    > => {
+      try {
+        return await authProvider.header(caller);
+      } catch (err) {
+        if (caller?.aborted) throw abortedError(caller);
+        throw err;
+      }
+    };
+    let cred = await credential();
     if (cred) headers[cred.name] = cred.value;
     const init: TransportInit = {
       method,
       headers,
       // CC-31: never follow redirects on an API call — a 3xx to an SSO/login
       // host would otherwise re-send the Authorization header off-instance.
-      redirect: "error",
+      // `manual` hands the 3xx back so it is refused with its real status and
+      // target (RR-60, HTTP-9) instead of undici's opaque "fetch failed".
+      redirect: "manual",
     };
     if (opts.body !== undefined) {
       headers["Content-Type"] = "application/json";
@@ -2015,7 +2186,8 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         throw new SnNetworkError(
           timedOut
             ? `Request to ${origin} timed out after ${timeoutMs}ms.`
-            : `Could not reach ServiceNow at ${origin}: ${withoutSecret(err.message, cred?.value)}`,
+            : `Could not reach ServiceNow at ${origin}: ${withoutSecret(networkDetail(err), cred?.value)}`,
+          { cause: err },
         );
       } finally {
         release?.();
@@ -2038,6 +2210,10 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         });
       }
 
+      if (status >= 300 && status < 400) {
+        throw redirectRefusal(status, resHeaders, url);
+      }
+
       // SN-6: honour Retry-After on a 429, up to a bounded number of attempts.
       // An exhausted budget falls through and becomes an SnHttpError below.
       if (status === 429 && rateLimitAttempts < RATE_LIMIT_MAX_RETRIES) {
@@ -2050,7 +2226,7 @@ export function createSnClient(cfg: SnClientConfig): SnClient {
         }
         // F-X-11: a Retry-After wait can outlast an MFA code's window, so
         // take the credential afresh (a static or cached one is unchanged).
-        cred = await authProvider.header();
+        cred = await credential();
         if (cred) headers[cred.name] = cred.value;
         continue;
       }
