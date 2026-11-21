@@ -1,14 +1,36 @@
 name: Release
 
-# Publish to npm when a version tag is pushed, e.g. `git tag v0.5.0 && git push --tags`.
+# Publish to npm when a version tag is pushed, e.g. `git tag v1.0.0 && git push --tags`.
 # See docs/RELEASING.md for the tag-last release discipline this workflow assumes.
 on:
   push:
     tags:
-      - "v*"
+      # OPS-14: only `vMAJOR.MINOR.PATCH[…]` tags. A floating major tag such as
+      # `v1` (V3-D8) does not start a release run.
+      - "v[0-9]*.[0-9]*.[0-9]*"
+  # OPS-14: a rehearsal path. A manual run is a dry run by default: every guard
+  # except the ancestry and tag checks, ending in `npm publish --dry-run`, with
+  # the tarball listing uploaded as an artifact. A real manual publish
+  # (dry_run off) is accepted only on a version tag ref and runs every guard.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: pack and check, publish nothing"
+        type: boolean
+        default: true
+      version:
+        description: "Dry run only: rehearse as this version (e.g. 1.0.0-rc.1); empty = package.json"
+        type: string
+        default: ""
 
 permissions:
   contents: read
+
+# OPS-14: one release run at a time. Two tag pushes queue instead of
+# overlapping, and a queued run is never cancelled by a newer one starting.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -20,6 +42,9 @@ jobs:
       contents: read
       # Required for npm provenance / OIDC Trusted Publishing (see the publish step).
       id-token: write
+    env:
+      # "true" only for a manual run with dry_run on; a tag push is never a dry run.
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,10 +62,47 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             tessera/package-lock.json
+      # OPS-14: a dry run may rehearse another version (e.g. the rc while main
+      # still says 0.5.0); a real manual publish takes no version and must run
+      # on a version tag, so it meets the same guards as a tag push.
+      - name: Check the manual-run inputs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          REHEARSAL_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            SEMVER='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+            if [ -n "$REHEARSAL_VERSION" ] && ! [[ "$REHEARSAL_VERSION" =~ $SEMVER ]]; then
+              echo "::error::version input '$REHEARSAL_VERSION' is not a semver version."
+              exit 1
+            fi
+            exit 0
+          fi
+          if [ -n "$REHEARSAL_VERSION" ]; then
+            echo "::error::The version input is for dry runs only; a real publish uses package.json."
+            exit 1
+          fi
+          case "$GITHUB_REF" in
+            refs/tags/v*) ;;
+            *)
+              echo "::error::A real manual publish must run on a version tag, not $GITHUB_REF."
+              exit 1
+              ;;
+          esac
+      # The substituted version lives only in this runner's checkout; it is
+      # never committed or tagged. --ignore-scripts: no version lifecycle hooks.
+      - name: Rehearse as the requested version (dry run)
+        if: env.DRY_RUN == 'true' && inputs.version != ''
+        env:
+          REHEARSAL_VERSION: ${{ inputs.version }}
+        run: |
+          npm version "$REHEARSAL_VERSION" --no-git-tag-version --allow-same-version --ignore-scripts
       # OPS-1: refuse to publish a tag whose commit is not reachable from `main`.
       # Tag pushes bypass branch protection, so a tag on an unreviewed/never-CI'd
       # commit must never reach npm. `fetch-depth: 0` above makes the graph complete.
+      # A dry run publishes nothing, so it may rehearse any branch (OPS-14).
       - name: Verify tagged commit is an ancestor of main
+        if: env.DRY_RUN != 'true'
         run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
@@ -80,7 +142,9 @@ jobs:
       - name: SDIST smoke (packed tarball, offline install)
         run: npm run smoke:sdist
       # Guard against publishing a version that doesn't match the tag.
+      # A dry run has no tag; it checks package.json's version (OPS-14).
       - name: Verify tag matches package.json version
+        if: env.DRY_RUN != 'true'
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           PKG="$(node -p "require('./package.json').version")"
@@ -109,19 +173,37 @@ jobs:
       # REL-6: the dist-tag is always explicit. A prerelease (any version with a
       # `-` before any `+build` part, e.g. 1.0.0-rc.1) goes to `next`; without `--tag` npm would move
       # `latest` to it and every plain `npm install` would get the rc.
+      # OPS-14: a dry run adds `--dry-run` (prepack and prepublishOnly still
+      # run) and gets no token; the output, with the tarball listing, is kept
+      # in $RUNNER_TEMP/npm-publish.log (outside the checkout) for the
+      # artifact step below.
       - name: Publish to npm
         run: |
+          set -o pipefail
           PKG="$(node -p "require('./package.json').version")"
           case "${PKG%%+*}" in
             *-*) DIST_TAG=next ;;
             *) DIST_TAG=latest ;;
           esac
-          echo "Publishing $PKG with dist-tag $DIST_TAG"
-          npm publish --provenance --access public --tag "$DIST_TAG"
+          if [ "$DRY_RUN" = "true" ]; then
+            set -- --dry-run
+            echo "Dry run: packing $PKG for dist-tag $DIST_TAG, publishing nothing"
+          else
+            set --
+            echo "Publishing $PKG with dist-tag $DIST_TAG"
+          fi
+          npm publish --provenance --access public --tag "$DIST_TAG" "$@" 2>&1 | tee "${RUNNER_TEMP:-.}/npm-publish.log"
         env:
           # OIDC Trusted Publishing is the intended long-term auth path. Keep
           # NODE_AUTH_TOKEN until npmjs.com Trusted Publishing is configured for
           # this repo/workflow — the two changes must land together. DELETE this
           # env AND the NPM_TOKEN secret only AFTER Trusted Publishing is live.
-          # See docs/RELEASING.md.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # See docs/RELEASING.md. A dry run never receives the token.
+          NODE_AUTH_TOKEN: ${{ env.DRY_RUN != 'true' && secrets.NPM_TOKEN || '' }}
+      - name: Upload the dry-run tarball listing
+        if: env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-publish-dry-run
+          path: ${{ runner.temp }}/npm-publish.log
+          if-no-files-found: error

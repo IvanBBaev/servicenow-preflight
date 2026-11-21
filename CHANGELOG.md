@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Release rehearsal path** (RR-14, OPS-14) — `release.yml` has a
+  `workflow_dispatch` trigger whose `dry_run` input defaults to on. A dry run
+  runs every release guard except the ancestry and tag checks, ends in
+  `npm publish --dry-run --provenance` (prepack and the `check` gate still
+  run), never receives the npm token, and uploads the output with the tarball
+  listing as the `npm-publish-dry-run` artifact. Its `version` input rehearses
+  another version (e.g. `1.0.0-rc.1`) in the runner only. A real manual
+  publish is accepted only on a version tag ref. Release runs share the
+  `release` concurrency group, so two tag pushes queue instead of overlapping,
+  and the tag filter is `v[0-9]*.[0-9]*.[0-9]*`: a floating `v1` tag no longer
+  starts a release run.
+
 - **`drift` gates on `--fail-on` and writes `--output`** (RR-13, ARC-5) —
   `snpf drift <src> <dst> --fail-on warn` exits `1` on a warn-only drift (e.g.
   an extra downstream test), and `--output <format>=<path>` writes the drift

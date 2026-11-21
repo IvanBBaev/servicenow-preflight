@@ -1,6 +1,6 @@
 # Releasing `servicenow-preflight`
 
-This project publishes to npm from CI when a `v*` tag is pushed. The golden
+This project publishes to npm from CI when a `vMAJOR.MINOR.PATCH` tag is pushed. The golden
 rule is **tag last**: the tag must point at a commit whose `package.json` (and
 every other piece of published metadata) is already correct on `main`.
 
@@ -45,6 +45,33 @@ as long as you follow the flow below — no back-fix needed.
    - the version is **0.x** (see below),
    - the `prepublishOnly` gate (`npm run check`: build + lint + format +
      coverage) fails.
+
+## Rehearsing a release (dry run)
+
+Run the `Release` workflow by hand (Actions → Release → Run workflow, or
+`gh workflow run release.yml --ref main -f version=1.0.0-rc.1`). The `dry_run`
+input is on by default. A dry run:
+
+- skips only the ancestry and tag checks, so it can rehearse any branch;
+- runs every other guard, including the 0.x refusal — while `package.json`
+  still says `0.5.0`, pass a `version` (e.g. `1.0.0-rc.1`), which is applied
+  with `npm version --no-git-tag-version` in the runner only and never
+  committed or tagged;
+- ends in `npm publish --dry-run --provenance --tag <dist-tag>`, which still
+  runs `prepack` and the `prepublishOnly` gate, publishes nothing and gets no
+  npm token;
+- uploads the publish output, with the tarball listing, as the
+  `npm-publish-dry-run` artifact.
+
+A manual run with `dry_run` off is a real publish: it must be started on a
+version tag ref (`--ref v1.0.0`), takes no `version` input and meets every
+guard a tag push meets. The normal path stays the tag push below.
+
+Release runs share the `release` concurrency group: a second run queues until
+the first one finishes, and none is cancelled for a newer one. GitHub keeps
+only one pending run per group, so a third run started while one is pending
+replaces that pending run. Only `vMAJOR.MINOR.PATCH[…]` tags start a run
+(`v[0-9]*.[0-9]*.[0-9]*`); a floating major tag such as `v1` does not.
 
 ## Prereleases publish under the `next` dist-tag
 
