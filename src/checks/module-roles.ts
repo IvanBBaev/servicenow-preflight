@@ -11,6 +11,7 @@ import {
 import {
   errorResult,
   isTruthy,
+  PUBLIC_ROLE,
   rowFinding,
   str,
   triageZeroRead,
@@ -24,11 +25,30 @@ function result(status: CheckStatus, message: string): CheckResult {
   return { name: NAME, status, message };
 }
 
-/** A `roles` glide_list holds comma-separated role names; blank entries don't count. */
+/**
+ * A `roles` glide_list holds comma-separated role names. Blank entries don't
+ * count, and neither does `public` — it grants everyone, so it gates nothing
+ * (ACL-18).
+ */
 function hasRoles(row: Record<string, unknown>): boolean {
   return str(row, "roles")
     .split(",")
-    .some((role) => role.trim() !== "");
+    .some((role) => {
+      const name = role.trim().toLowerCase();
+      return name !== "" && name !== PUBLIC_ROLE;
+    });
+}
+
+/** What this check needs to know about one application menu. */
+interface MenuInfo {
+  title: string;
+  gated: boolean;
+  /**
+   * False only when the menu reads `active=false` — an inactive menu hides
+   * every module under it. A missing or unreadable value counts as active,
+   * so an unknown read never hides a module.
+   */
+  active: boolean;
 }
 
 /** Display handle for one module. */
@@ -38,7 +58,7 @@ function labelOf(row: Record<string, unknown>): string {
 
 /**
  * The application menus (`sys_app_application`) with the given sys_ids,
- * mapped to whether each carries roles. Menus are looked up by id rather than
+ * mapped to whether each carries roles and is active. Menus are looked up by id rather than
  * by scope: a module can sit under another app's menu. `trimmed` is true when
  * any batch was security-trimmed.
  */
@@ -46,10 +66,10 @@ async function fetchMenus(
   http: SnClient,
   ids: readonly string[],
 ): Promise<{
-  menus: Map<string, { title: string; gated: boolean }>;
+  menus: Map<string, MenuInfo>;
   trimmed: boolean;
 }> {
-  const menus = new Map<string, { title: string; gated: boolean }>();
+  const menus = new Map<string, MenuInfo>();
   let trimmed = false;
   for (const batch of chunk(ids)) {
     // No `sysparm_limit`: the client auto-paginates, so every menu is seen.
@@ -57,13 +77,14 @@ async function fetchMenus(
       .table("sys_app_application")
       .queryWithMeta({
         sysparm_query: inClause("sys_id", batch),
-        sysparm_fields: "sys_id,title,roles",
+        sysparm_fields: "sys_id,title,roles,active",
       });
     trimmed = trimmed || securityTrimmed;
     for (const row of rows) {
       menus.set(str(row, "sys_id"), {
         title: str(row, "title") || str(row, "sys_id"),
         gated: hasRoles(row),
+        active: str(row, "active").toLowerCase() !== "false",
       });
     }
   }
@@ -79,7 +100,9 @@ async function fetchMenus(
  * `override_menu_roles` is set, when its own roles alone decide. So an active,
  * role-less module is exposed when its menu also has no roles, when it
  * overrides the menu's roles, or when it has no menu; one under a role-gated
- * menu is already gated. Separators (`link_type` `SEPARATOR`) are skipped.
+ * menu is already gated, and one under an inactive menu is not shown at all.
+ * The `public` role grants everyone, so it counts as no role. Separators
+ * (`link_type` `SEPARATOR`) are skipped.
  *
  * A usability finding the rule lets you resolve or justify, so it stays
  * advisory — the check never fails:
@@ -87,7 +110,8 @@ async function fetchMenus(
  * - **warn** — an exposed module (grouped by cause), a module whose menu
  *   could not be read, the scope is unset, or a read was trimmed or ambiguous.
  * - **pass** — every active module in scope is gated by its own or its menu's
- *   roles, or the instance itself reports the scope ships none.
+ *   roles or sits under an inactive menu, or the instance itself reports the
+ *   scope ships none.
  */
 export const moduleRoles: Check = {
   name: NAME,
@@ -103,7 +127,7 @@ export const moduleRoles: Check = {
     remediation:
       "Add roles to each navigator module, or to its application menu, so modules are shown only to the users who can use them.",
     verdicts: {
-      pass: "Every active module in scope is gated, or the scope ships none.",
+      pass: "Every active module in scope is gated or under an inactive menu, or the scope ships none.",
       warn: "A module shown to every user, an unreadable menu, no scope, or a trimmed read.",
       fail: "Never — module visibility is a usability finding.",
     },
@@ -154,6 +178,7 @@ export const moduleRoles: Check = {
       const pending: {
         label: string;
         menuId: string;
+        override: boolean;
         row: Record<string, unknown>;
       }[] = [];
       const findings: Finding[] = [];
@@ -166,19 +191,22 @@ export const moduleRoles: Check = {
         inspected += 1;
         if (hasRoles(row)) continue;
         const label = labelOf(row);
-        if (isTruthy(row, "override_menu_roles")) {
+        const override = isTruthy(row, "override_menu_roles");
+        const menuId = str(row, "application");
+        // A module overriding its menu's roles is still hidden by an inactive
+        // menu, so its menu is read too when the id is queryable.
+        if (isSysId(menuId)) {
+          pending.push({ label, menuId, override, row });
+        } else if (override) {
           overrides.push(label);
           flag(row, "override-no-role");
-          continue;
-        }
-        const menuId = str(row, "application");
-        if (menuId === "") {
+        } else if (menuId === "") {
           noMenu.push(label);
           flag(row, "no-menu");
-        } else if (!isSysId(menuId)) {
+        } else {
           unreadableMenu.push(label);
           flag(row, "unverifiable");
-        } else pending.push({ label, menuId, row });
+        }
       }
 
       const { menus, trimmed: menusTrimmed } = await fetchMenus(ctx.http, [
@@ -187,8 +215,14 @@ export const moduleRoles: Check = {
       // Group role-less modules under role-less menus by menu, for a
       // message that points at the one place a single fix would cover.
       const byOpenMenu = new Map<string, string[]>();
-      for (const { label, menuId, row } of pending) {
+      for (const { label, menuId, override, row } of pending) {
         const menu = menus.get(menuId);
+        if (menu && !menu.active) continue;
+        if (override) {
+          overrides.push(label);
+          flag(row, "override-no-role");
+          continue;
+        }
         if (!menu) {
           unreadableMenu.push(label);
           flag(row, "unverifiable");
@@ -249,7 +283,7 @@ export const moduleRoles: Check = {
       }
       return result(
         "pass",
-        `All ${inspected} active navigator module(s) in scope "${scope}" are gated by their own or their menu's roles.`,
+        `All ${inspected} active navigator module(s) in scope "${scope}" are gated by their own or their menu's roles, or hidden by an inactive menu.`,
       );
     } catch (err) {
       return errorResult(NAME, "navigator module roles", err);

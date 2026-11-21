@@ -279,7 +279,7 @@
           "additionalProperties": {}
         },
         "notification-conditions": {
-          "description": "No active Notification fires on every update of its table (no event, no condition).",
+          "description": "No active Notification fires on every insert or update of its table (no event, no condition).",
           "type": "object",
           "additionalProperties": {}
         },

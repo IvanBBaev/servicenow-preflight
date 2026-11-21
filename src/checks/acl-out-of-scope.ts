@@ -34,8 +34,11 @@ function splitAclName(name: string): { table: string; field: string } {
  * Inspects every `record`-type ACL the target scope ships. An ACL's table is
  * the part of its name before the first `.` (`incident`, `incident.field`,
  * `incident.*`). A table is the app's own when it is in the scope's
- * `sys_db_object` rows or carries the scope namespace prefix (`<scope>_`), so
- * a trimmed table read cannot turn an app table into a false finding.
+ * `sys_db_object` rows — a sibling scope's `<scope>_ext_task` is not, even
+ * though it carries the prefix. Only when that table read is incomplete
+ * (security-trimmed, or zero rows the instance did not prove empty) does the
+ * scope namespace prefix (`<scope>_`) stand in, so a trimmed table read cannot
+ * turn an app table into a false finding.
  *
  * - **fail** — a table-level or wildcard ACL (`table`, `table.*`, `*`)
  *   targets a table outside the scope, a field ACL does so for a field that is
@@ -120,9 +123,17 @@ export const aclOutOfScope: Check = {
         tables.rows.map((row) => str(row, "name").toLowerCase()),
       );
       const prefix = namespace === "" ? "" : `${namespace}_`;
+      // Ownership is the `sys_db_object` scope: the prefix alone would count a
+      // sibling scope's `<namespace>_ext_task` as the app's own (ACL-17). The
+      // prefix stands in only when the table read cannot be trusted to be
+      // complete (trimmed, or zero rows the instance did not prove empty).
+      const tablesIncomplete =
+        tables.securityTrimmed ||
+        (tables.rows.length === 0 && triageZeroRead(tables) !== "empty");
       const isOwn = (name: string): boolean =>
         name !== "" &&
-        (own.has(name) || (prefix !== "" && name.startsWith(prefix)));
+        (own.has(name) ||
+          (tablesIncomplete && prefix !== "" && name.startsWith(prefix)));
 
       const blocking: string[] = [];
       const ownFieldOnForeign: string[] = [];

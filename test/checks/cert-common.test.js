@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  isConstantTrue,
+  normalizeScript,
   rowFinding,
+  scriptGates,
   subjectFinding,
   withFindings,
 } from "../../build/checks/cert-common.js";
@@ -83,4 +86,26 @@ test("withFindings attaches findings only when there are any (F-R-3)", () => {
   assert.equal(withFindings(base, []).findings, undefined);
   const f = subjectFinding("demo", "x", "x", "k");
   assert.deepEqual(withFindings(base, [f]).findings, [f]);
+});
+
+test("normalizeScript drops comments, whitespace and trailing semicolons (ACL-15)", () => {
+  assert.equal(normalizeScript("// TODO\n/* later */  "), "");
+  assert.equal(normalizeScript(" 1 == 1 ;; "), "1==1");
+});
+
+test("isConstantTrue knows truthy constants and self-equal literals (ACL-15)", () => {
+  for (const code of ["true", "1", "!0", "!!true", "((true))", "1==1"]) {
+    assert.equal(isConstantTrue(code), true, code);
+  }
+  for (const code of ["'a'==='a'", "(2)==(2)", "null==null", "false==false"]) {
+    assert.equal(isConstantTrue(code), true, code);
+  }
+  for (const code of ["1==2", "x==x", "1!==1", "'a'=='a'||x", "false", "0"]) {
+    assert.equal(isConstantTrue(code), false, code);
+  }
+});
+
+test("an ACL script answering a self-equal literal gates nothing (ACL-15)", () => {
+  assert.equal(scriptGates("answer = ('x' == 'x');"), false);
+  assert.equal(scriptGates("answer = gs.hasRole('admin');"), true);
 });

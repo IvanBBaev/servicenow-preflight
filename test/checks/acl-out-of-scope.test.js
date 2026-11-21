@@ -178,6 +178,40 @@ test("a namespaced table invisible in sys_db_object still counts as the app's ow
   assert.equal(result.status, "pass", result.message);
 });
 
+test("a sibling scope's prefixed table is not the app's own (ACL-17)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: [table("x_acme_app_task")],
+      acls: [acl("x_acme_app_task"), acl("x_acme_app_ext_task")],
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /x_acme_app_ext_task \(read\)/);
+  assert.doesNotMatch(result.message, /x_acme_app_task \(read\)/);
+});
+
+test("a proven-empty table read does not let the prefix stand in (ACL-17)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: [],
+      acls: [acl("x_acme_app_ext_task")],
+      totalCounts: { sys_db_object: 0 },
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+});
+
+test("a trimmed table read lets the prefix stand in for the hidden tables (ACL-17)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: [table("x_acme_app_task")],
+      acls: [acl("x_acme_app_hidden")],
+      totalCounts: { sys_db_object: 5 },
+    }),
+  );
+  assert.notEqual(result.status, "fail", result.message);
+});
+
 test("an in-scope table without the namespace prefix counts as the app's own", async () => {
   const result = await run(
     makeHttp({ tables: [table("u_legacy")], acls: [acl("u_legacy")] }),

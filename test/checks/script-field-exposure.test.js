@@ -9,11 +9,18 @@ const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
 
 /** Assemble a fake client from dictionary / ACL fixtures plus options. */
-function makeHttp({ columns = [], acls = [], fail, totalCounts } = {}) {
+function makeHttp({
+  columns = [],
+  acls = [],
+  roleLinks = [],
+  fail,
+  totalCounts,
+} = {}) {
   return createFakeSnClient({
     tables: {
       sys_dictionary: inScope(columns, SCOPE),
       sys_security_acl: inScope(acls, SCOPE),
+      sys_security_acl_role: roleLinks,
     },
     totalCounts,
     fail,
@@ -131,6 +138,75 @@ test("a table-level (row) write ACL does not cover the field", async () => {
   const result = await run(makeHttp({ columns: [SCRIPT_COLUMN], acls: [acl] }));
   assert.equal(result.status, "fail");
   assert.match(result.message, /no field write ACL/);
+});
+
+test("a role-gated table-level write ACL makes the column a warning, not a failure (ACL-16)", async () => {
+  const acl = { ...FIELD_ACL, sys_id: "acl9", name: "x_acme_app_task" };
+  const roleLinks = [
+    {
+      sys_security_acl: "acl9",
+      sys_user_role: "role1",
+      "sys_user_role.name": "x_acme_app.admin",
+    },
+  ];
+  const result = await run(
+    makeHttp({ columns: [SCRIPT_COLUMN], acls: [acl], roleLinks }),
+  );
+  assert.equal(result.status, "warn", result.message);
+  assert.match(result.message, /role-gated table-level write ACL/);
+  assert.equal(result.findings?.length, 1);
+  assert.equal(result.findings[0].status, "warn");
+});
+
+test("a table-level write ACL gated only by 'public' still fails (ACL-16)", async () => {
+  const acl = { ...FIELD_ACL, sys_id: "acl9", name: "x_acme_app_task" };
+  const roleLinks = [
+    {
+      sys_security_acl: "acl9",
+      sys_user_role: "role0",
+      "sys_user_role.name": "public",
+    },
+  ];
+  const result = await run(
+    makeHttp({ columns: [SCRIPT_COLUMN], acls: [acl], roleLinks }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /no field write ACL/);
+});
+
+test("reads every executable column type, not only server scripts (ACL-16)", async () => {
+  const calls = [];
+  const http = makeHttp({ columns: [SCRIPT_COLUMN], acls: [FIELD_ACL] });
+  const wrapped = {
+    ...http,
+    table(name) {
+      const t = http.table(name);
+      return {
+        get: (id, params) => t.get(id, params),
+        query: (params) => t.query(params),
+        queryWithMeta: (params) => {
+          calls.push({ table: name, params });
+          return t.queryWithMeta(params);
+        },
+      };
+    },
+  };
+  await run(wrapped);
+  const dict = calls.find((c) => c.table === "sys_dictionary");
+  for (const type of ["script_client", "email_script", "condition_string"]) {
+    assert.match(dict.params.sysparm_query, new RegExp(`\\b${type}\\b`));
+  }
+});
+
+test("a client-script column without a field write ACL fails (ACL-16)", async () => {
+  const column = {
+    ...SCRIPT_COLUMN,
+    element: "on_load",
+    internal_type: "script_client",
+  };
+  const result = await run(makeHttp({ columns: [column] }));
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /x_acme_app_task\.on_load/);
 });
 
 test("a read-operation field ACL does not cover the column", async () => {

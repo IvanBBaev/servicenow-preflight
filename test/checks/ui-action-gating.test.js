@@ -124,6 +124,38 @@ test("a whitespace or bare `true` condition gates nothing", async () => {
   assert.match(result.message, /3 active UI Action\(s\)/);
 });
 
+test("an always-true or comment-only condition gates nothing (ACL-15)", async () => {
+  const vacuous = [
+    "1==1",
+    "1 === 1;",
+    "(true)",
+    "'a' == 'a'",
+    "!0",
+    "// TODO: restrict",
+    "/* gate later */",
+  ];
+  const result = await run(
+    makeHttp({
+      actions: vacuous.map((condition, i) => action(i + 1, { condition })),
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /7 active UI Action\(s\)/);
+});
+
+test("a real condition next to a comment still gates the action (ACL-15)", async () => {
+  const result = await run(
+    makeHttp({
+      actions: [
+        action(1, { condition: "// admins only\ngs.hasRole('admin')" }),
+        action(2, { condition: "1 == 2" }),
+        action(3, { condition: "current.state == current.state" }),
+      ],
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
+});
+
 test("a role link with an empty role does not gate the action", async () => {
   const result = await run(
     makeHttp({ actions: [action(1)], links: [roleLink(1, "")] }),

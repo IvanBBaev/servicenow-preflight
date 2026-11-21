@@ -10,6 +10,7 @@ import { resolveScope } from "../http/query.js";
 import {
   errorResult,
   isTruthy,
+  PUBLIC_ROLE,
   rowFinding,
   str,
   triageZeroRead,
@@ -29,6 +30,12 @@ interface PortalKind {
   /** Plural noun for messages. */
   noun: string;
   fields: string;
+  /**
+   * Whether a role-less row that is not `public` is a finding. A widget is
+   * only reachable through a page, so a non-public role-less widget inherits
+   * the page's gate and is no finding (ACL-18); a page is the entry point.
+   */
+  flagLoggedIn: boolean;
   /** Display handle for one row. */
   label(row: Record<string, unknown>): string;
 }
@@ -38,6 +45,7 @@ const KINDS: readonly PortalKind[] = [
     table: "sp_widget",
     noun: "widget(s)",
     fields: "sys_id,name,id,roles,public",
+    flagLoggedIn: false,
     label: (row) =>
       str(row, "name") || str(row, "id") || str(row, "sys_id") || "(unnamed)",
   },
@@ -45,16 +53,24 @@ const KINDS: readonly PortalKind[] = [
     table: "sp_page",
     noun: "page(s)",
     fields: "sys_id,id,title,roles,public",
+    flagLoggedIn: true,
     label: (row) =>
       str(row, "id") || str(row, "title") || str(row, "sys_id") || "(unnamed)",
   },
 ];
 
-/** A `roles` glide_list holds comma-separated role names; blank entries don't count. */
+/**
+ * A `roles` glide_list holds comma-separated role names. Blank entries don't
+ * count, and neither does `public` — it grants everyone, so it gates nothing
+ * (ACL-18).
+ */
 function hasRoles(row: Record<string, unknown>): boolean {
   return str(row, "roles")
     .split(",")
-    .some((role) => role.trim() !== "");
+    .some((role) => {
+      const name = role.trim().toLowerCase();
+      return name !== "" && name !== PUBLIC_ROLE;
+    });
 }
 
 /** What one table's read turned up. */
@@ -104,6 +120,7 @@ async function inspect(
   for (const row of meta.rows) {
     if (hasRoles(row)) continue;
     const open = isTruthy(row, "public");
+    if (!open && !kind.flagLoggedIn) continue;
     (open ? findings.publicNoRole : findings.noRole).push(kind.label(row));
     findings.findings.push(
       rowFinding(
@@ -124,17 +141,20 @@ async function inspect(
 /**
  * Certification rule 2.6 (`ci/certification/CHECKLIST.md`) — raised in 7 of
  * 19 releases: Service Portal widgets and pages carry roles unless they are
- * deliberately public. A widget or page with an empty `roles` list is open to
- * every logged-in user; with `public` set as well, to anyone without logging
- * in.
+ * deliberately public. A page with an empty `roles` list (or only the `public`
+ * role, which grants everyone) is open to every logged-in user; with `public`
+ * set as well, to anyone without logging in. A widget is reached through a
+ * page, so a role-less widget is a finding only when it is `public` itself — a
+ * non-public one inherits the page's gate.
  *
  * Inspects every `sp_widget` and `sp_page` in the target scope. The rule
  * allows deliberate exceptions ("unless deliberately public"), which only a
  * reviewer can judge, so findings stay advisory — the check never fails:
  *
- * - **warn** — a widget or page has no roles (public ones listed separately),
- *   the scope is unset, or a read was security-trimmed or ambiguous.
- * - **pass** — every widget and page in scope carries at least one role, or
+ * - **warn** — a page has no roles, a public widget has no roles (public ones
+ *   listed separately), the scope is unset, or a read was security-trimmed or
+ *   ambiguous.
+ * - **pass** — every page and every public widget in scope carries a role, or
  *   the instance itself reports the scope ships none.
  */
 export const portalRoles: Check = {
@@ -153,8 +173,8 @@ export const portalRoles: Check = {
     remediation:
       "Add roles to each Service Portal widget and page, or document why it is deliberately public (for example a login or landing page) for the certification reviewer.",
     verdicts: {
-      pass: "Every widget and page in scope carries a role, or the scope ships none.",
-      warn: "A role-less widget or page, public ones called out, no scope, or a trimmed read.",
+      pass: "Every page and public widget in scope carries a role, or the scope ships none.",
+      warn: "A role-less page or public widget, public ones called out, no scope, or a trimmed read.",
       fail: "Never — deliberate exceptions are a reviewer call.",
     },
   },
@@ -217,7 +237,7 @@ export const portalRoles: Check = {
       const [widgets, pages] = all;
       return result(
         "pass",
-        `All ${widgets?.count ?? 0} widget(s) and ${pages?.count ?? 0} page(s) in scope "${scope}" carry at least one role.`,
+        `All ${pages?.count ?? 0} page(s) in scope "${scope}" carry at least one role, and none of the ${widgets?.count ?? 0} widget(s) is public without one.`,
       );
     } catch (err) {
       return errorResult(NAME, "Service Portal widget/page roles", err);

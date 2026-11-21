@@ -126,6 +126,49 @@ test("override_menu_roles without own roles is flagged even under a gated menu",
   );
 });
 
+test("a module under an inactive menu is not shown, so not judged (ACL-18)", async () => {
+  const MENU_OFF = "4".repeat(32);
+  const { http, calls } = tracked(
+    makeHttp({
+      modules: [
+        mod("Hidden", { menu: MENU_OFF }),
+        mod("Hidden Bypass", { menu: MENU_OFF, override: true }),
+      ],
+      menus: [
+        ...MENUS,
+        { sys_id: MENU_OFF, title: "Old", roles: "", active: "false" },
+      ],
+    }),
+  );
+  const result = await run(http);
+  assert.equal(result.status, "pass", result.message);
+  assert.match(result.message, /inactive menu/);
+  const menuRead = calls.find((c) => c.table === "sys_app_application");
+  assert.match(menuRead.params.sysparm_fields, /\bactive\b/);
+});
+
+test("a menu without a readable active flag counts as active (ACL-18)", async () => {
+  const result = await run(makeHttp({ modules: [mod("Shown")] }));
+  assert.equal(result.status, "warn", result.message);
+  assert.match(result.message, /Shown/);
+});
+
+test("the 'public' role gates neither a module nor its menu (ACL-18)", async () => {
+  const MENU_PUBLIC = "5".repeat(32);
+  const result = await run(
+    makeHttp({
+      modules: [
+        mod("Everyone", { roles: "public" }),
+        mod("Under Public", { menu: MENU_PUBLIC }),
+      ],
+      menus: [...MENUS, { sys_id: MENU_PUBLIC, title: "Pub", roles: "public" }],
+    }),
+  );
+  assert.equal(result.status, "warn", result.message);
+  assert.match(result.message, /Everyone/);
+  assert.match(result.message, /Under Public/);
+});
+
 test("override_menu_roles WITH own roles is fine", async () => {
   const result = await run(
     makeHttp({

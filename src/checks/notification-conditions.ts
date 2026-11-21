@@ -1,9 +1,11 @@
 import type { Check, CheckResult, CheckStatus } from "../types.js";
 import { and, eq, resolveScope } from "../http/query.js";
 import {
+  conditionGates,
   errorResult,
   isTruthy,
   rowFinding,
+  scriptGates,
   str,
   triageZeroRead,
   withFindings,
@@ -17,19 +19,35 @@ function result(status: CheckStatus, message: string): CheckResult {
 }
 
 /**
+ * Whether a Notification is driven by something other than a record change:
+ * `generation_type` `event` (sent when an event fires) or `triggered` (sent
+ * by a flow). With no `generation_type` value, a named `event_name` stands in.
+ * `engine` (record inserted or updated) is record-driven whatever a leftover
+ * `event_name` says (ACL-20).
+ */
+function isEventDriven(row: Record<string, unknown>): boolean {
+  const type = str(row, "generation_type").toLowerCase();
+  if (type === "event" || type === "triggered") return true;
+  if (type !== "") return false;
+  return str(row, "event_name") !== "";
+}
+
+/**
  * Install hygiene (no certification rule number): an active Notification
- * (`sysevent_email_action`) that is sent **on update** of its table, is not
- * tied to an event, and carries neither a condition nor an advanced
- * (scripted) condition fires on **every** update of every record in that
- * table. On a busy table that is a mail storm and an outbound-queue load, not
- * a feature.
+ * (`sysevent_email_action`) that is sent **on insert or update** of its
+ * table, is not driven by an event or a flow, and carries neither a condition
+ * nor an advanced (scripted) condition fires on **every** insert or update of
+ * every record in that table. On a busy table that is a mail storm and an
+ * outbound-queue load, not a feature. A condition that matches everything (an
+ * empty encoded query, `^EQ`) and an advanced condition that is comment-only
+ * or always true count as none.
  *
  * The check reads every active Notification the app ships in the target scope
  * (metadata only — the `advanced_condition` script is read solely to test
  * whether it is empty and is never echoed):
  *
- * - **warn** — a Notification fires unconditionally on update, naming it and
- *   its table; the scope is unset; the read was security-trimmed; or a
+ * - **warn** — a Notification fires unconditionally on insert or update,
+ *   naming it and its table; the scope is unset; the read was security-trimmed; or a
  *   zero-row read could not be distinguished from missing read access. (A
  *   runaway notification is a performance and spam risk, not a security
  *   rule, so findings stay advisory.)
@@ -39,18 +57,18 @@ function result(status: CheckStatus, message: string): CheckResult {
 export const notificationConditions: Check = {
   name: NAME,
   description:
-    "No active Notification fires on every update of its table (no event, no condition).",
+    "No active Notification fires on every insert or update of its table (no event, no condition).",
   meta: {
     requires: "scope",
     summary:
-      "Every active 'send on update' Notification in scope is tied to an event or carries a condition, so none fires on every record update. Advisory — never fails.",
+      "Every active 'send on insert/update' Notification in scope is tied to an event or carries a condition, so none fires on every record change. Advisory — never fails.",
     severity: "advisory",
     tables: ["sysevent_email_action"],
     remediation:
-      "Give the Notification a condition (or an advanced condition script), or trigger it from a specific event instead of 'Updated' on the whole table.",
+      "Give the Notification a condition (or an advanced condition script), or trigger it from a specific event instead of 'Inserted' or 'Updated' on the whole table.",
     verdicts: {
       pass: "Every active Notification in scope is event-driven or conditioned, or the scope ships none.",
-      warn: "A Notification fires on every update of its table, no scope set, or a trimmed read.",
+      warn: "A Notification fires on every insert or update of its table, no scope set, or a trimmed read.",
       fail: "Never — install hygiene stays advisory.",
     },
   },
@@ -69,7 +87,7 @@ export const notificationConditions: Check = {
       const meta = await ctx.http.table("sysevent_email_action").queryWithMeta({
         sysparm_query: and(resolvedScope.clause, eq("active", "true")),
         sysparm_fields:
-          "sys_id,name,collection,event_name,condition,advanced_condition,action_insert,action_update",
+          "sys_id,name,collection,generation_type,event_name,condition,advanced_condition,action_insert,action_update",
       });
 
       if (meta.rows.length === 0) {
@@ -101,12 +119,18 @@ export const notificationConditions: Check = {
       };
       const unconditionalRows = meta.rows.filter(
         (row) =>
-          isTruthy(row, "action_update") &&
-          str(row, "event_name") === "" &&
-          str(row, "condition") === "" &&
-          str(row, "advanced_condition") === "",
+          (isTruthy(row, "action_update") || isTruthy(row, "action_insert")) &&
+          !isEventDriven(row) &&
+          !conditionGates(str(row, "condition")) &&
+          !scriptGates(str(row, "advanced_condition")),
       );
       const unconditional = unconditionalRows.map(labelOf);
+      // An insert-only Notification is its own finding kind; one that is also
+      // sent on update keeps the established `fires-on-every-update`.
+      const kindOf = (row: Record<string, unknown>): string =>
+        isTruthy(row, "action_update")
+          ? "fires-on-every-update"
+          : "fires-on-every-insert";
 
       if (unconditional.length > 0) {
         const trimmedNote = meta.securityTrimmed
@@ -115,7 +139,7 @@ export const notificationConditions: Check = {
         return withFindings(
           result(
             "warn",
-            `${unconditional.length} Notification(s) fire on every update of their table — no event, no condition and no advanced condition: ${unconditional.join(", ")}. Add a condition or trigger them from a specific event.` +
+            `${unconditional.length} Notification(s) fire on every insert or update of their table — no event, no condition and no advanced condition: ${unconditional.join(", ")}. Add a condition or trigger them from a specific event.` +
               trimmedNote,
           ),
           unconditionalRows.map((row) =>
@@ -123,7 +147,7 @@ export const notificationConditions: Check = {
               NAME,
               "sysevent_email_action",
               row,
-              "fires-on-every-update",
+              kindOf(row),
               labelOf,
             ),
           ),

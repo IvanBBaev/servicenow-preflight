@@ -116,21 +116,21 @@ test("warns when every matching notification is security-trimmed away", async ()
   assert.match(result.message, /\b3\b/);
 });
 
-test("warns naming the notification and its table when it fires on every update", async () => {
+test("warns naming the notification and its table when it fires on every insert or update", async () => {
   const result = await run(
     makeHttp({
       notifications: [CONDITIONED, STORM, EVENT_DRIVEN, SCRIPTED, INSERT_ONLY],
     }),
   );
   assert.equal(result.status, "warn");
-  assert.match(result.message, /1 Notification\(s\) fire on every update/);
+  assert.match(
+    result.message,
+    /2 Notification\(s\) fire on every insert or update/,
+  );
   assert.match(result.message, /Order changed \(x_acme_app_order\)/);
-  for (const clean of [
-    "Order shipped",
-    "Order escalated",
-    "Order flagged",
-    "Order created",
-  ]) {
+  // ACL-20: an insert-only storm is a storm too.
+  assert.match(result.message, /Order created \(x_acme_app_order\)/);
+  for (const clean of ["Order shipped", "Order escalated", "Order flagged"]) {
     assert.doesNotMatch(result.message, new RegExp(clean));
   }
   assert.doesNotMatch(result.message, /answer = current/);
@@ -180,12 +180,12 @@ test("a clean but security-trimmed read warns rather than passes", async () => {
 test("passes when every active notification is event-driven or conditioned", async () => {
   const result = await run(
     makeHttp({
-      notifications: [CONDITIONED, EVENT_DRIVEN, SCRIPTED, INSERT_ONLY],
-      totalCounts: { sysevent_email_action: 4 },
+      notifications: [CONDITIONED, EVENT_DRIVEN, SCRIPTED],
+      totalCounts: { sysevent_email_action: 3 },
     }),
   );
   assert.equal(result.status, "pass");
-  assert.match(result.message, /All 4 active Notification\(s\)/);
+  assert.match(result.message, /All 3 active Notification\(s\)/);
 });
 
 test("queries only active notifications in scope with the metadata columns", async () => {
@@ -201,6 +201,7 @@ test("queries only active notifications in scope with the metadata columns", asy
     "sys_id",
     "name",
     "collection",
+    "generation_type",
     "event_name",
     "condition",
     "advanced_condition",
@@ -245,13 +246,60 @@ function assertRowFindings(result, table, kinds) {
   }
 }
 
-test("emits one finding per notification firing on every update (F-R-3)", async () => {
+test("emits one finding per notification firing on every insert or update (F-R-3)", async () => {
   const result = await run(
     makeHttp({
       notifications: [CONDITIONED, STORM, EVENT_DRIVEN, SCRIPTED, INSERT_ONLY],
     }),
   );
   assert.equal(result.status, "warn");
-  assertRowFindings(result, "sysevent_email_action", ["fires-on-every-update"]);
+  assertRowFindings(result, "sysevent_email_action", [
+    "fires-on-every-update",
+    "fires-on-every-insert",
+  ]);
   assert.match(result.findings[0].location.recordName, /Order changed/);
+  assert.match(result.findings[1].location.recordName, /Order created/);
 });
+
+// ACL-20: what decides "unconditional" — generation type, an empty encoded
+// query, and an advanced condition that only ever answers true.
+test("an event- or flow-generated notification is not a storm without an event name", async () => {
+  for (const generation_type of ["event", "triggered"]) {
+    const result = await run(
+      makeHttp({
+        notifications: [{ ...STORM, generation_type }],
+        totalCounts: { sysevent_email_action: 1 },
+      }),
+    );
+    assert.equal(result.status, "pass", generation_type);
+  }
+});
+
+test("a record-generated notification is a storm whatever a leftover event name says", async () => {
+  const result = await run(
+    makeHttp({
+      notifications: [
+        { ...EVENT_DRIVEN, name: "Stale event", generation_type: "engine" },
+      ],
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /Stale event/);
+});
+
+for (const [label, patch] of [
+  ["an empty encoded query (^EQ)", { condition: "^EQ" }],
+  [
+    "an always-true advanced condition",
+    { advanced_condition: "answer = true;" },
+  ],
+  ["a comment-only advanced condition", { advanced_condition: "// TODO\n" }],
+]) {
+  test(`${label} conditions nothing`, async () => {
+    const result = await run(
+      makeHttp({ notifications: [{ ...STORM, ...patch }] }),
+    );
+    assert.equal(result.status, "warn");
+    assert.match(result.message, /Order changed/);
+  });
+}

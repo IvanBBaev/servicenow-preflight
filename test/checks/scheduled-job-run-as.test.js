@@ -9,10 +9,24 @@ const SCOPE = "x_acme_app";
 const INSTANCE = "https://dev12345.service-now.com";
 
 /** Assemble a fake client from Scheduled Job fixtures plus options. */
-function makeHttp({ jobs = [], fail, totalCounts, referenceFields } = {}) {
+function makeHttp({
+  jobs = [],
+  reports = [],
+  fail,
+  totalCounts,
+  referenceFields,
+} = {}) {
   return createFakeSnClient({
-    tables: { sysauto_script: inScope(jobs, SCOPE) },
-    totalCounts,
+    tables: {
+      sysauto_script: inScope(jobs, SCOPE),
+      sysauto_report: inScope(reports, SCOPE),
+    },
+    // The sibling job tables prove themselves empty unless a test says not.
+    totalCounts: {
+      sysauto_report: reports.length,
+      sysauto_template: 0,
+      ...totalCounts,
+    },
     referenceFields,
     fail,
   });
@@ -168,4 +182,67 @@ test("emits one finding per job pinned to a user (F-R-3)", async () => {
   assertRowFindings(result, "sysauto_script", ["runs-as-user"]);
   assert.equal(result.findings[0].location.sysId, "job2");
   assert.equal(result.findings[0].location.recordName, "Data Sync");
+});
+
+// ACL-21: Scheduled Reports and Template Generations pin a user too.
+test("warns on a sibling job table's pinned 'Run as'", async () => {
+  const result = await run(
+    makeHttp({
+      jobs: [{ sys_id: "job1", name: "Nightly Cleanup", run_as: "" }],
+      reports: [{ sys_id: "rep1", name: "Weekly Digest", run_as: "user123" }],
+      totalCounts: { sysauto_script: 1 },
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /Weekly Digest/);
+  assert.deepEqual(
+    result.findings.map((f) => [f.kind, f.location.table]),
+    [["runs-as-user", "sysauto_report"]],
+  );
+});
+
+test("skips a sibling job table the instance does not provide", async () => {
+  const result = await run(
+    makeHttp({
+      jobs: [{ sys_id: "job1", name: "Nightly Cleanup", run_as: "" }],
+      totalCounts: { sysauto_script: 1 },
+      fail: { table: { sysauto_template: { http: 404 } } },
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
+});
+
+test("a missing sysauto_script table is reported, not skipped like a sibling", async () => {
+  const result = await run(
+    makeHttp({ fail: { table: { sysauto_script: { http: 404 } } } }),
+  );
+  // The runner turns this into an error: sysauto_script is not optional.
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /not found.*sysauto_script/);
+  assert.ok(!scheduledJobRunAs.meta.optionalTables.includes("sysauto_script"));
+});
+
+test("rows without a 'Run as' column never pass", async () => {
+  const result = await run(
+    makeHttp({
+      jobs: [{ sys_id: "job1", name: "Nightly Cleanup" }],
+      totalCounts: { sysauto_script: 1 },
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /returned no 'Run as' column/);
+});
+
+test("an unproven zero-row sibling read never passes", async () => {
+  const result = await run(
+    makeHttp({
+      jobs: [{ sys_id: "job1", name: "Nightly Cleanup", run_as: "" }],
+      totalCounts: { sysauto_script: 1, sysauto_template: undefined },
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assert.match(
+    result.message,
+    /no pre-trim count arrived for sysauto_template/,
+  );
 });

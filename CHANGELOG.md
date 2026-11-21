@@ -664,6 +664,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hygiene checks judge what really gates** (RR-59, ACL-15, ACL-16, ACL-17,
+  ACL-18, ACL-19, ACL-20, ACL-21) — eight checks passed on rules that gate
+  nothing or missed what the app ships. `ui-action-gating` and
+  `notification-conditions` treat an always-true condition (`1==1`, `(true)`,
+  `'a'=='a'`, `!0`) or a comment-only one as no condition, and
+  `notification-conditions` now also flags a Notification that sends on every
+  insert. `script-field-exposure` covers `script_server`, `script_client`,
+  `email_script` and `condition_string` columns, and a role-gated table-level
+  write ACL turns a missing field ACL into a warn instead of a pass or fail.
+  `acl-out-of-scope` no longer counts a sibling scope's prefixed table
+  (`x_acme_app_ext_task`) as the app's own unless the table read was trimmed
+  or unproven. `module-roles` skips modules under an inactive menu, and
+  `module-roles` and `portal-roles` no longer count the `public` role as a
+  gate (`portal-roles` flags logged-in-only widgets only when the page is
+  public). `cors-rules` also reads active rules of other scopes that target the
+  app's REST APIs and fails public-suffix wildcards (`*.co.uk`,
+  `*.github.io`, `*.herokuapp.com`). `scheduled-job-run-as` reads
+  `sysauto_report` and `sysauto_template` next to `sysauto_script` (skipping
+  a table the instance lacks) and warns when a job's Run-as cannot be read.
+
 - **Schema-dependent checks read the columns that decide** (RR-58, ACL-4,
   ACL-5, ACL-9, ACL-10, ACL-11, ACL-12, ACL-13) — four checks filtered on, or
   judged by, the wrong columns. `property-privacy` no longer adds an

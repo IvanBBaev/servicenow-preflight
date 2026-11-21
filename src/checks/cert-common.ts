@@ -319,19 +319,71 @@ export async function fetchNamedAcls(
 export const PUBLIC_ROLE = "public";
 
 /**
- * Whether an ACL script actually decides anything. Comments and whitespace are
- * stripped first, so a script that is only `// TODO` is no script; a script
- * that only ever answers true (`answer = true;`, `true`, `answer = !0;`, …)
- * gates nothing either (ACL-3).
+ * A script or condition expression with its comments, all whitespace and any
+ * trailing semicolons removed — the form {@link isConstantTrue} compares. A
+ * text that is only a comment normalises to `""`.
  */
-export function scriptGates(script: string): boolean {
-  const code = script
+export function normalizeScript(script: string): string {
+  return script
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/[^\n]*/g, "")
     .replace(/\s+/g, "")
     .replace(/;+$/, "");
+}
+
+/** A JavaScript literal whose comparison with itself is always true. */
+const SELF_EQUAL_LITERAL =
+  /^(?:true|false|null|-?\d+(?:\.\d+)?|'[^']*'|"[^"]*")$/;
+
+/** Whether the `(` at index 0 closes at the last character of `code`. */
+function wrapsWhole(code: string): boolean {
+  let depth = 0;
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] === "(") depth += 1;
+    else if (code[i] === ")") {
+      depth -= 1;
+      if (depth === 0) return i === code.length - 1;
+    }
+  }
+  return false;
+}
+
+/**
+ * Strip parentheses that wrap the whole expression: `((x))` → `x`, but
+ * `(a)==(b)` stays as it is.
+ */
+function unwrapParens(code: string): string {
+  let c = code;
+  while (c.startsWith("(") && wrapsWhole(c)) c = c.slice(1, -1);
+  return c;
+}
+
+/**
+ * Whether a {@link normalizeScript normalised} expression is always true: a
+ * truthy constant (`true`, `1`, `!0`, `!false`, `!!1`, `!!true`) or a literal
+ * compared with itself (`1==1`, `true===true`, `'a'=='a'`), with or without
+ * wrapping parentheses (ACL-3, ACL-15).
+ */
+export function isConstantTrue(code: string): boolean {
+  const c = unwrapParens(code);
+  if (/^(?:true|1|!0|!false|!!1|!!true)$/.test(c)) return true;
+  const m = /^(.+?)(===?)(.+)$/.exec(c);
+  if (!m) return false;
+  const left = unwrapParens(m[1] ?? "");
+  const right = unwrapParens(m[3] ?? "");
+  return left === right && SELF_EQUAL_LITERAL.test(left);
+}
+
+/**
+ * Whether an ACL script actually decides anything. Comments and whitespace are
+ * stripped first, so a script that is only `// TODO` is no script; a script
+ * that only ever answers true (`answer = true;`, `true`, `answer = !0;`,
+ * `answer = (1 == 1);`, …) gates nothing either (ACL-3).
+ */
+export function scriptGates(script: string): boolean {
+  const code = normalizeScript(script);
   if (code === "") return false;
-  return !/^(answer=)?\(*(true|!0|!false|!!1|1==1|1===1)\)*$/.test(code);
+  return !isConstantTrue(code.replace(/^answer=/, ""));
 }
 
 /**

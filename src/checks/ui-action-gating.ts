@@ -10,6 +10,8 @@ import {
 } from "../http/query.js";
 import {
   errorResult,
+  isConstantTrue,
+  normalizeScript,
   rowFinding,
   str,
   triageZeroRead,
@@ -24,12 +26,13 @@ function result(status: CheckStatus, message: string): CheckResult {
 }
 
 /**
- * A condition that gates nothing: empty, whitespace, or the literal `true`
- * (which the platform evaluates as "always show").
+ * A condition that gates nothing: empty, whitespace or comment-only once
+ * normalised, or an expression that is always true (`true`, `1==1`,
+ * `(true)`, …), which the platform evaluates as "always show" (ACL-15).
  */
 function isVacuousCondition(condition: string): boolean {
-  const c = condition.trim().replace(/;$/, "").trim();
-  return c === "" || c.toLowerCase() === "true";
+  const code = normalizeScript(condition);
+  return code === "" || isConstantTrue(code) || code.toLowerCase() === "true";
 }
 
 /** Display handle for one UI Action: `name (table)`, falling back to sys_id. */
@@ -77,8 +80,8 @@ async function fetchRoleGated(
  * the form or list it sits on.
  *
  * This check inspects every **active** UI Action in the target scope. One is
- * gated when it has a non-trivial `condition` (empty, whitespace or a bare
- * `true` count as none) or at least one "Requires role" entry in
+ * gated when it has a non-trivial `condition` (empty, whitespace,
+ * comment-only or always-true text such as `true` or `1==1` count as none) or at least one "Requires role" entry in
  * `sys_ui_action_role`. Whether the condition itself is meaningful is left to
  * review — only its presence is checked.
  *

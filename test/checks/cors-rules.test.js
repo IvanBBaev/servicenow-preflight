@@ -12,9 +12,14 @@ const INSTANCE = "https://dev12345.service-now.com";
 const SENTINEL = "SENTINEL_9f3a";
 
 /** Assemble a fake client from CORS rule fixtures plus options. */
-function makeHttp({ rules = [], fail, totalCounts } = {}) {
+function makeHttp({ rules = [], foreignRules = [], fail, totalCounts } = {}) {
   return createFakeSnClient({
-    tables: { sys_cors_rule: inScope(rules, SCOPE, { active: "true" }) },
+    tables: {
+      sys_cors_rule: [
+        ...inScope(rules, SCOPE, { active: "true" }),
+        ...foreignRules.map((row) => ({ active: "true", ...row })),
+      ],
+    },
     totalCounts,
     fail,
   });
@@ -78,21 +83,74 @@ test("warns when no scope is set", async () => {
   assert.match(result.message, /No scope set/);
 });
 
-test("reads active in-scope rules with the card's fields and no limit", async () => {
+test("reads active in-scope rules and rules on the app's APIs with the card's fields and no limit", async () => {
   const { http, calls } = tracked(
     makeHttp({ rules: [rule("Partner", "https://a.example.com")] }),
   );
   await run(http);
   const reads = calls.filter((c) => c.table === "sys_cors_rule");
-  assert.equal(reads.length, 1);
-  const params = reads[0].params;
-  assert.match(params.sysparm_query, /\^active=true$/);
-  assert.match(params.sysparm_query, /x_acme_app/);
-  assert.equal(
-    params.sysparm_fields,
-    "sys_id,name,domain,rest_api,http_method,max_age,active",
+  assert.equal(reads.length, 2);
+  for (const { params } of reads) {
+    assert.match(params.sysparm_query, /\^active=true$/);
+    assert.match(params.sysparm_query, /x_acme_app/);
+    assert.equal(
+      params.sysparm_fields,
+      "sys_id,name,domain,rest_api,http_method,max_age,active",
+    );
+    assert.equal(params.sysparm_limit, undefined);
+  }
+  assert.match(reads[1].params.sysparm_query, /^rest_api\.sys_scope/);
+});
+
+test("fails a global-scope wildcard rule that points at the app's REST API (ACL-19)", async () => {
+  const result = await run(
+    makeHttp({
+      rules: [rule("Partner", "https://a.example.com")],
+      foreignRules: [
+        {
+          ...rule("Global Open", "*"),
+          "sys_scope.scope": "global",
+          "rest_api.sys_scope.scope": SCOPE,
+        },
+        {
+          ...rule("Other App", "*"),
+          "sys_scope.scope": "global",
+          "rest_api.sys_scope.scope": "x_other_app",
+        },
+      ],
+    }),
   );
-  assert.equal(params.sysparm_limit, undefined);
+  assert.equal(result.status, "fail", result.message);
+  assert.match(result.message, /Global Open/);
+  assert.doesNotMatch(result.message, /Other App/);
+});
+
+test("a rule both shipped by the app and on its API is reported once (ACL-19)", async () => {
+  const result = await run(
+    makeHttp({
+      rules: [{ ...rule("Open Door", "*"), "rest_api.sys_scope.scope": SCOPE }],
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /^1 CORS rule\(s\)/);
+  assert.equal(result.findings?.length, 1);
+});
+
+for (const domain of [
+  "*.co.uk",
+  "https://*.github.io",
+  "*.com.au",
+  "*.herokuapp.com",
+]) {
+  test(`a wildcard over the public suffix ${domain} fails, not warns (ACL-19)`, async () => {
+    const result = await run(makeHttp({ rules: [rule("Shared", domain)] }));
+    assert.equal(result.status, "fail", result.message);
+  });
+}
+
+test("a wildcard over one owner's domain under a public suffix only warns (ACL-19)", async () => {
+  const result = await run(makeHttp({ rules: [rule("Acme", "*.acme.co.uk")] }));
+  assert.equal(result.status, "warn", result.message);
 });
 
 test("passes when every rule names an exact origin", async () => {

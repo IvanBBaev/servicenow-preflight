@@ -115,7 +115,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "Every script-typed column ships with an active field write ACL.",
     "fail": "A script column has no active field write ACL, or a read was security-trimmed.",
-    "warn": "No scope set, or an ambiguous zero-row read.",
+    "warn": "A script column guarded only by a role-gated table write ACL, no scope set, or an ambiguous read.",
     "pass": "Every script column carries an active field write ACL, or the scope ships none."
   },
   {
@@ -124,7 +124,7 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "Scheduled Jobs leave 'Run as' empty so they run as system. Advisory — never fails.",
     "fail": "Never — install hygiene stays advisory.",
-    "warn": "A job pins 'Run as' to a named user, no scope set, or a trimmed read.",
+    "warn": "A job pins 'Run as' to a named user, no scope set, a trimmed read, or an unreadable Run as.",
     "pass": "Every scheduled job in scope runs as system, or the scope ships none."
   },
   {
@@ -178,8 +178,8 @@ window.PREFLIGHT_CHECKS = [
     "tag": "scope",
     "desc": "Service Portal widgets and pages carry roles unless deliberately public. Advisory — never fails.",
     "fail": "Never — deliberate exceptions are a reviewer call.",
-    "warn": "A role-less widget or page, public ones called out, no scope, or a trimmed read.",
-    "pass": "Every widget and page in scope carries a role, or the scope ships none."
+    "warn": "A role-less page or public widget, public ones called out, no scope, or a trimmed read.",
+    "pass": "Every page and public widget in scope carries a role, or the scope ships none."
   },
   {
     "code": "21",
@@ -197,7 +197,7 @@ window.PREFLIGHT_CHECKS = [
     "desc": "Navigator modules are gated by their own or their menu's roles. Advisory — never fails.",
     "fail": "Never — module visibility is a usability finding.",
     "warn": "A module shown to every user, an unreadable menu, no scope, or a trimmed read.",
-    "pass": "Every active module in scope is gated, or the scope ships none."
+    "pass": "Every active module in scope is gated or under an inactive menu, or the scope ships none."
   },
   {
     "code": "23",
@@ -248,9 +248,9 @@ window.PREFLIGHT_CHECKS = [
     "code": "28",
     "name": "notification-conditions",
     "tag": "scope",
-    "desc": "Every active 'send on update' Notification in scope is tied to an event or carries a condition, so none fires on every record update. Advisory — never fails.",
+    "desc": "Every active 'send on insert/update' Notification in scope is tied to an event or carries a condition, so none fires on every record change. Advisory — never fails.",
     "fail": "Never — install hygiene stays advisory.",
-    "warn": "A Notification fires on every update of its table, no scope set, or a trimmed read.",
+    "warn": "A Notification fires on every insert or update of its table, no scope set, or a trimmed read.",
     "pass": "Every active Notification in scope is event-driven or conditioned, or the scope ships none."
   },
   {
@@ -284,8 +284,8 @@ window.PREFLIGHT_CHECKS = [
     "code": "32",
     "name": "cors-rules",
     "tag": "scope",
-    "desc": "Active CORS rules in scope name an exact origin — never `*` or a bare-TLD wildcard.",
-    "fail": "A rule allows any origin (*, empty or *.tld), or the read was security-trimmed.",
+    "desc": "Active CORS rules in scope or on the app's REST APIs name an exact origin — never `*`, a bare-TLD or a public-suffix wildcard.",
+    "fail": "A rule allows any origin (*, empty, *.tld or a public suffix), or a read was security-trimmed.",
     "warn": "A rule uses a wildcard sub-domain, no scope set, or an ambiguous read.",
     "pass": "Every active CORS rule names an exact origin, or the scope ships none."
   },

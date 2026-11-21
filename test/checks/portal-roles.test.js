@@ -91,20 +91,26 @@ test("passes when every widget and page carries a role", async () => {
     }),
   );
   assert.equal(result.status, "pass", result.message);
-  assert.match(result.message, /All 1 widget\(s\) and 1 page\(s\)/);
+  assert.match(
+    result.message,
+    /All 1 page\(s\) .* none of the 1 widget\(s\) is public without one/,
+  );
 });
 
-test("warns on a role-less widget and page, never failing", async () => {
+test("warns on a role-less page and public widget, never failing", async () => {
   const result = await run(
     makeHttp({
-      widgets: [widget("Asset List"), widget("Gated", { roles: "itil" })],
+      widgets: [
+        widget("Asset List", { isPublic: true }),
+        widget("Gated", { roles: "itil", isPublic: true }),
+      ],
       pages: [page("acme_home")],
     }),
   );
   assert.equal(result.status, "warn");
   assert.match(
     result.message,
-    /1 widget\(s\) with no roles — open to every logged-in user: Asset List/,
+    /1 public widget\(s\) with no roles — reachable without logging in: Asset List/,
   );
   assert.match(result.message, /1 page\(s\) with no roles.*acme_home/);
   assert.doesNotMatch(result.message, /Gated/);
@@ -142,7 +148,9 @@ test("a public widget WITH roles is not flagged", async () => {
 
 test("a roles list of only commas and blanks counts as no roles", async () => {
   const result = await run(
-    makeHttp({ widgets: [widget("Blank Roles", { roles: " , ," })] }),
+    makeHttp({
+      widgets: [widget("Blank Roles", { roles: " , ,", isPublic: true })],
+    }),
   );
   assert.equal(result.status, "warn");
   assert.match(result.message, /Blank Roles/);
@@ -157,7 +165,7 @@ test("labels fall back to id, then title/sys_id", async () => {
           name: "",
           id: "fallback-id",
           roles: "",
-          public: "false",
+          public: "true",
         },
       ],
       pages: [
@@ -213,7 +221,7 @@ test("warns on a partially trimmed read even when every visible row has roles", 
 test("findings under a trimmed read note what was not inspected", async () => {
   const result = await run(
     makeHttp({
-      widgets: [widget("Open")],
+      widgets: [widget("Open", { isPublic: true })],
       totalCounts: { sp_widget: 5, sp_page: 0 },
     }),
   );
@@ -257,10 +265,13 @@ test("reports error on an HTTP error reading sp_page", async () => {
   assert.match(result.message, /HTTP 500/);
 });
 
-test("emits one finding per role-less widget and page (F-R-3)", async () => {
+test("emits one finding per role-less page and public widget (F-R-3)", async () => {
   const result = await run(
     makeHttp({
-      widgets: [widget("Asset List"), widget("Gated", { roles: "itil" })],
+      widgets: [
+        widget("Asset List", { isPublic: true }),
+        widget("Gated", { roles: "itil" }),
+      ],
       pages: [page("acme_home")],
     }),
   );
@@ -268,8 +279,32 @@ test("emits one finding per role-less widget and page (F-R-3)", async () => {
   assert.deepEqual(
     result.findings.map((f) => [f.kind, f.location.table]),
     [
-      ["no-role", "sp_widget"],
+      ["public-no-role", "sp_widget"],
       ["no-role", "sp_page"],
     ],
   );
+});
+
+// ACL-18: a widget is reached through a page, and `public` is no role.
+test("a non-public role-less widget inherits its page's gate and is no finding", async () => {
+  const result = await run(
+    makeHttp({
+      widgets: [widget("Inner Widget")],
+      pages: [page("acme_home", { roles: "x_acme_app.user" })],
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
+  assert.equal(result.findings, undefined);
+});
+
+test("the 'public' role gates nothing", async () => {
+  const result = await run(
+    makeHttp({
+      widgets: [widget("Open Banner", { roles: "public", isPublic: true })],
+      pages: [page("acme_home", { roles: " public " })],
+    }),
+  );
+  assert.equal(result.status, "warn");
+  assert.match(result.message, /Open Banner/);
+  assert.match(result.message, /acme_home/);
 });

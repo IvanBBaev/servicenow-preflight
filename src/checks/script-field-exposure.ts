@@ -2,7 +2,9 @@ import type { Check, CheckResult, CheckStatus, Finding } from "../types.js";
 import { and, eq, inClause, resolveScope } from "../http/query.js";
 import {
   errorResult,
+  fetchAclRolesByAcl,
   isTruthy,
+  PUBLIC_ROLE,
   rowFinding,
   str,
   triageZeroRead,
@@ -11,8 +13,20 @@ import {
 
 const NAME = "script-field-exposure";
 
-/** The `sys_dictionary.internal_type` values that hold executable server code. */
-const SCRIPT_TYPES = ["script", "script_plain", "script_server"] as const;
+/**
+ * The `sys_dictionary.internal_type` values that hold executable code: the
+ * three server script types, client scripts (`script_client`), mail scripts
+ * (`email_script`) and evaluated condition strings (`condition_string`) — all
+ * verified in `sys_glide_object` (ACL-16).
+ */
+const SCRIPT_TYPES = [
+  "script",
+  "script_plain",
+  "script_server",
+  "script_client",
+  "email_script",
+  "condition_string",
+] as const;
 
 /** Build a well-formed result for this check. */
 function result(status: CheckStatus, message: string): CheckResult {
@@ -29,14 +43,18 @@ function result(status: CheckStatus, message: string): CheckResult {
  * The check lists every script-typed column the app ships (`sys_dictionary`
  * in scope with `internal_type` in {@link SCRIPT_TYPES}) and requires each to
  * be covered by an **active field write ACL** in the same scope — either the
- * exact `table.element` ACL or the table's `table.*` wildcard. A table-level
- * (row) write ACL does not count: certification wants the field itself locked.
- * Whether the ACL is properly role-gated is `acl-role-sanity`'s job.
+ * exact `table.element` ACL or the table's `table.*` wildcard. Certification
+ * wants the field itself locked, so a table-level (row) write ACL does not
+ * clear the column — but an active one that is role-gated (a role other than
+ * `public`) does keep non-admins without that role out, so such a column is
+ * a warning, not a failure (ACL-16). Whether a field ACL is properly
+ * role-gated is `acl-role-sanity`'s job.
  *
  * - **fail** — a script column has no matching active field write ACL (or only
- *   an inactive one), or either read was security-trimmed (a partially visible
- *   table cannot clear the gate).
- * - **warn** — the scope is unset, or a zero-row read could not be
+ *   an inactive one) and no role-gated table write ACL, or a read was
+ *   security-trimmed (a partially visible table cannot clear the gate).
+ * - **warn** — a script column is guarded only by a role-gated table-level
+ *   write ACL, the scope is unset, or a zero-row read could not be
  *   distinguished from missing read access.
  * - **pass** — every script column in scope is covered by an active field
  *   write ACL, or the instance itself reports the scope ships none.
@@ -49,12 +67,12 @@ export const scriptFieldExposure: Check = {
     requires: "scope",
     rule: "1.4",
     severity: "blocker",
-    tables: ["sys_dictionary", "sys_security_acl"],
+    tables: ["sys_dictionary", "sys_security_acl", "sys_security_acl_role"],
     remediation:
       "Add an active field-level write ACL (<table>.<column>) for every script-typed column in the app, restricted to an admin role, so non-admins cannot write executable code.",
     verdicts: {
       pass: "Every script column carries an active field write ACL, or the scope ships none.",
-      warn: "No scope set, or an ambiguous zero-row read.",
+      warn: "A script column guarded only by a role-gated table write ACL, no scope set, or an ambiguous read.",
       fail: "A script column has no active field write ACL, or a read was security-trimmed.",
     },
   },
@@ -115,11 +133,18 @@ export const scriptFieldExposure: Check = {
 
       const activeAcls = new Set<string>();
       const inactiveAcls = new Set<string>();
+      // Active table-level (row) write ACLs by table: name without a dot.
+      const tableAcls = new Map<string, string[]>();
       for (const row of aclMeta.rows) {
         const name = str(row, "name").toLowerCase();
         if (name === "") continue;
-        if (isTruthy(row, "active")) activeAcls.add(name);
-        else inactiveAcls.add(name);
+        if (isTruthy(row, "active")) {
+          activeAcls.add(name);
+          const id = str(row, "sys_id");
+          if (!name.includes(".") && id !== "") {
+            tableAcls.set(name, [...(tableAcls.get(name) ?? []), id]);
+          }
+        } else inactiveAcls.add(name);
       }
 
       const aclNamesFor = (row: Record<string, unknown>): string[] => {
@@ -129,9 +154,36 @@ export const scriptFieldExposure: Check = {
         return [`${table}.${element}`, `${table}.*`];
       };
 
+      // The table-level ACLs that gate by a real role. `public` grants
+      // everyone, and a role whose name is not readable is not proven to be
+      // anything else, so neither counts.
+      const tablesOfUncovered = new Set<string>();
+      for (const row of meta.rows) {
+        const candidates = aclNamesFor(row);
+        if (candidates.length === 0) continue;
+        if (candidates.some((n) => activeAcls.has(n))) continue;
+        tablesOfUncovered.add(str(row, "name").toLowerCase());
+      }
+      const tableAclIds = [...tablesOfUncovered].flatMap(
+        (t) => tableAcls.get(t) ?? [],
+      );
+      const roleLinks = await fetchAclRolesByAcl(ctx.http, tableAclIds);
+      const gatedByTableAcl = (table: string): boolean =>
+        (tableAcls.get(table) ?? []).some((id) =>
+          (roleLinks.byAcl.get(id) ?? []).some((link) => {
+            const role = str(link, "sys_user_role.name").toLowerCase();
+            return (
+              str(link, "sys_user_role") !== "" &&
+              role !== "" &&
+              role !== PUBLIC_ROLE
+            );
+          }),
+        );
+
       const missing: string[] = [];
       const inactiveOnly: string[] = [];
       const unverifiable: string[] = [];
+      const tableOnly: string[] = [];
       const findings: Finding[] = [];
       for (const row of meta.rows) {
         const label =
@@ -152,6 +204,18 @@ export const scriptFieldExposure: Check = {
           flag("unverifiable");
         } else if (candidates.some((n) => activeAcls.has(n))) {
           continue;
+        } else if (gatedByTableAcl(str(row, "name").toLowerCase())) {
+          tableOnly.push(label);
+          const finding = rowFinding(
+            NAME,
+            "sys_dictionary",
+            row,
+            "table-acl-only:write",
+            () => label,
+          );
+          // Advisory: the row is guarded, just not at the field.
+          finding.status = "warn";
+          findings.push(finding);
         } else if (candidates.some((n) => inactiveAcls.has(n))) {
           inactiveOnly.push(label);
           flag("acl-inactive:write");
@@ -184,10 +248,17 @@ export const scriptFieldExposure: Check = {
             `${unverifiable.length} dictionary row(s) could not be verified (table or element name missing): ${unverifiable.join(", ")}`,
           );
         }
+        if (tableOnly.length > 0) {
+          parts.push(
+            `${tableOnly.length} are guarded only by a role-gated table-level write ACL (add a field ACL): ${tableOnly.join(", ")}`,
+          );
+        }
         const trimmedNote =
           meta.securityTrimmed || aclMeta.securityTrimmed
             ? " (Note: the read was security-trimmed, so this list may be incomplete.)"
-            : "";
+            : roleLinks.trimmed
+              ? " (Note: the sys_security_acl_role read was security-trimmed, so a table-level ACL's role this account cannot see may guard some of these.)"
+              : "";
         return withFindings(
           result("fail", parts.join("; ") + "." + trimmedNote),
           findings,
@@ -202,6 +273,16 @@ export const scriptFieldExposure: Check = {
           `Cannot fully inspect the script-field write ACL gate in scope "${scope}" — the ${
             meta.securityTrimmed ? "sys_dictionary" : "sys_security_acl"
           } read was security-trimmed. Grant the account read access; the rows it cannot see are the ones this gate cannot clear.`,
+        );
+      }
+
+      if (tableOnly.length > 0) {
+        return withFindings(
+          result(
+            "warn",
+            `${tableOnly.length} script column(s) are guarded only by a role-gated table-level write ACL — certification wants a field write ACL on each: ${tableOnly.join(", ")}.`,
+          ),
+          findings,
         );
       }
 
