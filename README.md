@@ -323,8 +323,11 @@ name a file inside the working directory; pass `--trace` to write elsewhere:
 | `run.end`     | `ts`, `ms`, `summary`                                                                                                        |
 
 The trace is allowlisted field by field: it never holds query values, row
-data, headers, credentials or user names. A non-table path keeps its fixed
-segments only — a sys_id becomes `:id`, anything else variable `:value`. The
+data, headers, credentials or user names. A Table API path keeps only its
+table; a few known shapes keep their template (`/api/sn_cicd/progress/:id`,
+`/api/now/attachment/:id/file`, `/api/now/stats/:table`, `/oauth_token.do`);
+any other path keeps only its namespace when that is `now`, `global` or
+`sn_*` (`/api/now/:path`), and becomes `/api/:path` or `:path` otherwise. The
 file is created with mode `0600` (an existing file is narrowed to it) and
 never leaves the machine. With several instances, one file holds every run.
 
@@ -351,17 +354,36 @@ npx servicenow-preflight run --replay fixtures/dev --format json
 A recording is redacted as it is written:
 
 - a Table API row keeps only the fields the request asked for;
-- values under secret-looking names (`password`, `token`, `secret`,
-  `api_key`, …), and a `value` next to such a `name`, become `<redacted>`;
-- tokens anywhere in text (JWTs, `Bearer`/`Basic` credentials, PEM private
-  keys, cloud and GitHub keys) are cut out;
+- values under secret-looking names (`password`, `userPassword`, `pwd`,
+  `glide.smtp.pwd`, `token`, `secret`, `api_key`, `cookie`, `session_id`,
+  `u_pin`, `x.basic.auth.pass`, …), and a `value` next to such a `name`,
+  become `<redacted>`;
+- secrets anywhere in text are cut out: JWTs, `Authorization` values of any
+  length, `Bearer`/`Basic` credentials, URL userinfo
+  (`https://user:pass@host`), PEM private keys, cloud and GitHub keys, and
+  literals assigned or passed to a secret-looking name in a script
+  (`var userPassword = "…"`, `{\"password\":\"…\"}`,
+  `setBasicAuth("u", "…")`, `gs.setProperty("x.pwd", "…")`,
+  `?apikey=…`);
 - the instance host becomes `instance.invalid`; `index.json` keeps only a
   hash of it;
 - `sys_user` / `sys_user_group` names, user names and emails become stable
   pseudonyms (`user-0001`, `user-0001@example.invalid`) — `--record-raw`
-  keeps them;
+  keeps them. The request key stored with each exchange and the `link`
+  header get the same treatment: a secret-named query parameter becomes
+  `<redacted>`, and emails and the `user_name` / `email` /
+  `sys_created_by` / `sys_updated_by` operands of a `sysparm_query` become
+  pseudonyms;
 - only `content-type`, `x-total-count`, `link` and `retry-after` headers are
   kept; credentials and OAuth token traffic are never recorded.
+
+After redaction every file is scanned once more; one that still looks like
+it holds a secret is not written and the run fails. The directory is created
+`0700` and each file is written atomically with mode `0600`. Starting a
+recording removes the `index.json` and exchange files an earlier recording
+left in the directory (other files stay), so a re-record never replays a
+stale answer. Replay rejects an exchange file that is not one (no valid HTTP
+status, non-string headers, a different method).
 
 Redaction is best effort: review a recording before you commit it. On the
 first recording into a git work tree, the CLI warns when the directory is not
@@ -554,7 +576,13 @@ top of whatever is selected. A `.env` file in the working directory is loaded
 automatically, but **real environment variables always win** over it — also
 across an instance namespace: a `.env` `SNPF_PROD_PROXY` is dropped when the
 real environment sets `SNPF_PROXY`. Its values are read into a private copy and
-are never exported into `process.env`. With no
+are never exported into `process.env`. The file follows the dotenv grammar:
+`export KEY=value`, `#` comments, a `#` in an unquoted value starts a
+comment only after whitespace, single, double and backtick quotes (which may
+span lines, so a PEM key fits), and `\n` / `\t` / `\"` escapes inside double
+quotes. A line it cannot read — no `=`, an unterminated quote, text after a
+closing quote — fails the run with its file and line number (never its
+value) instead of being skipped. With no
 credentials at all, `connectivity-auth` reports `warn` (not `fail`) and
 network-dependent checks degrade to advisory warnings.
 

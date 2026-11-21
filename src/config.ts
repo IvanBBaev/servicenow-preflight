@@ -510,32 +510,109 @@ function oauthCommon(env: NodeJS.ProcessEnv): {
   };
 }
 
+const DOTENV_KEY = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+const DOTENV_ESCAPES: Record<string, string> = {
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  '"': '"',
+  "\\": "\\",
+};
+
 /**
- * Parse the right-hand side of a `.env` assignment. A quoted value keeps its
- * contents verbatim, including any `#` (so `SNPF_PASS="a#b"` is `a#b`); an
- * unquoted value has an inline `#` comment (introduced by whitespace) stripped,
- * so `SNPF_TOKEN=abc # note` yields `abc`. A `#` with no leading whitespace is
- * part of the value (`SNPF_TOKEN=ab#cd` stays `ab#cd`).
+ * CFG-4: parse `.env` text with the dotenv grammar, and fail loudly on anything
+ * it cannot read exactly (a guessed value would silently become a wrong
+ * password). Errors name the file and line, never the value.
+ *
+ * - `KEY=value`, optional `export ` prefix, whitespace around `=` allowed; the
+ *   key is `[A-Za-z_][A-Za-z0-9_.-]*`.
+ * - Unquoted: up to end of line, trimmed; ` #` (whitespace then `#`) starts a
+ *   comment, a `#` inside the value (`ab#cd`) is kept.
+ * - Double quotes: may span lines (a PEM block); `\n`, `\r`, `\t`, `\"` and
+ *   `\\` are escapes; any other backslash is kept as written.
+ * - Single quotes or backticks: literal, may span lines, no escapes.
+ * - After a closing quote only whitespace or a `#` comment may follow.
+ * - Blank lines and `#` lines are skipped; any other line is an error.
  */
-function parseDotEnvValue(raw: string): string {
-  const quote = raw[0];
-  if ((quote === '"' || quote === "'") && raw.indexOf(quote, 1) >= 0) {
-    return raw.slice(1, raw.indexOf(quote, 1));
+export function parseDotEnv(
+  text: string,
+  file = ".env",
+): Record<string, string> {
+  const values: Record<string, string> = {};
+  const src = text.replace(/\r\n?/g, "\n");
+  let i = 0;
+  let line = 1;
+  const fail = (at: number, why: string): never => {
+    throw new UsageError(`${file}:${at}: ${why}`);
+  };
+  while (i < src.length) {
+    let nl = src.indexOf("\n", i);
+    if (nl < 0) nl = src.length;
+    const raw = src.slice(i, nl);
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      i = nl + 1;
+      line++;
+      continue;
+    }
+    const eq = raw.indexOf("=");
+    const startLine = line;
+    if (eq < 0) fail(startLine, "expected KEY=value");
+    const key = raw
+      .slice(0, eq)
+      .trim()
+      .replace(/^export\s+/, "");
+    if (!DOTENV_KEY.test(key)) fail(startLine, "invalid variable name");
+    let j = i + eq + 1;
+    while (j < nl && (src[j] === " " || src[j] === "\t")) j++;
+    const quote = src[j];
+    let value: string;
+    if (quote === '"' || quote === "'" || quote === "`") {
+      let k = j + 1;
+      let out = "";
+      for (;;) {
+        if (k >= src.length) fail(startLine, `unterminated ${quote} quote`);
+        const ch = src[k];
+        if (ch === quote) break;
+        if (ch === "\n") line++;
+        if (quote === '"' && ch === "\\" && k + 1 < src.length) {
+          const nx = src[k + 1] ?? "";
+          if (Object.hasOwn(DOTENV_ESCAPES, nx)) {
+            out += DOTENV_ESCAPES[nx]!;
+            k += 2;
+            continue;
+          }
+        }
+        out += ch;
+        k++;
+      }
+      value = out;
+      let e = src.indexOf("\n", k + 1);
+      if (e < 0) e = src.length;
+      const tail = src.slice(k + 1, e).trim();
+      if (tail && !tail.startsWith("#")) {
+        fail(line, "unexpected text after the closing quote");
+      }
+      nl = e;
+    } else {
+      const v = src.slice(j, nl);
+      const hash = v.search(/\s#/);
+      value = (hash >= 0 ? v.slice(0, hash) : v).trim();
+    }
+    values[key] = value;
+    i = nl + 1;
+    line++;
   }
-  const hash = raw.search(/\s#/);
-  return (hash >= 0 ? raw.slice(0, hash) : raw).trimEnd();
+  return values;
 }
 
 /**
- * Read a minimal `.env` file from `cwd` into a fresh key → value map (empty
- * when there is no `.env`). Pure: it never touches `process.env` (F-X-9) — the
- * caller decides how the values merge with the real environment. Supports
- * `KEY=value`, a leading `export ` on the key, whole-line and inline `#`
- * comments, and optional surrounding quotes. No dependency — a tiny
- * hand-rolled parser.
+ * Read the `.env` file in `cwd` into a fresh key → value map (empty when there
+ * is no `.env`). Pure: it never touches `process.env` (F-X-9) — the caller
+ * decides how the values merge with the real environment. Grammar: see
+ * {@link parseDotEnv}; a line it cannot parse is a {@link UsageError}.
  */
 export async function readDotEnv(cwd: string): Promise<Record<string, string>> {
-  const values: Record<string, string> = {};
   const envPath = resolve(cwd, ".env");
   let text: string;
   try {
@@ -547,25 +624,11 @@ export async function readDotEnv(cwd: string): Promise<Record<string, string>> {
     // would continue unauthenticated, report warns rather than failures, and
     // exit 0 — a green build that verified nothing. Same rule as a missing
     // `@`-file, which already throws.
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return values;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
     const detail = err instanceof Error ? err.message : String(err);
     throw new UsageError(`Could not read ${envPath}: ${detail}`);
   }
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq <= 0) continue;
-    // A leading `export ` (the shell convention for a sourceable `.env`) is not
-    // part of the variable name — strip it so `export SNPF_USER=…` sets
-    // `SNPF_USER`, not `export SNPF_USER`.
-    const key = line
-      .slice(0, eq)
-      .trim()
-      .replace(/^export\s+/, "");
-    values[key] = parseDotEnvValue(line.slice(eq + 1).trim());
-  }
-  return values;
+  return parseDotEnv(text.replace(/^\uFEFF/, ""), envPath);
 }
 
 /**

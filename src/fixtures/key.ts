@@ -34,7 +34,9 @@ export function requestKey(
     if (values) values.push(value);
     else grouped.set(name, [value]);
   }
-  const query: Record<string, string | string[]> = {};
+  // CFG-18: a null-prototype map, so a `__proto__` parameter is an own key
+  // and part of the hash instead of silently dropped.
+  const query = Object.create(null) as Record<string, string | string[]>;
   for (const name of [...grouped.keys()].sort()) {
     const values = grouped.get(name) as string[];
     query[name] = values.length === 1 ? (values[0] as string) : values;

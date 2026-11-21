@@ -2,10 +2,16 @@
  * F-X-6: record mode. Wraps the client's real transport, passes every request
  * through unchanged, and writes a redacted copy of each instance API exchange
  * to the recording directory.
+ *
+ * CFG-6: a new recording directory is created 0700 and every file in it is
+ * written atomically with mode 0600. Starting a recording first removes the
+ * exchanges and index a previous recording left there (only file names this
+ * module writes), so a re-record never replays a stale answer.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { writeAtomic } from "../atomic-write.js";
 import type { Transport } from "../http/client.js";
 import { keyFile, requestKey, type RequestKey } from "./key.js";
 import {
@@ -14,7 +20,12 @@ import {
   type RecordedExchange,
   type RecordingIndex,
 } from "./recording.js";
-import { createRedactor, type RedactTarget } from "./redact.js";
+import {
+  createRedactor,
+  looksSecret,
+  pathTable,
+  type RedactTarget,
+} from "./redact.js";
 
 /** Options for {@link createRecorder}. */
 export interface RecorderOptions {
@@ -40,11 +51,21 @@ export interface Recorder {
   finish(run: RecordingRun): void;
 }
 
-const TABLE_PATH = /^\/api\/now\/(?:v\d+\/)?table\/([^/]+)/;
+const TABLE_PATH = /^\/api\/now\/(?:v\d+\/)?table\//;
+
+/** File names a recording holds: the index and one file per exchange. */
+const RECORDING_FILE = /^(?:index|[0-9a-f]{16})\.json$/;
+
+/** Owner-only modes for a recording (CFG-6). */
+const FILE_MODE = 0o600;
+const DIR_MODE = 0o700;
 
 function redactTarget(key: RequestKey): RedactTarget {
-  const match = TABLE_PATH.exec(key.path);
-  if (!match) return {};
+  if (!TABLE_PATH.test(key.path)) return {};
+  // CFG-18: a malformed escape in the table segment leaves no table (the
+  // body is still redacted field by field), never a URIError.
+  const table = pathTable(key.path);
+  if (table === undefined) return {};
   const fields = key.query.sysparm_fields;
   const list =
     typeof fields === "string"
@@ -54,7 +75,7 @@ function redactTarget(key: RequestKey): RedactTarget {
           .filter((f) => f !== "")
       : undefined;
   return {
-    table: decodeURIComponent(match[1] as string),
+    table,
     ...(list && list.length > 0 ? { fields: list } : {}),
   };
 }
@@ -63,20 +84,38 @@ function redactTarget(key: RequestKey): RedactTarget {
 export function createRecorder(opts: RecorderOptions): Recorder {
   const origin = new URL(opts.origin).origin;
   const redactor = createRedactor({ origin, raw: opts.raw ?? false });
-  mkdirSync(opts.dir, { recursive: true });
+  mkdirSync(opts.dir, { recursive: true, mode: DIR_MODE });
+  clearRecording(opts.dir);
+
+  /**
+   * Write `value` as JSON to `file`, refusing (SEC-9) when the text still
+   * looks like it holds a secret after redaction.
+   */
+  function write(file: string, value: unknown) {
+    const content = `${JSON.stringify(value, null, 2)}\n`;
+    if (looksSecret(content)) {
+      throw new Error(
+        `Refusing to write ${file}: it still looks like it holds a secret after redaction`,
+      );
+    }
+    writeAtomic(file, content, { mode: FILE_MODE });
+  }
 
   function record(key: RequestKey, exchange: Omit<RecordedExchange, "key">) {
-    const query: Record<string, string | string[]> = {};
+    const table = pathTable(key.path);
+    const query: Record<string, string | string[]> = Object.create(
+      null,
+    ) as Record<string, string | string[]>;
     for (const [name, value] of Object.entries(key.query)) {
       query[name] = Array.isArray(value)
-        ? value.map((v) => redactor.text(v))
-        : redactor.text(value);
+        ? value.map((v) => redactor.query(name, v, table))
+        : redactor.query(name, value, table);
     }
-    const entry: RecordedExchange = { key: { ...key, query }, ...exchange };
-    writeFileSync(
-      join(opts.dir, keyFile(key)),
-      `${JSON.stringify(entry, null, 2)}\n`,
-    );
+    const entry: RecordedExchange = {
+      key: { ...key, path: redactor.text(key.path), query },
+      ...exchange,
+    };
+    write(join(opts.dir, keyFile(key)), entry);
   }
 
   return {
@@ -123,7 +162,21 @@ export function createRecorder(opts: RecorderOptions): Recorder {
         raw: opts.raw ?? false,
         checks: run.checks,
       };
-      writeFileSync(indexPath(opts.dir), `${JSON.stringify(index, null, 2)}\n`);
+      write(indexPath(opts.dir), index);
     },
   };
+}
+
+/** Remove what a previous recording left in `dir`, and nothing else. */
+function clearRecording(dir: string): void {
+  for (const name of readdirSync(dir)) {
+    if (!RECORDING_FILE.test(name)) continue;
+    const file = join(dir, name);
+    try {
+      const st = lstatSync(file);
+      if (st.isFile() || st.isSymbolicLink()) unlinkSync(file);
+    } catch {
+      // Gone already; nothing to clear.
+    }
+  }
 }

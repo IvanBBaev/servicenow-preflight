@@ -32,14 +32,23 @@ export function replayTransport(dir: string): Transport {
         ),
       );
     }
-    let entry: RecordedExchange;
+    let parsed: unknown;
     try {
-      entry = JSON.parse(text) as RecordedExchange;
+      parsed = JSON.parse(text);
     } catch {
       return Promise.reject(
         new Error(`Recorded response ${file} is not valid JSON`),
       );
     }
+    const problem = exchangeProblem(parsed, key.method);
+    if (problem !== undefined) {
+      return Promise.reject(
+        new Error(
+          `Recorded response ${file} is not a valid exchange: ${problem}`,
+        ),
+      );
+    }
+    const entry = parsed as RecordedExchange;
     const body =
       entry.body !== undefined
         ? JSON.stringify(entry.body)
@@ -51,6 +60,49 @@ export function replayTransport(dir: string): Transport {
       text: () => Promise.resolve(body),
     });
   };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * CFG-18: why a parsed recording file is not an exchange for a `method`
+ * request, or `undefined` when it is one. A hand-edited or truncated entry
+ * fails the request instead of answering with `status: undefined`.
+ */
+function exchangeProblem(entry: unknown, method: string): string | undefined {
+  if (!isPlainObject(entry)) return "not an object";
+  const { status, statusText, headers, text, key } = entry;
+  if (
+    typeof status !== "number" ||
+    !Number.isInteger(status) ||
+    status < 100 ||
+    status > 599
+  ) {
+    return "status is not an HTTP status code";
+  }
+  if (statusText !== undefined && typeof statusText !== "string") {
+    return "statusText is not a string";
+  }
+  if (headers !== undefined) {
+    if (!isPlainObject(headers)) return "headers is not an object";
+    for (const value of Object.values(headers)) {
+      if (typeof value !== "string") return "a header value is not a string";
+    }
+  }
+  if (text !== undefined && typeof text !== "string") {
+    return "text is not a string";
+  }
+  if (key !== undefined) {
+    if (!isPlainObject(key)) return "key is not an object";
+    if (key.method !== method) return `recorded for ${String(key.method)}`;
+  }
+  return undefined;
 }
 
 /** Options for {@link createReplayClient}. */

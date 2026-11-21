@@ -1033,8 +1033,14 @@ test("readDotEnv returns the parsed map, or an empty one without a .env", async 
   const dir = tempDir();
   try {
     assert.deepEqual(await readDotEnv(dir), {});
-    writeFileSync(join(dir, ".env"), "# c\nexport A=1\nB='two'\nbad\n");
+    writeFileSync(join(dir, ".env"), "# c\nexport A=1\nB='two'\n\n");
     assert.deepEqual(await readDotEnv(dir), { A: "1", B: "two" });
+    // CFG-4: a malformed line fails loudly instead of being skipped.
+    writeFileSync(join(dir, ".env"), "# c\nexport A=1\nbad\n");
+    await assert.rejects(readDotEnv(dir), {
+      name: "UsageError",
+      message: /\.env:3: expected KEY=value/,
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

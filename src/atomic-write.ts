@@ -35,10 +35,16 @@ function existingMode(path: string): number | undefined {
  * file planted at a guessable temp path is never written through or removed.
  * CFG-7: an existing file keeps its permission bits (a 0600 file stays 0600),
  * and the data is fsynced before the rename.
+ * CFG-6: `opts.mode` forces the permission bits instead (a recording file is
+ * always 0600, whatever the file it replaces had).
  */
-export function writeAtomic(path: string, content: string): void {
+export function writeAtomic(
+  path: string,
+  content: string,
+  opts: { mode?: number } = {},
+): void {
   mkdirSync(dirname(path), { recursive: true });
-  const mode = existingMode(path);
+  const mode = opts.mode ?? existingMode(path);
   const temp = `${path}.${randomBytes(8).toString("hex")}.tmp`;
   const flags =
     constants.O_WRONLY |

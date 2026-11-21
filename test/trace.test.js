@@ -65,11 +65,55 @@ test("requestTarget keeps the table and templates record-identifying segments", 
     ),
     { path: "/api/sn_cicd/progress/:id" },
   );
+  // CFG-17: an unknown shape keeps only its namespace.
   assert.deepEqual(requestTarget("/api/now/x/hello%20world"), {
-    path: "/api/now/x/:value",
+    path: "/api/now/:path",
   });
   assert.deepEqual(requestTarget("/api/now/table/a%2Fb%20c"), {
     path: ":table",
+  });
+});
+
+test("CFG-17: requestTarget allow-lists path shapes and drops every other segment", () => {
+  const cases = [
+    // Known shapes keep their template.
+    [
+      "/api/sn_cicd/testsuite/run?test_suite_sys_id=x",
+      "/api/sn_cicd/testsuite/run",
+    ],
+    [
+      "/api/now/attachment/0123456789abcdef0123456789abcdef/file",
+      "/api/now/attachment/:id/file",
+    ],
+    [
+      "/api/now/attachment/0123456789abcdef0123456789abcdef",
+      "/api/now/attachment/:id",
+    ],
+    ["/oauth_token.do", "/oauth_token.do"],
+    ["/api/now/stats/incident?sysparm_count=true", "/api/now/stats/:table"],
+    // A user name, a scripted REST path or a custom namespace never shows.
+    ["/api/now/ui/user/fake.person", "/api/now/:path"],
+    ["/api/x_acme_hr/payroll/fake.person/salary", "/api/:path"],
+    ["/api/sn_fake_app/v1/records/fake.person", "/api/sn_fake_app/:path"],
+    ["/api/global/fake.person", "/api/global/:path"],
+    ["/fake.person/secret", ":path"],
+    ["/api/now/table/..", ":table"],
+  ];
+  for (const [input, path] of cases) {
+    const target = requestTarget(input);
+    assert.equal(target.path, path, input);
+    assert.doesNotMatch(
+      JSON.stringify(target),
+      /fake\.person|payroll|salary|x_acme/,
+      input,
+    );
+  }
+  assert.deepEqual(requestTarget("/api/now/stats/incident"), {
+    table: "incident",
+    path: "/api/now/stats/:table",
+  });
+  assert.deepEqual(requestTarget("/api/now/v2/table/u_fake_custom"), {
+    table: "u_fake_custom",
   });
 });
 
@@ -115,7 +159,7 @@ test("the tracer writes only allowlisted fields", () => {
   assert.deepEqual(second, {
     type: "http",
     ts: "2026-10-27T00:00:00.000Z",
-    path: "/x",
+    path: ":path",
   });
   assert.doesNotMatch(raw(), /secret|abc123|admin|Basic|rm -rf/);
 });

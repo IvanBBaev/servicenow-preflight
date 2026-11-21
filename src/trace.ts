@@ -118,8 +118,6 @@ function subscribeAll(on: {
 
 const NAME = /^[A-Za-z0-9_.:$-]{1,200}$/;
 const METHOD = /^[A-Z]{1,10}$/;
-const SYS_ID = /^[0-9a-f]{32}$/i;
-const SAFE_SEGMENT = /^[A-Za-z0-9_.$-]{1,80}$/;
 
 const str = (v: unknown, re: RegExp): string | undefined =>
   typeof v === "string" && re.test(v) ? v : undefined;
@@ -144,37 +142,67 @@ function compact(
   return out;
 }
 
+/** A table name as the platform spells one; `.`/`..` and encodings are not. */
+const TABLE_NAME = /^[A-Za-z0-9_$]{1,80}$/;
+/** A ServiceNow-owned REST namespace (`now`, `sn_cicd`, …), safe to name. */
+const OWNED_NAMESPACE = /^(?:now|sn_[a-z0-9_]{1,40}|global)$/;
+
 /**
- * Where a request went, with nothing identifying a record: a Table API path
- * becomes its table; any other path keeps its fixed segments, a sys_id becomes
- * `:id` and anything else variable becomes `:value`.
+ * CFG-17: the non-table request shapes the tool itself makes, as templates.
+ * Each pattern matches the whole path; a variable segment is never echoed.
+ */
+const KNOWN_PATHS: readonly (readonly [RegExp, string])[] = [
+  [/^\/api\/sn_cicd\/progress\/[^/]+$/, "/api/sn_cicd/progress/:id"],
+  [/^\/api\/sn_cicd\/testsuite\/run$/, "/api/sn_cicd/testsuite/run"],
+  [/^\/api\/now\/attachment\/[^/]+\/file$/, "/api/now/attachment/:id/file"],
+  [/^\/api\/now\/attachment\/[^/]+$/, "/api/now/attachment/:id"],
+  [/^\/oauth_token\.do$/, "/oauth_token.do"],
+];
+
+function decoded(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Where a request went, with nothing identifying a record or a person. A Table
+ * API path (any version) becomes its table, an Aggregate API path its table
+ * plus the `/api/now/stats/:table` template, and a path the tool itself calls
+ * (CI/CD progress, the test-suite runner, attachments) its fixed template.
+ *
+ * CFG-17: every other path is reduced to its namespace — a ServiceNow-owned
+ * one (`/api/now/:path`, `/api/sn_cicd/:path`) is named, a custom one
+ * (`/api/x_acme_app/…`) becomes `/api/:path` — so user names, record keys and
+ * custom table names in a scripted REST path never reach the trace.
  */
 export function requestTarget(path: string): {
   table?: string;
   path?: string;
 } {
   const bare = path.split(/[?#]/, 1)[0] ?? "";
-  const table = /^\/api\/now\/table\/([^/]+)/.exec(bare)?.[1];
+  const table = /^\/api\/now\/(?:v\d+\/)?table\/([^/]+)/.exec(bare)?.[1];
   if (table !== undefined) {
-    let name: string;
-    try {
-      name = decodeURIComponent(table);
-    } catch {
-      name = "";
-    }
-    return SAFE_SEGMENT.test(name) ? { table: name } : { path: ":table" };
+    const name = decoded(table);
+    return TABLE_NAME.test(name) ? { table: name } : { path: ":table" };
   }
-  const template = bare
-    .split("/")
-    .map((seg) =>
-      seg === "" || (SAFE_SEGMENT.test(seg) && !SYS_ID.test(seg))
-        ? seg
-        : SYS_ID.test(seg)
-          ? ":id"
-          : ":value",
-    )
-    .join("/");
-  return { path: template };
+  const stats = /^\/api\/now\/(?:v\d+\/)?stats\/([^/]+)/.exec(bare)?.[1];
+  if (stats !== undefined) {
+    const name = decoded(stats);
+    return TABLE_NAME.test(name)
+      ? { table: name, path: "/api/now/stats/:table" }
+      : { path: "/api/now/stats/:table" };
+  }
+  for (const [shape, template] of KNOWN_PATHS) {
+    if (shape.test(bare)) return { path: template };
+  }
+  const namespace = /^\/api\/([^/]+)\//.exec(bare)?.[1];
+  if (namespace !== undefined && OWNED_NAMESPACE.test(namespace)) {
+    return { path: `/api/${namespace}/:path` };
+  }
+  return { path: bare.startsWith("/api/") ? "/api/:path" : ":path" };
 }
 
 /** The allowlisted trace line for a request event. */

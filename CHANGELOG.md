@@ -676,6 +676,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`.env` grammar, recording redaction and file modes, trace paths**
+  (RR-61, RR-30, CFG-4, CFG-5, CFG-6, CFG-17, CFG-18, SEC-9) — **behaviour
+  changes:**
+  - The `.env` reader follows the dotenv grammar. A quoted value keeps a `#`
+    and an escaped quote (`SNPF_PASS="pa#ss"` was read as `pa`); a double-,
+    single- or backtick-quoted value may span lines (a PEM key no longer
+    turns into junk keys); `\n` / `\r` / `\t` / `\"` / `\\` are expanded in
+    double quotes only; an unquoted value is cut at `#` only after
+    whitespace (`pa#ss` stays whole). A line with no `=`, an unterminated
+    quote or text after a closing quote now **fails the run** with
+    `<file>:<line>: …` (the value is never echoed) where it used to be
+    skipped or kept half-read. A UTF-8 BOM is ignored.
+  - Recordings redact more: camelCase and dotted secret names
+    (`userPassword`, `glide.smtp.pwd`, `u_pwd`, `u_pin`, `cookie`,
+    `session_id`, `x.basic.auth.pass`, encryption keys, numbers under such
+    names), URL userinfo, `Authorization` values of any length, escaped-JSON
+    and backtick literals, `setBasicAuth` / `setPassword`-style arguments,
+    `setProperty("x.pwd", "…")` and `?apikey=…`. The stored request key and
+    the `link` header now pass through the redactor: secret-named query
+    parameters become `<redacted>` and people operands of a `sysparm_query`
+    become pseudonyms. A file that still looks like it holds a secret after
+    redaction is not written — the run fails instead.
+  - A recording directory is created `0700` and its files are written
+    atomically with mode `0600` (they were `0755` / `0644`). Starting a
+    recording removes the `index.json` and exchange files a previous
+    recording left there, so a re-record never replays a stale answer;
+    other files in the directory are kept.
+  - Replay rejects an exchange file without a valid HTTP status, with
+    non-string headers or text, or recorded for another method. A malformed
+    `%` escape in a recorded path no longer throws `URIError`, and a
+    `__proto__` query parameter is now part of the request key. Existing
+    recordings keep their file names.
+  - The trace (`SNPF_TRACE`) keeps only allow-listed path shapes: a path it
+    does not know keeps its `now` / `global` / `sn_*` namespace
+    (`/api/now/:path`) or becomes `/api/:path` / `:path`, so user names and
+    custom app paths no longer appear (it was `/api/now/x/:value`).
+
 - **Reporters tell the same verdict as the exit code** (RR-70, REL-2, REL-3,
   REL-4, REL-8, REL-9, REL-11, CLI-13) — under `--fail-on warn` a run that
   exited `1` on a warn wrote JUnit with `failures="0"`, SARIF level `warning`
