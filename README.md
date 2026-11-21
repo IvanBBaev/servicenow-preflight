@@ -868,23 +868,43 @@ Selected with `--format` (or `--json`):
 - **`json`** — a versioned envelope, the same shape for single-instance and
   `--all` runs (see [JSON output](#json-output)).
 - **`junit`** — a JUnit XML document with **one `<testcase>` per check**: `fail`
-  → `<failure>`, `warn` → a passing case with a `<system-out>` note, `pass` → an
-  empty passing case. XML-1.0-illegal control characters are stripped and the five
-  entities escaped, so arbitrary ATF output can't break the document.
-- **`sarif`** — a SARIF 2.1.0 log with **one result per non-`pass` check** (`fail`
-  → `error`, `warn` → `warning`) for code-scanning dashboards.
+  → `<failure>`, `error` → `<error>`, `warn` → a passing case with a
+  `<system-out>` note, `pass` → an empty passing case. XML-1.0-illegal control
+  characters are stripped and the five entities escaped, so arbitrary ATF output
+  can't break the document.
+- **`sarif`** — a SARIF 2.1.0 log for code-scanning dashboards (`fail` / `error`
+  → level `error`, `warn` → `warning`). A row that lists findings yields **one
+  result per non-`pass` finding**, each with the finding id as
+  `partialFingerprints["findingId/v1"]` and the record as a logical location
+  (`table/sys_id.field:line`), so code scanning tracks findings one by one; a
+  row without findings yields one result, and a row whose finding list was
+  truncated keeps a row result that counts the rest.
 - **`markdown`** — a GitHub-flavoured Markdown block for a pull-request comment:
   a `###` heading with the instance and verdict, the bold summary, and a table
   ordered fail → warn → pass (more than five pass rows fold into `<details>`).
-  Cell text is escaped (`|`, newlines, `<`/`>`, backticks), so a message cannot
-  break the table. Fail and warn rows also carry the check's remediation hint on
+  Cell text is neutralised (`|`, newlines, `&`/`<`/`>`, backticks, the link,
+  image and emphasis characters `[ ] ( ) ! * _ ~ \`, and `@` mentions), so a
+  message from an instance can neither break the table nor render a link, an
+  image or a ping in the PR comment. Fail and warn rows also carry the check's remediation hint on
   a second line (`<br><sub>Fix: …</sub>`); pass rows do not. With `--all`, a one-line roll-up (`**dev** ✅ · **prod** ❌`)
   leads one block per instance.
-- **`github`** — GitHub Actions workflow commands: one `::error` (fail) or
-  `::warning` (warn) line per non-`pass` check, titled with the check (and the
+- **`github`** — GitHub Actions workflow commands: one `::error` (fail, error)
+  or `::warning` (warn) line per non-`pass` check, titled with the check (and the
   instance under `--all`), then the plain summary line. Inside a GitHub job they
   become annotations on the run and the PR's Checks tab with no upload step;
   anywhere else the raw command lines are printed.
+
+The row-level formats tell the same verdict as the exit code: under
+`--fail-on warn` a `warn` row no baseline accepted is a JUnit `<failure>`
+(counted in `failures`), a SARIF `error` and an `::error`, and the `github`
+summary line ends with `— failing: --fail-on warn`. A row with a status the
+runner does not know counts as a failure in the summary and renders as one;
+a row without a message renders with an empty message instead of failing the
+reporter. The summary counts stay the row counts. Library callers pass the
+threshold as `{ failOn }` (`ReportFormatOptions`) to `formatJUnit(report, opts)`,
+`formatSarif(report, checks, opts)` and `formatGitHubAnnotations(report,
+instance, opts)`; in `formatJUnitSuites` / `formatGitHubAnnotationsAll` a
+`NamedReport` may carry its own `failOn`.
 
 ```bash
 snpf --format junit > preflight-junit.xml
@@ -1248,13 +1268,16 @@ maxInFlight?, rps?, cache? }`),
   gateway, a wrong base path) is never taken for a missing table: it is an
   `error` row. In `createFakeSnClient`, a forced `http` failure carries that
   envelope by default; `fail.body` sets another (`{ raw: "…" }` for a proxy
-  page, `null` for an empty body). `formatSarif(report, checks?)`
+  page, `null` for an empty body). `formatSarif(report, checks?, opts?)`
   uses it to fill each SARIF rule's `shortDescription`, `fullDescription` and
   `properties`; a check without `meta` keeps working everywhere.
 
 Checks _always_ call `ctx.http`, never `fetch` directly, so `createFakeSnClient`
 (an in-memory `SnClient`, from `servicenow-preflight/testing`) unit-tests them with no network — seed table rows and
-CI/CD responses, or force error surfaces with the `fail` fixture. Client helpers
+CI/CD responses, or force error surfaces with the `fail` fixture. Its `maxRows`
+fixture (default 100000, like the client's) makes an auto-paginated read of a
+larger selection throw `SnTruncationError`, so a check's truncation handling
+can be tested with a small seed. Client helpers
 throw a small typed hierarchy (all extend `SnError`) that checks map to results;
 secrets never appear in the messages:
 

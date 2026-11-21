@@ -47,6 +47,7 @@ export {
   type Verdict,
 } from "../core/evaluate.js";
 export type { FailOn } from "../config.js";
+export type { ReportFormatOptions } from "../report/verdict.js";
 export {
   collectTimings,
   createTracer,

@@ -676,6 +676,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reporters tell the same verdict as the exit code** (RR-70, REL-2, REL-3,
+  REL-4, REL-8, REL-9, REL-11, CLI-13) — under `--fail-on warn` a run that
+  exited `1` on a warn wrote JUnit with `failures="0"`, SARIF level `warning`
+  and `::warning` lines. A `warn` row no baseline accepted now renders as a
+  JUnit `<failure>` (counted in `failures`), a SARIF `error` and an `::error`,
+  and the `github` summary line ends with `— failing: --fail-on warn`; a
+  baselined warn stays a warning. `run` (single and multi-instance, each
+  instance with its own threshold) and `drift` pass the threshold to the
+  reporters; library callers pass `{ failOn }` (`ReportFormatOptions`, new
+  type export) as the new last argument of `formatJUnit`, `formatSarif`,
+  `formatGitHubAnnotations` and the multi-report variants, and a
+  `NamedReport` may carry its own `failOn`. A row with an unknown status,
+  which the summary already counts as a failure, rendered as a passing JUnit
+  testcase and a level-less SARIF result: it is a failure in both now. A row
+  without a message no longer makes JUnit throw or print `undefined`.
+  **SARIF now emits one result per non-`pass` finding** (it emitted one per
+  row), each with `partialFingerprints["findingId/v1"]` and a logical
+  location (`table/sys_id.field:line`), so code scanning tracks and closes
+  findings one by one; a row whose finding list was truncated keeps a row
+  result counting the rest. Existing code-scanning alerts keyed on the old
+  per-row result close once and reopen per finding. The Markdown table now
+  neutralises `[ ] ( ) ! * _ ~ \`, `&` and `@` as well, so a message from an
+  instance cannot render an image, a link, emphasis or a mention in the PR
+  comment; check names stay in a code span. `createFakeSnClient` takes
+  `maxRows` (default 100000) and throws `SnTruncationError` on an
+  auto-paginated read past it, like the real client.
+
 - **Script scans catch more spellings; release and version gaps close**
   (RR-68, DEL-11, DEL-14, DEL-15, DEL-16) — `client-script-safety` matched
   `GlideScopedEvaluator` / `evaluateScript` with `A.*B|B.*A`, which backtracks

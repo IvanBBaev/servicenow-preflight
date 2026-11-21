@@ -212,3 +212,46 @@ test("fail can be scoped to a single table, leaving others working", async () =>
   const roles = await http.table("sys_user_role").query();
   assert.equal(roles.length, 1);
 });
+
+// RR-70 (REL-11): the fake caps auto-pagination like the real client, so a
+// check's truncation handling is testable with a small seed.
+test("fake client: an auto-paginated query past maxRows throws SnTruncationError", async () => {
+  const { createFakeSnClient } = await import("../../build/http/fake.js");
+  const { SnTruncationError } = await import("../../build/http/client.js");
+  const rows = Array.from({ length: 4 }, (_, i) => ({
+    sys_id: `s${i}`,
+    name: "x",
+  }));
+  const c = createFakeSnClient({ tables: { sys_script: rows }, maxRows: 3 });
+  await assert.rejects(
+    async () => c.table("sys_script").query({ sysparm_query: "name=x" }),
+    (err) => err instanceof SnTruncationError && err.cap === 3,
+  );
+  await assert.rejects(
+    async () => c.table("sys_script").queryWithMeta(),
+    SnTruncationError,
+  );
+  // Exactly the cap is fine, and an explicit page is never capped.
+  const atCap = createFakeSnClient({
+    tables: { sys_script: rows.slice(0, 3) },
+    maxRows: 3,
+  });
+  assert.equal((await atCap.table("sys_script").query()).length, 3);
+  const page = await c.table("sys_script").query({ sysparm_limit: "10" });
+  assert.equal(page.length, 4);
+  assert.throws(() => createFakeSnClient({ maxRows: 0 }), RangeError);
+});
+
+test("fake client: the default maxRows matches the real client's 100000", async () => {
+  const { createFakeSnClient } = await import("../../build/http/fake.js");
+  const { SnTruncationError } = await import("../../build/http/client.js");
+  const rows = Array.from({ length: 100_001 }, (_, i) => ({
+    sys_id: String(i),
+    name: "x",
+  }));
+  const c = createFakeSnClient({ tables: { sys_script: rows } });
+  await assert.rejects(
+    async () => c.table("sys_script").query({ sysparm_query: "name=x" }),
+    SnTruncationError,
+  );
+});

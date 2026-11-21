@@ -178,6 +178,7 @@
 ./report type NamedReport
 ./report value REPORT_SCHEMA_VERSION
 ./report type ReportEnvelope
+./report type ReportFormatOptions
 ./report type ReportRun
 ./report type RunTimings
 ./report value TRACE_CHANNELS

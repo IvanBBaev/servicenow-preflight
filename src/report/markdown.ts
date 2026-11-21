@@ -1,6 +1,7 @@
 import type { Check, CheckResult, PreflightReport } from "../types.js";
 import { errorTail } from "../summary.js";
 import type { NamedReport } from "./junit.js";
+import { messageOf } from "./verdict.js";
 
 /** Options for the Markdown reporter. */
 export interface MarkdownOptions {
@@ -39,15 +40,34 @@ const DEFAULT_TITLE = "servicenow-preflight";
 
 /**
  * Make arbitrary text safe inside one GitHub-flavoured Markdown table cell: a
- * raw `|` would split the cell, a newline would end the row, `<` / `>` could
- * open HTML, and a backtick could break the code span the check name sits in.
+ * raw `|` would split the cell, a newline would end the row, `<` / `>` / `&`
+ * could open HTML or an entity, and a backtick could break the code span the
+ * check name sits in. Instance-controlled text must not turn into markup in a
+ * PR comment either (RR-70, REL-9): `[ ] ( ) !` (links and tracking images),
+ * `* _ ~` (emphasis) and a backslash (which would undo an escape) are escaped,
+ * and an `@` gets an empty HTML comment after it, so `@user` / `@org/team`
+ * notify no one.
  */
 function escapeMarkdownCell(value: string): string {
   return value
     .replace(/\r\n|\r|\n/g, " ")
-    .replace(/\|/g, "\\|")
+    .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
+    .replace(/`/g, "'")
+    .replace(/[\\[\]()!*_~|]/g, "\\$&")
+    .replace(/@/g, "@<!-- -->");
+}
+
+/**
+ * Make text safe inside a code span in a table cell. A code span shows its
+ * content literally (no links, emphasis, mentions or entities), so only what
+ * would end the span or the cell is changed: newlines, `|` and backticks.
+ */
+function escapeCodeSpan(value: string): string {
+  return value
+    .replace(/\r\n|\r|\n/g, " ")
+    .replace(/\|/g, "\\|")
     .replace(/`/g, "'");
 }
 
@@ -82,7 +102,7 @@ function table(rows: readonly CheckResult[], fixes: RemediationIndex): string {
     const hint =
       fix === undefined ? "" : `<br><sub>Fix: ${escapeMarkdownCell(fix)}</sub>`;
     lines.push(
-      `| ${icon(r.status)} | \`${escapeMarkdownCell(r.name)}\` | ${escapeMarkdownCell(r.message)}${hint} |`,
+      `| ${icon(r.status)} | \`${escapeCodeSpan(r.name)}\` | ${escapeMarkdownCell(messageOf(r))}${hint} |`,
     );
   }
   return lines.join("\n");

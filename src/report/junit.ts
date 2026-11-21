@@ -1,4 +1,10 @@
+import type { FailOn } from "../config.js";
 import type { CheckResult, PreflightReport } from "../types.js";
+import {
+  messageOf,
+  renderedStatus,
+  type ReportFormatOptions,
+} from "./verdict.js";
 
 // Characters XML 1.0 forbids even when numerically escaped: all C0 controls
 // except tab (0x09), LF (0x0A) and CR (0x0D). A raw one — easily present in
@@ -31,12 +37,19 @@ function escapeXml(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
-/** Render a single {@link CheckResult} as a `<testcase>` element. */
-function renderTestcase(result: CheckResult): string {
+/**
+ * Render a single {@link CheckResult} as a `<testcase>` element. The element
+ * follows {@link renderedStatus}: an unknown status and a warn that gated the
+ * run under `failOn: "warn"` carry a `<failure>`, like a fail (RR-70).
+ */
+function renderTestcase(
+  result: CheckResult,
+  opts: ReportFormatOptions | undefined,
+): string {
   const name = escapeXml(result.name);
-  const message = escapeXml(result.message);
+  const message = escapeXml(messageOf(result));
 
-  switch (result.status) {
+  switch (renderedStatus(result, opts)) {
     case "fail":
       return (
         `    <testcase name="${name}" classname="servicenow-preflight">\n` +
@@ -59,7 +72,7 @@ function renderTestcase(result: CheckResult): string {
         `      <system-out>${message}</system-out>\n` +
         `    </testcase>`
       );
-    default:
+    case "pass":
       return `    <testcase name="${name}" classname="servicenow-preflight" />`;
   }
 }
@@ -70,8 +83,12 @@ function renderTestcase(result: CheckResult): string {
  * the `failures=` attribute can never disagree with the `<failure>` elements
  * actually emitted even if a caller hands in a report whose summary is stale.
  */
-function countFailures(report: PreflightReport): number {
-  return report.results.filter((r) => r.status === "fail").length;
+function countFailures(
+  report: PreflightReport,
+  opts: ReportFormatOptions | undefined,
+): number {
+  return report.results.filter((r) => renderedStatus(r, opts) === "fail")
+    .length;
 }
 
 /** Number of `error` testcases, derived from `results` like {@link countFailures}. */
@@ -80,12 +97,16 @@ function countErrors(report: PreflightReport): number {
 }
 
 /** Render one `<testsuite>` (name + testcases) for a report. */
-function renderSuite(name: string, report: PreflightReport): string {
+function renderSuite(
+  name: string,
+  report: PreflightReport,
+  opts: ReportFormatOptions | undefined,
+): string {
   const results = report.results;
   const tests = results.length;
-  const failures = countFailures(report);
+  const failures = countFailures(report, opts);
   const errors = countErrors(report);
-  const testcases = results.map(renderTestcase).join("\n");
+  const testcases = results.map((r) => renderTestcase(r, opts)).join("\n");
   const body = testcases.length > 0 ? `\n${testcases}\n` : "";
   return (
     `  <testsuite name="${escapeXml(name)}" tests="${tests}" failures="${failures}" errors="${errors}">` +
@@ -114,19 +135,25 @@ function wrapSuites(
  * ingestion).
  *
  * Each {@link CheckResult} becomes one `<testcase>`. Status mapping:
- * - `fail` -> `<testcase>` carrying a `<failure>` (counts toward `failures`).
+ * - `fail` and an unknown status -> `<testcase>` carrying a `<failure>`
+ *   (counts toward `failures`).
  * - `error` -> `<testcase>` carrying an `<error>` (counts toward `errors`).
- * - `warn` -> passing `<testcase>` with the note in `<system-out>`.
+ * - `warn` -> passing `<testcase>` with the note in `<system-out>`; with
+ *   `opts.failOn: "warn"` a warn no baseline accepted carries a `<failure>`
+ *   instead, so the document agrees with the exit code.
  * - `pass` -> plain, empty `<testcase>`.
  *
  * The single `<testsuite>` reports `tests` (total), `failures` and `errors`.
  */
-export function formatJUnit(report: PreflightReport): string {
+export function formatJUnit(
+  report: PreflightReport,
+  opts?: ReportFormatOptions,
+): string {
   const tests = report.results.length;
   return wrapSuites(
-    renderSuite("servicenow-preflight", report),
+    renderSuite("servicenow-preflight", report, opts),
     tests,
-    countFailures(report),
+    countFailures(report, opts),
     countErrors(report),
   );
 }
@@ -135,6 +162,19 @@ export function formatJUnit(report: PreflightReport): string {
 export interface NamedReport {
   name: string;
   report: PreflightReport;
+  /**
+   * This instance's `--fail-on` threshold, when it differs per instance;
+   * overrides the reporter's `opts.failOn` for this report (RR-70).
+   */
+  failOn?: FailOn;
+}
+
+/** The reporter options for one named report: its own `failOn` wins. */
+export function optionsFor(
+  named: NamedReport,
+  opts: ReportFormatOptions | undefined,
+): ReportFormatOptions | undefined {
+  return named.failOn !== undefined ? { ...opts, failOn: named.failOn } : opts;
 }
 
 /**
@@ -144,10 +184,18 @@ export interface NamedReport {
  * the CLI's `--all --format junit`, so CI ingesters see a single well-formed
  * report rather than concatenated documents.
  */
-export function formatJUnitSuites(reports: NamedReport[]): string {
-  const suites = reports.map((r) => renderSuite(r.name, r.report)).join("\n");
+export function formatJUnitSuites(
+  reports: NamedReport[],
+  opts?: ReportFormatOptions,
+): string {
+  const suites = reports
+    .map((r) => renderSuite(r.name, r.report, optionsFor(r, opts)))
+    .join("\n");
   const tests = reports.reduce((n, r) => n + r.report.results.length, 0);
-  const failures = reports.reduce((n, r) => n + countFailures(r.report), 0);
+  const failures = reports.reduce(
+    (n, r) => n + countFailures(r.report, optionsFor(r, opts)),
+    0,
+  );
   const errors = reports.reduce((n, r) => n + countErrors(r.report), 0);
   return wrapSuites(suites, tests, failures, errors);
 }

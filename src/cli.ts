@@ -1172,12 +1172,16 @@ function render(
   checks?: readonly Check[],
   url?: string,
   timings?: RunTimings,
+  failOn?: FailOn,
 ): string {
+  // RR-70: JUnit, SARIF and annotations render a warn that gated the exit
+  // (`--fail-on warn`) as a failure.
+  const opts = failOn !== undefined ? { failOn } : undefined;
   switch (format) {
     case "markdown":
       return formatMarkdown(report, instance, checks ? { checks } : undefined);
     case "github":
-      return formatGitHubAnnotations(report, instance);
+      return formatGitHubAnnotations(report, instance, opts);
     case "json":
       return renderJson([
         {
@@ -1188,9 +1192,9 @@ function render(
         },
       ]);
     case "junit":
-      return formatJUnit(report);
+      return formatJUnit(report, opts);
     case "sarif":
-      return formatSarif(report);
+      return formatSarif(report, undefined, opts);
     default: {
       const lines = report.results.map(
         (r) => `${STATUS_ICON[r.status]} ${r.name}: ${r.message}`,
@@ -1213,6 +1217,8 @@ interface NamedReport {
   url?: string;
   /** `--timings` counts for this instance's run. */
   timings?: RunTimings;
+  /** This instance's `--fail-on` threshold (RR-70). */
+  failOn?: FailOn;
 }
 
 /** A parsed SARIF log — enough shape to merge runs across instances. */
@@ -1233,7 +1239,13 @@ function renderSarifAll(reports: NamedReport[]): string {
   let version = "2.1.0";
   let schema: string | undefined;
   for (const r of reports) {
-    const log = JSON.parse(formatSarif(r.report)) as SarifLog;
+    const log = JSON.parse(
+      formatSarif(
+        r.report,
+        undefined,
+        r.failOn !== undefined ? { failOn: r.failOn } : undefined,
+      ),
+    ) as SarifLog;
     version = log.version;
     schema = log.$schema;
     for (const run of log.runs) {
@@ -2187,7 +2199,7 @@ async function runTargets(
     renderAs = (format) =>
       withFailOn(
         withReplayNote(
-          render(report, format, undefined, ran, url, timings),
+          render(report, format, undefined, ran, url, timings, failOn),
           format,
           replay,
         ),
@@ -2208,6 +2220,7 @@ async function runTargets(
         report,
         ...(url !== undefined ? { url } : {}),
         ...(timings !== undefined ? { timings } : {}),
+        failOn: run.failOn,
       });
     }
     const ran = ranChecks(
@@ -2227,6 +2240,7 @@ async function runTargets(
                 ran,
                 firstReport.url,
                 firstReport.timings,
+                firstReport.failOn,
               ),
               format,
               replay,
@@ -2386,7 +2400,19 @@ async function commandDrift(args: ParsedArgs, cwd: string): Promise<void> {
   const failOn: FailOn = args.failOn ?? "fail";
   const { report, ok } = evaluate(raw, { failOn });
   const renderAs = (format: OutputFormat): string =>
-    withFailOn(render(report, format, undefined, [testDrift]), format, failOn);
+    withFailOn(
+      render(
+        report,
+        format,
+        undefined,
+        [testDrift],
+        undefined,
+        undefined,
+        failOn,
+      ),
+      format,
+      failOn,
+    );
   process.stdout.write(renderAs(args.format));
   for (const output of args.outputs) {
     writeAtomic(resolve(cwd, output.path), renderAs(output.format));

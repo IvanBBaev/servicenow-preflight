@@ -54,6 +54,7 @@ import {
   SnHttpError,
   SnNetworkError,
   SnResponseError,
+  SnTruncationError,
   type CicdTestSuiteResult,
   type SnClient,
   type SnRawResponse,
@@ -181,6 +182,14 @@ export interface FakeFixtures {
   referenceFields?: Record<string, string[]>;
   /** The instant relative date operators resolve against; defaults to now. */
   now?: Date;
+  /**
+   * The auto-pagination row cap, like `SnClientConfig.maxRows` (default
+   * 100000). An auto-paginated `query`/`queryWithMeta` whose selection holds
+   * more rows than this throws an `SnTruncationError` as the real client does,
+   * so a check's truncation handling can be tested with a small seed (RR-70).
+   * An explicit `sysparm_limit` page is never capped.
+   */
+  maxRows?: number;
   /** Force failures — globally or scoped to a table / cicd op. */
   fail?: ForcedFailure & {
     table?: Record<string, ForcedFailure>;
@@ -427,6 +436,12 @@ function maybeThrow(
 export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
   const tables = fixtures.tables ?? {};
   const globalFail = fixtures.fail;
+  const maxRows = fixtures.maxRows ?? 100_000;
+  if (!Number.isSafeInteger(maxRows) || maxRows < 1) {
+    throw new RangeError(
+      `FakeFixtures.maxRows must be a positive integer, got ${String(maxRows)}`,
+    );
+  }
 
   function tableRows(name: string): Record<string, unknown>[] {
     return tables[name] ?? [];
@@ -513,6 +528,19 @@ export function createFakeSnClient(fixtures: FakeFixtures = {}): SnClient {
                 `"${params.sysparm_offset.trim()}" without a sysparm_limit. ` +
                 `Pair an offset with an explicit sysparm_limit to page manually, ` +
                 `or drop the offset to let the client auto-paginate.`,
+            );
+          }
+          // RR-70: the real client fails closed once it walks `maxRows` rows
+          // with more left; the fake must not hand a check a result the
+          // production client would refuse.
+          if (rows.length > maxRows) {
+            throw new SnTruncationError(
+              `Table API query on "${name}" exceeded the ${maxRows}-row ` +
+                `pagination cap without reaching the end of the result set; ` +
+                `refusing to return a silently truncated result. Narrow ` +
+                `sysparm_query, or page explicitly with sysparm_limit/` +
+                `sysparm_offset.`,
+              maxRows,
             );
           }
           return rows;
