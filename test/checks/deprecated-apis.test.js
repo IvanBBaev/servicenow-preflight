@@ -357,3 +357,24 @@ test("warns instead of passing when a script field is not returned (RR-67)", asy
     /Not confirmed: script not fully scanned in Util \(sys_script_include\.script: not returned\)/,
   );
 });
+
+test("bracket access to Packages is a server Packages call (DEL-15)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: {
+        sys_script: [
+          {
+            sys_id: "b1",
+            name: "Java BR",
+            script: "var s = new Packages['java'].lang.String('x');",
+          },
+        ],
+      },
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.deepEqual(
+    result.findings.map((f) => f.kind),
+    ["pattern:packages"],
+  );
+});

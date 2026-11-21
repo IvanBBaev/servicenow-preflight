@@ -105,6 +105,17 @@ test("below minRelease → fail", async () => {
   );
 });
 
+test("a multi-word family with a patch suffix is compared, not unknown (DEL-14)", async () => {
+  const { result } = await run(props("San Diego Patch 3"), {
+    options: { platform: { minRelease: "Tokyo" } },
+  });
+  assert.equal(result.status, "fail", result.message);
+  assert.equal(
+    result.message,
+    "Instance runs San Diego; the app requires Tokyo or later.",
+  );
+});
+
 test("equal to minRelease → pass; newer → pass", async () => {
   for (const minRelease of ["Xanadu", "xanadu", "Washington DC"]) {
     const { result } = await run(props("Xanadu"), {
@@ -235,6 +246,11 @@ test("release families: order, aliases, comparison", () => {
   assert.equal(releaseFamily("washington"), "Washington DC");
   assert.equal(releaseFamily("sandiego"), "San Diego");
   assert.equal(releaseFamily("Xanadu Patch 3"), "Xanadu");
+  // Multi-word families keep every word of their name (DEL-14).
+  assert.equal(releaseFamily("San Diego Patch 3"), "San Diego");
+  assert.equal(releaseFamily("New York Patch 2"), "New York");
+  assert.equal(releaseFamily("Washington DC Patch 1"), "Washington DC");
+  assert.equal(releaseFamily("Washington DC"), "Washington DC");
   assert.equal(releaseFamily("Nowhere"), undefined);
   assert.equal(releaseFamily(""), undefined);
   assert.ok(compareFamilies("Zurich", "Australia") < 0);

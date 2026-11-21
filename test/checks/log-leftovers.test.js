@@ -310,3 +310,43 @@ test("console.log( inside a string literal is not a finding (F-C-1)", async () =
   );
   assert.equal(result.status, "pass", result.message);
 });
+
+test("catches more console methods and bracket or spaced access (DEL-15)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: {
+        sys_script_client: [
+          {
+            sys_id: "c1",
+            name: "Noisy",
+            script:
+              "console.warn('a');\nconsole.info(a);\nconsole[\"log\"](a);\nconsole.error(e);",
+          },
+        ],
+        sysauto_script: [
+          {
+            sys_id: "j1",
+            name: "Job",
+            script:
+              "gs[\"log\"]('x');\ngs .log('y');\nvar s = 'gs.log(z)';\nvar t = 'gs[\"log\"](z)';",
+          },
+        ],
+      },
+    }),
+  );
+  assert.equal(result.status, "warn", result.message);
+  assert.deepEqual(
+    result.findings.map((f) => [
+      f.location.recordName,
+      f.location.line,
+      f.kind,
+    ]),
+    [
+      ["Noisy", 1, "pattern:console"],
+      ["Noisy", 2, "pattern:console"],
+      ["Noisy", 3, "pattern:console"],
+      ["Job", 1, "pattern:gs-log"],
+      ["Job", 2, "pattern:gs-log"],
+    ],
+  );
+});

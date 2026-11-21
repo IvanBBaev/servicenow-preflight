@@ -676,6 +676,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Script scans catch more spellings; release and version gaps close**
+  (RR-68, DEL-11, DEL-14, DEL-15, DEL-16) — `client-script-safety` matched
+  `GlideScopedEvaluator` / `evaluateScript` with `A.*B|B.*A`, which backtracks
+  quadratically: one long line repeating either name took seconds per scan.
+  It now uses two anchored lookaheads (linear). The scans also catch forms
+  they used to miss: `window["eval"](…)`, `(0, eval)(…)`, `Function(…)`
+  without `new`, `self.Function(…)` and `globalThis["Function"](…)`
+  (`client-script-safety`); `console.info` / `warn` / `trace` / `table`,
+  `console["log"](…)`, `gs .log(…)` and `gs["log"](…)` (`log-leftovers`;
+  client `console.error` stays allowed); `Packages["java"]`
+  (`deprecated-apis`); uppercase sys_ids, and a URL is judged by the host
+  `new URL()` parses, so `https://acme.service-now.com:pw@evil.example.com`
+  is flagged and `https://user:pw@acme.service-now.com` is not
+  (`hardcoded-identifiers`). Bracket forms match only in code, not in quoted
+  text. A line counts once per finding kind, and finding kinds keep their
+  ids, so baselines stay valid. `platform-release` now resolves a
+  multi-word family with a suffix (`San Diego Patch 3`, `Washington DC
+Patch 1`) instead of reporting it unknown, so `minRelease` is enforced on
+  those instances. `scoped-app-deps` now **fails** when a required app is
+  present but its installed version is unknown or unparseable while a
+  `minVersion` is declared (it warned); without a `minVersion` an unknown
+  version is still not judged.
+
 - **Hygiene checks judge what really gates** (RR-59, ACL-15, ACL-16, ACL-17,
   ACL-18, ACL-19, ACL-20, ACL-21) — eight checks passed on rules that gate
   nothing or missed what the app ships. `ui-action-gating` and

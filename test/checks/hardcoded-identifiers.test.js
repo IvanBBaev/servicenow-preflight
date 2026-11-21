@@ -294,3 +294,33 @@ test("a sys_id is only matched inside a string literal (F-C-1)", async () => {
   );
   assert.equal(result.status, "pass", result.message);
 });
+
+test("judges a URL by its parsed host and matches uppercase sys_ids (DEL-15)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: {
+        sys_script_include: [
+          {
+            sys_id: "i1",
+            name: "Util",
+            script: [
+              "var a = 'https://acme.service-now.com:pw@evil.example.com/x';",
+              "var b = 'https://user:pw@acme.service-now.com/api';",
+              "var c = 'http://localhost:8080/';",
+              `var d = '${SYS_ID.toUpperCase()}';`,
+              "var e = 'https://ACME.Service-Now.com./x';",
+            ].join("\n"),
+          },
+        ],
+      },
+    }),
+  );
+  assert.equal(result.status, "warn", result.message);
+  assert.deepEqual(
+    result.findings.map((f) => [f.location.line, f.kind]),
+    [
+      [1, "pattern:url"],
+      [4, "pattern:sys-id"],
+    ],
+  );
+});

@@ -15,10 +15,38 @@ import {
 
 const NAME = "client-script-safety";
 
+/**
+ * A global object a browser script reaches `eval` / `Function` through by
+ * bracket access (`window["eval"]`). Bracket names live in string literals,
+ * so those patterns test the `raw` view (comments blanked, strings kept).
+ */
+const GLOBAL_OBJECT = String.raw`\b(?:window|self|globalThis|top|parent)\s*\[\s*`;
+
 /** Dynamic code and client-side GlideRecord in browser-side scripts. */
 export const CLIENT_UNSAFE_PATTERNS: readonly ScanPattern[] = [
   { id: "eval", regex: /\beval\s*\(/, view: "code" },
-  { id: "function-ctor", regex: /\bnew\s+Function\s*\(/, view: "code" },
+  // Indirect eval: `(0, eval)(x)` — the comma operator hides the call.
+  { id: "eval", regex: /,\s*eval\s*\)\s*\(/, view: "code" },
+  {
+    id: "eval",
+    regex: new RegExp(String.raw`${GLOBAL_OBJECT}(["'\`])eval\1\s*\]\s*\(`),
+    view: "raw",
+    startInCode: true,
+  },
+  // `Function(…)` builds a function from a string with or without `new`;
+  // a property named Function (`x.Function(`) is not the constructor.
+  { id: "function-ctor", regex: /(?<![\w$.])Function\s*\(/, view: "code" },
+  {
+    id: "function-ctor",
+    regex: /\b(?:window|self|globalThis|top|parent)\s*\.\s*Function\s*\(/,
+    view: "code",
+  },
+  {
+    id: "function-ctor",
+    regex: new RegExp(String.raw`${GLOBAL_OBJECT}(["'\`])Function\1\s*\]\s*\(`),
+    view: "raw",
+    startInCode: true,
+  },
   {
     id: "client-gliderecord",
     regex: /\bnew\s+GlideRecord\s*\(/,
@@ -26,12 +54,16 @@ export const CLIENT_UNSAFE_PATTERNS: readonly ScanPattern[] = [
   },
 ];
 
-/** `GlideScopedEvaluator` and `evaluateScript` on the same server-side line. */
+/**
+ * `GlideScopedEvaluator` and `evaluateScript` on the same server-side line.
+ * Two anchored lookaheads, not `A.*B|B.*A`: the alternation restarts at every
+ * occurrence of either name and scans to the line end each time, which is
+ * quadratic on a long minified line (DEL-11).
+ */
 export const SERVER_UNSAFE_PATTERNS: readonly ScanPattern[] = [
   {
     id: "scoped-evaluator",
-    regex:
-      /\bGlideScopedEvaluator\b.*\bevaluateScript\b|\bevaluateScript\b.*\bGlideScopedEvaluator\b/,
+    regex: /^(?=.*\bGlideScopedEvaluator\b)(?=.*\bevaluateScript\b)/,
     view: "code",
   },
 ];

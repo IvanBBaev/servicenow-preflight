@@ -17,7 +17,8 @@ const NAME = "deprecated-apis";
 
 /** Server-side APIs that do not exist in scoped apps — any hit fails. */
 export const SERVER_DEPRECATED_PATTERNS: readonly ScanPattern[] = [
-  { id: "packages", regex: /\bPackages\./, view: "code" },
+  // `Packages.java…`, `Packages .java…` and `Packages["java"]…`.
+  { id: "packages", regex: /\bPackages\s*[.[]/, view: "code" },
 ];
 
 /** Synchronous or server-only calls in browser-side scripts — hits warn. */
@@ -42,7 +43,8 @@ function result(status: CheckStatus, message: string): CheckResult {
  *
  * Server sources (business rules, Script Includes, UI Action scripts,
  * scheduled jobs, scripted REST operations, transform maps and scripts) are
- * scanned for `Packages.` — direct Java calls, not available in scoped apps.
+ * scanned for `Packages.` / `Packages[` — direct Java calls, not available in
+ * scoped apps.
  * Client sources (client scripts, UI Scripts, UI Policy scripts and UI Action
  * client scripts) are scanned for synchronous GlideAjax (`getXMLWait(`), a
  * callback-less `g_form.getReference(…)` (synchronous; certification rule

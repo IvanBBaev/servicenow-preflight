@@ -15,15 +15,46 @@ import {
 
 const NAME = "log-leftovers";
 
-/** Debug output left in browser-side scripts. */
+/**
+ * Console methods that are debug output in shipped client code.
+ * `console.error` is left out: reporting a caught error is not a leftover.
+ */
+const CONSOLE_METHODS = "log|debug|dir|info|warn|trace|table";
+
+/**
+ * Debug output left in browser-side scripts. Bracket access
+ * (`console["log"]`) names the method in a string literal, so that form
+ * tests the `raw` view (comments blanked, strings kept).
+ */
 export const CLIENT_LOG_PATTERNS: readonly ScanPattern[] = [
-  { id: "console", regex: /\bconsole\.(log|debug|dir)\s*\(/, view: "code" },
+  {
+    id: "console",
+    regex: new RegExp(String.raw`\bconsole\s*\.\s*(?:${CONSOLE_METHODS})\s*\(`),
+    view: "code",
+  },
+  {
+    id: "console",
+    regex: new RegExp(
+      String.raw`\bconsole\s*\[\s*(["'\`])(?:${CONSOLE_METHODS})\1\s*\]\s*\(`,
+    ),
+    view: "raw",
+    startInCode: true,
+  },
   { id: "alert", regex: /\balert\s*\(/, view: "code" },
 ];
 
-/** Global-only logging left in server-side scripts (absent in scoped apps). */
+/**
+ * Global-only logging left in server-side scripts (absent in scoped apps),
+ * as `gs.log(`, `gs .log(` or `gs["log"](`.
+ */
 export const SERVER_LOG_PATTERNS: readonly ScanPattern[] = [
-  { id: "gs-log", regex: /\bgs\.(print|log)\s*\(/, view: "code" },
+  { id: "gs-log", regex: /\bgs\s*\.\s*(?:print|log)\s*\(/, view: "code" },
+  {
+    id: "gs-log",
+    regex: /\bgs\s*\[\s*(["'`])(?:print|log)\1\s*\]\s*\(/,
+    view: "raw",
+    startInCode: true,
+  },
 ];
 
 /** Build a well-formed result for this check. */
@@ -36,11 +67,12 @@ function result(status: CheckStatus, message: string): CheckResult {
  * `console.log()` in shipped client code; use `jslog()`.
  *
  * Client sources (client scripts, UI Scripts, UI Policy scripts and UI Action
- * client scripts) are scanned for `console.log(` / `console.debug(` /
- * `console.dir(` and debug `alert(` calls. Server sources (business rules,
+ * client scripts) are scanned for `console.*(` debug output (`log`, `debug`,
+ * `dir`, `info`, `warn`, `trace`, `table`, also as `console["log"](`; not
+ * `console.error`) and debug `alert(` calls. Server sources (business rules,
  * Script Includes, UI Action scripts, scheduled jobs, scripted REST
  * operations, transform maps and scripts) are scanned for `gs.print(` and
- * `gs.log(`, which are not available in scoped apps (`gs.info` is). Comment
+ * `gs.log(` (also `gs["log"](`), which are not available in scoped apps (`gs.info` is). Comment
  * lines are ignored. Messages name the artifact, field and line, never the
  * matched text.
  *
@@ -53,14 +85,14 @@ function result(status: CheckStatus, message: string): CheckResult {
 export const logLeftovers: Check = {
   name: NAME,
   description:
-    "No console.log/debug/dir or debug alert() in client scripts and no gs.print/gs.log on the server. Advisory.",
+    "No console output (log, debug, dir, info, warn, trace, table) or debug alert() in client scripts and no gs.print/gs.log on the server. Advisory.",
   meta: {
     requires: "scope",
     rule: "4.3",
     severity: "advisory",
     tables: sourceTables([...CLIENT_SCRIPT_SOURCES, ...SERVER_SCRIPT_SOURCES]),
     remediation:
-      "Use jslog() instead of console.log/debug/dir on the client and remove debug alert() calls; use gs.info, gs.warn or gs.error instead of gs.print and gs.log on the server.",
+      "Use jslog() instead of console output on the client and remove debug alert() calls; use gs.info, gs.warn or gs.error instead of gs.print and gs.log on the server.",
     verdicts: {
       pass: "No log leftover in any in-scope script, or the scope ships none.",
       warn: "A console/alert call on the client or gs.print/gs.log on the server, no scope, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",

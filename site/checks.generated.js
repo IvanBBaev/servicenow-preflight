@@ -69,8 +69,8 @@ window.PREFLIGHT_CHECKS = [
     "name": "scoped-app-deps",
     "tag": "requiredApps",
     "desc": "Required scoped apps and plugins are installed, active, and meet any minVersion.",
-    "fail": "A required app is missing, inactive, or below its declared minVersion.",
-    "warn": "None declared, entries malformed, or a version could not be read.",
+    "fail": "A required app is missing, inactive, below its declared minVersion, or its installed version is unknown or unparseable while a minVersion is declared.",
+    "warn": "None declared, or entries malformed.",
     "pass": "Every dependency present, active, and up to date."
   },
   {
@@ -257,7 +257,7 @@ window.PREFLIGHT_CHECKS = [
     "code": "29",
     "name": "log-leftovers",
     "tag": "scope",
-    "desc": "No console.log/debug/dir or debug alert() in client scripts and no gs.print/gs.log on the server. Advisory.",
+    "desc": "No console output (log, debug, dir, info, warn, trace, table) or debug alert() in client scripts and no gs.print/gs.log on the server. Advisory.",
     "fail": "A script table read was security-trimmed.",
     "warn": "A console/alert call on the client or gs.print/gs.log on the server, no scope, an ambiguous zero-row read, or a script that could not be fully scanned (field not returned, unterminated literal).",
     "pass": "No log leftover in any in-scope script, or the scope ships none."

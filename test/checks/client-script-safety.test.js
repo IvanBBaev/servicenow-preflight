@@ -295,3 +295,91 @@ test("eval( inside a string or regex literal is not a finding (F-C-1)", async ()
   );
   assert.equal(result.status, "pass", result.message);
 });
+
+test("the evaluateScript pattern stays linear on an adversarial line (DEL-11)", async () => {
+  // The old alternation `A.*B|B.*A` backtracked quadratically: one long line
+  // repeating a single keyword took seconds per scan (measured ~6 s here).
+  for (const word of ["evaluateScript ", "GlideScopedEvaluator "]) {
+    const script = word.repeat(30000);
+    const started = performance.now();
+    const result = await run(
+      makeHttp({
+        tables: { sys_script: [{ sys_id: "b1", name: "Big", script }] },
+      }),
+    );
+    const elapsed = performance.now() - started;
+    assert.equal(result.status, "pass", result.message);
+    assert.ok(
+      elapsed < 1000,
+      `${word.trim()}: scan took ${Math.round(elapsed)} ms`,
+    );
+  }
+  for (const script of [
+    "new GlideScopedEvaluator().evaluateScript(gr, 'script');",
+    "evaluateScript(gr); var e = new GlideScopedEvaluator();",
+  ]) {
+    const result = await run(
+      makeHttp({
+        tables: { sys_script: [{ sys_id: "b1", name: "Eval", script }] },
+      }),
+    );
+    assert.equal(result.status, "fail", script);
+    assert.deepEqual(
+      result.findings.map((f) => f.kind),
+      ["pattern:scoped-evaluator"],
+    );
+  }
+});
+
+test("catches bracket, indirect and constructor-less eval forms on the client (DEL-15)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: {
+        sys_script_client: [
+          {
+            sys_id: "c1",
+            name: "Sneaky",
+            script: [
+              'window["eval"](x);',
+              "(0, eval)(x);",
+              "var f = Function('return 1')();",
+              "var g = self.Function(a);",
+              "globalThis['Function'](a);",
+              "eval(a); (0, eval)(b);",
+            ].join("\n"),
+          },
+        ],
+      },
+    }),
+  );
+  assert.equal(result.status, "fail", result.message);
+  assert.deepEqual(
+    result.findings.map((f) => [f.location.line, f.kind]),
+    [
+      [1, "pattern:eval"],
+      [2, "pattern:eval"],
+      [3, "pattern:function-ctor"],
+      [4, "pattern:function-ctor"],
+      [5, "pattern:function-ctor"],
+      // Two eval forms on one line are one hit, not two.
+      [6, "pattern:eval"],
+    ],
+  );
+});
+
+test("a method named Function or a string mentioning eval is not a finding (DEL-15)", async () => {
+  const result = await run(
+    makeHttp({
+      tables: {
+        sys_script_client: [
+          {
+            sys_id: "c1",
+            name: "Fine",
+            script: "x.Function(a);\nvar s = 'window[\"eval\"](x)';",
+          },
+        ],
+      },
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
+});

@@ -31,10 +31,21 @@ export interface ScriptSource {
   extraQuery?: string;
 }
 
-/** A line pattern. The regex must not use the `g` flag; it is tested per line. */
+/**
+ * A line pattern. The regex must not use the `g` flag; it is tested per line.
+ * Several patterns may share an `id` (alternative spellings of one finding,
+ * possibly in different views): a line hits an id at most once.
+ */
 export interface ScanPattern {
   id: string;
   regex: RegExp;
+  /**
+   * Optional second stage: when set, the line hits only if `accept` returns
+   * true for at least one match of `regex` on it (every non-overlapping match
+   * is tried). Use it for what a regex cannot judge reliably, such as the
+   * real host of a URL.
+   */
+  accept?: (match: string) => boolean;
   /**
    * The line view the regex is tested against (see {@link lexLines}):
    * `"code"` (default) blanks comments and string, template and regex bodies;
@@ -42,6 +53,12 @@ export interface ScanPattern {
    * comments.
    */
   view?: ScanView;
+  /**
+   * `"raw"` view only: a match counts only when it starts at a code character
+   * (not inside a string, template or regex body). Lets bracket access such as
+   * `gs["log"](…)` be matched without matching the same text quoted.
+   */
+  startInCode?: boolean;
 }
 
 /** One pattern match: where it is, never what it matched. */
@@ -80,6 +97,45 @@ export interface ScanResult {
   truncated: boolean;
   /** Distinct artifacts (`table:sys_id`) with at least one hit, cap ignored. */
   artifacts: string[];
+}
+
+/** Global copies of the patterns' regexes, built once per pattern. */
+const GLOBAL_REGEX = new WeakMap<ScanPattern, RegExp>();
+
+function globalRegex(pattern: ScanPattern): RegExp {
+  let global = GLOBAL_REGEX.get(pattern);
+  if (!global) {
+    const flags = pattern.regex.flags.replace(/[gy]/g, "");
+    global = new RegExp(pattern.regex.source, `${flags}g`);
+    GLOBAL_REGEX.set(pattern, global);
+  }
+  return global;
+}
+
+/**
+ * True when `pattern` hits the line `text` (its view of the line): the regex
+ * matches and, when set, `accept` takes the match. For a `"raw"` pattern,
+ * `code` is the same line's code view; with `startInCode`, a match starting
+ * where `code` differs from `text` (inside a literal body) does not count.
+ */
+export function patternMatches(
+  pattern: ScanPattern,
+  text: string,
+  code?: string,
+): boolean {
+  const inCode =
+    pattern.startInCode === true &&
+    pattern.view === "raw" &&
+    code !== undefined;
+  if (!pattern.accept && !inCode) {
+    pattern.regex.lastIndex = 0; // harmless guard against a stray g/y flag
+    return pattern.regex.test(text);
+  }
+  for (const match of text.matchAll(globalRegex(pattern))) {
+    if (inCode && code[match.index] !== text[match.index]) continue;
+    if (!pattern.accept || pattern.accept(match[0])) return true;
+  }
+  return false;
 }
 
 /** Hits kept per scan; the rest are only counted (`dropped`). */
@@ -485,10 +541,12 @@ export async function scanScripts(
           raw: lexed.raw,
         };
         lexed.raw.forEach((_, index) => {
+          const lineIds = new Set<string>();
           for (const pattern of patterns) {
+            if (lineIds.has(pattern.id)) continue;
             const text = views[pattern.view ?? "code"][index]!;
-            pattern.regex.lastIndex = 0; // harmless guard against a stray g/y flag
-            if (!pattern.regex.test(text)) continue;
+            if (!patternMatches(pattern, text, lexed.code[index])) continue;
+            lineIds.add(pattern.id);
             artifacts.add(`${source.table}:${sysId || name}`);
             if (out.hits.length >= MAX_SCAN_HITS) {
               out.dropped++;

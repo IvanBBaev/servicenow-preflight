@@ -51,13 +51,20 @@ BY_KEY.set("washington", "Washington DC");
  * Map a release name (a `glide.buildname` value or a configured family) to its
  * canonical {@link FAMILY_ORDER} entry, or `undefined` when it is not a known
  * family. Matching ignores case, spaces and punctuation; when the whole value
- * does not match, its first word is tried ("Xanadu Patch 3" → "Xanadu").
+ * does not match, the longest run of leading words that names a family wins,
+ * so a suffix is ignored for one-word and multi-word families alike
+ * ("Xanadu Patch 3" → "Xanadu", "San Diego Patch 3" → "San Diego",
+ * "Washington DC Patch 1" → "Washington DC").
  */
 export function releaseFamily(name: string): string | undefined {
   const whole = BY_KEY.get(normalise(name));
   if (whole) return whole;
-  const first = name.trim().split(/[\s_-]+/)[0] ?? "";
-  return BY_KEY.get(normalise(first));
+  const words = name.split(/[^A-Za-z]+/).filter((w) => w !== "");
+  for (let count = words.length - 1; count > 0; count--) {
+    const family = BY_KEY.get(normalise(words.slice(0, count).join("")));
+    if (family) return family;
+  }
+  return undefined;
 }
 
 /**

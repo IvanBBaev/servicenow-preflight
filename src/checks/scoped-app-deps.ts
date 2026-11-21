@@ -219,8 +219,7 @@ const FINDING_KIND: Partial<Record<ResolutionStatus, string>> = {
 
 /**
  * One finding per unsatisfied dependency, on `sys_scope` keyed by the
- * declared id (`logicalId "app:<id>"`); `unknown-version` is advisory and
- * carries `status: "warn"`.
+ * declared id (`logicalId "app:<id>"`).
  */
 function dependencyFindings(resolutions: readonly Resolution[]): Finding[] {
   const findings: Finding[] = [];
@@ -228,13 +227,11 @@ function dependencyFindings(resolutions: readonly Resolution[]): Finding[] {
     const kind = FINDING_KIND[r.status];
     if (kind === undefined) continue;
     findings.push(
-      makeFinding(
-        NAME,
-        kind,
-        `${r.id}: ${r.detail}`,
-        { table: "sys_scope", logicalId: `app:${r.id}`, recordName: r.id },
-        r.status === "unknown-version" ? "warn" : undefined,
-      ),
+      makeFinding(NAME, kind, `${r.id}: ${r.detail}`, {
+        table: "sys_scope",
+        logicalId: `app:${r.id}`,
+        recordName: r.id,
+      }),
     );
   }
   return findings;
@@ -250,9 +247,10 @@ function dependencyFindings(resolutions: readonly Resolution[]): Finding[] {
  * apps), `sys_app` (custom/scoped apps) and `sys_plugins` (platform plugins).
  *
  * - **fail** — a required app is missing, installed-but-inactive, below its
- *   `minVersion`, or carries a version that cannot be parsed/compared.
- * - **warn** — no requirements were declared, some entries were malformed, or a
- *   dependency is present but its installed version cannot be verified.
+ *   `minVersion`, or carries a version that cannot be parsed/compared — or a
+ *   `minVersion` is declared but the installed version is blank, so the
+ *   minimum the config asked for cannot be confirmed (DEL-16).
+ * - **warn** — no requirements were declared, or some entries were malformed.
  * - **pass** — every declared dependency is present, active, and up to date.
  *
  * Never throws: `SnAuthError` / `SnNetworkError` map to `fail`, other transport
@@ -289,8 +287,8 @@ export const scopedAppDeps: Check = {
       "Install or activate each required scoped app or plugin on the target instance and upgrade any below its declared minVersion; correct malformed requiredApps entries in the config.",
     verdicts: {
       pass: "Every dependency present, active, and up to date.",
-      warn: "None declared, entries malformed, or a version could not be read.",
-      fail: "A required app is missing, inactive, or below its declared minVersion.",
+      warn: "None declared, or entries malformed.",
+      fail: "A required app is missing, inactive, below its declared minVersion, or its installed version is unknown or unparseable while a minVersion is declared.",
     },
   },
   async run(ctx): Promise<CheckResult> {
@@ -371,9 +369,10 @@ export const scopedAppDeps: Check = {
         r.status === "missing" ||
         r.status === "inactive" ||
         r.status === "outdated" ||
-        r.status === "unparseable-version",
+        r.status === "unparseable-version" ||
+        // Only reachable with a minVersion: the minimum cannot be confirmed.
+        r.status === "unknown-version",
     );
-    const advisory = resolutions.filter((r) => r.status === "unknown-version");
 
     if (hardFailures.length > 0) {
       const detail = hardFailures
@@ -386,22 +385,12 @@ export const scopedAppDeps: Check = {
       );
     }
 
-    if (advisory.length > 0 || invalid > 0) {
-      const parts: string[] = [];
-      if (advisory.length > 0) {
-        parts.push(advisory.map((r) => `${r.id} (${r.detail})`).join("; "));
-      }
-      if (invalid > 0) {
-        parts.push(
-          `${invalid} malformed requiredApps entr${
-            invalid === 1 ? "y" : "ies"
-          } ignored`,
-        );
-      }
+    if (invalid > 0) {
       return result(
         "warn",
-        `All required apps present, but with advisories: ${parts.join("; ")}.`,
-        dependencyFindings(resolutions),
+        `All required apps present, but with advisories: ${invalid} malformed requiredApps entr${
+          invalid === 1 ? "y" : "ies"
+        } ignored.`,
       );
     }
 

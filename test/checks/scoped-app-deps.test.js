@@ -208,7 +208,7 @@ test("fail aggregates and reports all unsatisfied deps", async () => {
   assert.match(result.message, /x_acme_missing/);
 });
 
-test("warns when a present dep has no verifiable version but minVersion was requested", async () => {
+test("fails when a present dep has no verifiable version but minVersion was requested (DEL-16)", async () => {
   const result = await scopedAppDeps.run(
     ctx([{ id: "x_acme_core", minVersion: "1.0.0" }], {
       tables: {
@@ -217,8 +217,21 @@ test("warns when a present dep has no verifiable version but minVersion was requ
       },
     }),
   );
-  assert.equal(result.status, "warn");
-  assert.match(result.message, /version is unknown/);
+  assert.equal(result.status, "fail");
+  assert.match(result.message, /1 of 1 required app\(s\) not satisfied/);
+  assert.match(result.message, /version is unknown \(need >= 1\.0\.0\)/);
+});
+
+test("an unknown version without a minVersion is not judged (DEL-16)", async () => {
+  const result = await scopedAppDeps.run(
+    ctx([{ id: "x_acme_core" }], {
+      tables: {
+        sys_store_app: [{ sys_id: "1", scope: "x_acme_core" }],
+        sys_plugins: [],
+      },
+    }),
+  );
+  assert.equal(result.status, "pass", result.message);
 });
 
 test("warns (not fails) when all deps present but some entries were malformed", async () => {
@@ -324,7 +337,7 @@ test("does not borrow latest_version for an empty installed version (SN-5)", asy
       },
     }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "fail");
   assert.match(result.message, /version is unknown/i);
 });
 
@@ -434,7 +447,7 @@ test("F-R-4: one finding per unsatisfied dependency on sys_scope", async () => {
   });
 });
 
-test("F-R-4: an unknown version is a warn-status finding", async () => {
+test("F-R-4: an unknown version under a minVersion is a failing finding (DEL-16)", async () => {
   const result = await scopedAppDeps.run(
     ctx([{ id: "x_acme_core", minVersion: "1.0.0" }], {
       tables: {
@@ -443,10 +456,10 @@ test("F-R-4: an unknown version is a warn-status finding", async () => {
       },
     }),
   );
-  assert.equal(result.status, "warn");
+  assert.equal(result.status, "fail");
   assert.equal(result.findings.length, 1);
   assert.equal(result.findings[0].kind, "unknown-version");
-  assert.equal(result.findings[0].status, "warn");
+  assert.notEqual(result.findings[0].status, "warn");
 });
 
 test("F-R-4: satisfied dependencies carry no findings", async () => {

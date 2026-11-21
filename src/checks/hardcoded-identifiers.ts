@@ -13,8 +13,23 @@ import {
 
 const NAME = "hardcoded-identifiers";
 
-/** Characters that end a URL host: path, port, query, fragment, quote or space. */
-const HOST_END = String.raw`(?:[\/:?#"'\s]|$)`;
+/**
+ * True when `url` points somewhere other than an instance
+ * (`*.service-now.com`) or `localhost`. The host is the one `new URL()`
+ * resolves — after any `user:password@` part — so
+ * `https://x.service-now.com:pw@evil.example.com` is judged by
+ * `evil.example.com` (DEL-15). A candidate `URL` cannot parse stays a finding.
+ */
+export function isForeignUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return true;
+  }
+  if (host.endsWith(".")) host = host.slice(0, -1);
+  return !(host === "localhost" || host.endsWith(".service-now.com"));
+}
 
 /**
  * The patterns this check scans for. A URL whose host is an instance
@@ -22,14 +37,13 @@ const HOST_END = String.raw`(?:[\/:?#"'\s]|$)`;
  */
 export const HARDCODED_PATTERNS: readonly ScanPattern[] = [
   // sys_ids and URLs live in string literals: scan only those, so a 32-hex
-  // run in code or a regex literal is not a finding.
-  { id: "sys-id", regex: /\b[0-9a-f]{32}\b/, view: "string" },
+  // run in code or a regex literal is not a finding. sys_ids are compared
+  // case-insensitively by the platform, so an uppercase literal counts too.
+  { id: "sys-id", regex: /\b[0-9a-f]{32}\b/i, view: "string" },
   {
     id: "url",
-    regex: new RegExp(
-      String.raw`https?:\/\/(?![^\s"'\/?#:]*\.service-now\.com${HOST_END}|localhost${HOST_END})[^\s"']+`,
-      "i",
-    ),
+    regex: /https?:\/\/[^\s"'`]+/i,
+    accept: isForeignUrl,
     view: "string",
   },
 ];
